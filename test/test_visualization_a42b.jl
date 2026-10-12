@@ -234,7 +234,7 @@ end
             axes = filter(item -> item isa makie.Axis, fig.content)
             @test !isempty(axes)
             @test all(ax -> all(>(0), makie.widths(makie.viewport(ax.scene)[])), axes)
-            texts = [String(item.text[]) for item in fig.content if item isa makie.Label]
+            texts = [r.text for r in visual_text_records(fig,makie)]
             if index in (1, 2)
                 @test "1/3" in texts
             elseif index == 3

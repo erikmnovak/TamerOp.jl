@@ -8,7 +8,8 @@ A linked barcode/diagram inspection created with `inspection_session(barcode)`.
 Group IDs identify equal decorated intervals; `member` chooses an original
 interval within a multiplicity group. Retained ordinary persistence cycles are
 read only after `representative=true`. They are reduction choices, not canonical
-classes or assertions about source geometry. Use `inspection_snapshot` for an
+classes. Retained verified source data add cycle-at-birth and filling-at-death
+overlays; no correspondence between different lines is inferred. Use `inspection_snapshot` for an
 exportable static view, and `close_inspection!` to release live callbacks.
 """
 mutable struct IntervalInspectionSession{T,P} <: _AbstractInspectionSession
@@ -55,7 +56,16 @@ function _interval_inspection_readout(payload, state, representative)
         push!(lines,"Representative unavailable: $(representative.reason).")
         push!(lines,"For ordinary diagrams, compute persistence with representatives=true to retain reduction cycles.")
     else
-        push!(lines,"F$(representative.field.p) reduction representative; this choice is not canonical and carries no geometric embedding.")
+        push!(lines,"F$(representative.field.p) reduction representative; this choice is not canonical.")
+        source_cycle=get(representative,:source_cycle,nothing)
+        if source_cycle===nothing
+            push!(lines,"Source geometry was not retained.")
+        else
+            push!(lines,"Source correspondence and original boundary equations are verified. Cycle shown at birth; any finite-death filling is shown at death.")
+            any(source_cycle.source.provenance.periodic) && push!(lines,
+                "Periodic seams identify opposite faces. Wrap cells are drawn unwrapped with their original source identities.")
+            push!(lines,"The following coefficients use the computed cell basis; source panels apply the verified lifting map.")
+        end
         for (name,chain) in (("Cycle",representative.cycle),("Bounding chain at death",representative.bounding_chain))
             chain === nothing && continue
             shown = min(length(chain.cell_ids),12)
@@ -77,9 +87,16 @@ function _interval_inspection_snapshot(payload, state, window, max_intervals, re
         order=payload.order,endpoint_semantics=payload.endpoint_semantics,
         essential_status=payload.essential_status,metadata=payload.metadata)
     readout = _interval_inspection_readout(payload,state,representative)
+    panels=[barcode,diagram,readout]
+    if representative!==nothing && representative.available
+        for key in (:source_cycle,:source_bounding_chain)
+            chain=get(representative,key,nothing)
+            chain===nothing || chain.dimension>2 || push!(panels,first(_visual_spec(chain,:source_chain).panels))
+        end
+    end
     return VisualizationSpec(:interval_inspector;title="Intervals and their source members",
         subtitle="$(payload.order) parameter order; selection shares exact interval-group IDs.",
-        panels=[barcode,diagram,readout],
+        panels,
         metadata=(;interval_payload=payload,interval_view=view,inspection_selection=state,
             selected_representative=representative,snapshot_semantics=:static,panel_columns=2,
             figure_size=(1600,1100)))

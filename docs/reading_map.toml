@@ -122,6 +122,34 @@ source = "ordinary_persistence.md"
 next = "two_parameters.md"
 kind = "Guide"
 
+[[nodes]]
+id = "decomposition_lesson"
+title = "When does a module split into intervals?"
+question = "When is an interval a direct summand?"
+source = "decomposition.md"
+next = "tutorials/decomposition.ipynb"
+kind = "Explanation"
+display = "focused"
+entry = false
+
+[[views]]
+id = "interval-summands"
+title = "From spaces and maps to summands"
+description = "After inspecting the finite module, ask whether simpler pieces have compatible inclusions and projections. This is an optional algebraic investigation, independent of the route through tameness."
+width = 800
+height = 376
+placements = [{id = "inspect", x = 280, y = 24}, {id = "decomposition_lesson", x = 280, y = 224}]
+
+[[edges]]
+source = "inspect"
+target = "decomposition_lesson"
+view = "interval-summands"
+kind = "optional"
+label = "Look for summands"
+label_x = 400
+label_y = 194
+path = "M 400 152 V 222"
+
 [[edges]]
 source = "ring"
 target = "bridge"
@@ -186,7 +214,7 @@ title = "Bring in data"
 description = "Choose how your data will determine a module. For computations with radius and coverage depth, the guides explain the multicover construction, exact grades and the part of the depth range being represented."
 links = [
     {title = "Ingestion options", source = "ingestion_options.md"},
-    {title = "Multicover computation", source = "multicover.md"},
+    {title = "Multicover computation", source = "tutorials/multicover.ipynb"},
     {title = "Exact radius grades", source = "exact_grades.md"},
     {title = "Coverage depth windows", source = "rhomboid_depth.md"},
 ]
@@ -196,6 +224,7 @@ id = "algebra-and-inspection"
 title = "Work with modules and maps"
 description = "The category determines which objects and maps a calculation concerns. With that setting specified, choose the spaces and maps to compute; when using floating coefficients, examine how numerical rank decisions affect the answer."
 links = [
+    {title = "Computing interval multiplicities and splittings", source = "tutorials/decomposition.ipynb"},
     {title = "Categories and derived computations", source = "math_categories.md"},
     {title = "Exploring spaces and maps", source = "spaces_and_maps.md"},
     {title = "Inspection and explicit computation", source = "lazy_inspection.md"},

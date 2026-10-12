@@ -394,12 +394,14 @@ end
 
 function _graded_complex_from_point_cloud_rhomboid(data::PointCloud, spec::FiltrationSpec;
                                                    return_simplex_tree::Bool=false,
+                                                   retain_geometry::Bool=false,
                                                    cache::Union{Nothing,EncodingCache}=nothing)
+    retain_geometry && return_simplex_tree && throw(ArgumentError("Retained rhomboid geometry uses the cellular output."))
     _validate_geometric_filtration_request(data, spec)
     spec = _canonical_geometric_filtration_spec(spec)
     backend = get(spec.params, :backend, :auto)
     X = _rhomboid_points(data; allow_coincident=backend === :subdivision_cech)
-    backend === :subdivision_cech && return _subdivision_cech_complex(X, spec; return_simplex_tree, cache)
+    backend === :subdivision_cech && return _subdivision_cech_complex(X, spec; return_simplex_tree, retain_geometry, cache)
     n = size(X,1)
     depths = get(spec.params,:depth_range,nothing)
     geometry = _compiled_rhomboid_geometry(X,spec,cache)
@@ -415,15 +417,22 @@ function _graded_complex_from_point_cloud_rhomboid(data::PointCloud, spec::Filtr
         cutoff2 = cutoff isa AlgebraicReal ? cutoff^2 : QQ(cutoff)^2
         foreach(group -> filter!(cell -> radii2[cell] <= cutoff2, group), cells)
     end
+    retained_groups = nothing
     result = if depths === nothing
         requested = get(spec.params, :max_dim, nothing)
         requested === nothing || resize!(cells, min(length(cells) - 1, Int(requested)) + 1)
+        retained_groups = cells
         return_simplex_tree ? _rhomboid_simplex_tree(cells, radii2, n, spec) :
                              _rhomboid_cellular_complex(cells, radii2, n)
     else
         # Slice original carriers before truncating dimension: a q-cell can
         # contribute an essential (q-1)-dimensional horizontal cap.
-        _rhomboid_depth_complex(cells, radii2, X, spec; return_simplex_tree)
+        if retain_geometry
+            retained_groups, complex = _rhomboid_depth_model(cells, radii2, n, spec)
+            complex
+        else
+            _rhomboid_depth_complex(cells, radii2, X, spec; return_simplex_tree)
+        end
     end
     orientation = (1, -1)
     grades = return_simplex_tree ? result.grade_data : result.grades
@@ -433,5 +442,9 @@ function _graded_complex_from_point_cloud_rhomboid(data::PointCloud, spec::Filtr
     depth_axis = AlgebraicReal[-k for k in hi:-1:lo]
     axes = get(spec.params, :axes, (radius_axis, depth_axis))
     _record_ingestion_backend(:multicover, backend)
+    if retain_geometry
+        retained = _rhomboid_retained_geometry(retained_groups, radii2, X, result)
+        return result, axes, orientation, merge(retained,(;backend,representation=:lifted_rhomboid))
+    end
     return result, axes, orientation
 end

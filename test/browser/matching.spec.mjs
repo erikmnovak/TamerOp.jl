@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { state, control, openInspector, capture, fullyClosed, scrollChart } from './helpers.mjs';
+import { state, keyboardActivate, control, openInspector, capture, fullyClosed, scrollChart } from './helpers.mjs';
 const base = `http://127.0.0.1:${process.env.TAMEROP_BROWSER_SLICE_PORT || 8849}`;
 async function settled(page,timeout=120_000) {
   await expect.poll(async()=>(await state(page)).summary.updating,{timeout}).toBe(false);
@@ -16,7 +16,7 @@ async function changed(page, suffix, timeout=120_000) {
   await settled(page,timeout);
   const before=(await state(page)).selection.revision;
   const error=await control(page,'error').textContent();
-  await control(page,suffix).click();
+  await keyboardActivate(control(page,suffix));
   await expect.poll(async()=>[(await state(page)).selection.revision,await control(page,'error').textContent()],{timeout}).not.toEqual([before,error]);
   await expect(control(page,'error')).toBeEmpty();
   await settled(page,timeout);
@@ -44,7 +44,12 @@ async function clickTarget(page, panel, id) {
 test('A85 matching members, diagonal costs, duplicate picks and lifecycle',async({page},info)=>{
   const errors=[];await openInspector(page,`${base}/matching`,errors);
   expect((await state(page)).summary.distance).toBe(1);
+  const firstCanvas=await page.locator('canvas').first().elementHandle();
+  const rebuilds=(await state(page)).ui.rebuilds;
   await edit(page,'pair','3');await changed(page,'apply-pair');
+  expect((await state(page)).ui.rebuilds).toBe(rebuilds);
+  expect((await state(page)).ui.updates).toBeGreaterThan(0);
+  expect(await firstCanvas.evaluate(c=>c.isConnected)).toBe(true);
   expect((await state(page)).selection.pair).toBe(3);
   expect((await state(page)).records[2].diagonal).toBe(true);
   await capture(page,info,'diagonal-pair');

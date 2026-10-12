@@ -101,6 +101,7 @@ include("SliceInvariants.jl")
 include("Fibered2D.jl")
 include("MultiparameterImages.jl")
 include("Invariants.jl")
+include("IntervalDecompositions.jl")
 
 # 13) High-level workflow orchestration wrappers
 include("Workflow.jl")
@@ -142,11 +143,11 @@ include("OrdinaryPersistence.jl")
 # 17) Synthetic data generators
 include("SyntheticData.jl")
 
-# 18) Visualization engine
-include("Visualization.jl")
-
-# 19) Featurization/experiment subsystem
+# 18) Featurization/experiment subsystem
 include("Featurizers.jl")
+
+# 19) Visualization engine (also accepts prepared FeatureSets)
+include("Visualization.jl")
 
 # -----------------------------------------------------------------------------
 # Cross-subsystem semantic accessors
@@ -268,6 +269,7 @@ import ..DerivedFunctors.Utils
 import ..ModuleComplexes
 import ..ChangeOfPosets
 import ..Invariants
+import ..IntervalDecompositions
 import ..Workflow
 import ..DataFileIO
 import ..DataIngestion
@@ -280,7 +282,7 @@ export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
        PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
        HomExtEngine, Utils,
-       ModuleComplexes, ChangeOfPosets, Invariants, Workflow, DataFileIO, DataIngestion,
+       ModuleComplexes, ChangeOfPosets, Invariants, IntervalDecompositions, Workflow, DataFileIO, DataIngestion,
        OrdinaryPersistence, Featurizers
 
 # -----------------------------------------------------------------------------

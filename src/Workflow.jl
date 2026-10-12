@@ -205,6 +205,7 @@ import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _
 import ..Serialization
 import ..Serialization: TAMER_FEATURE_SCHEMA_VERSION, feature_schema_header, validate_feature_metadata_schema
 
+import ..AbelianCategories
 import ..IndicatorResolutions
 import ..ZnEncoding
 import ..FiniteFringe
@@ -221,6 +222,7 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPose
                      poset_equal_opposite
 using ..DerivedFunctors
 using ..Invariants
+import ..IntervalDecompositions
 import ..InvariantCore: _exact_slice_barcodes, _exact_euler_signed_measure,
                         _exact_restricted_hilbert,
                         _exact_rectangle_signed_barcode, _exact_rank_signed_measure
@@ -348,12 +350,11 @@ end
 Return true iff PLBackend can encode this box presentation under the given options.
 This checks:
 - axis-aligned boxes with finite coordinates,
-- no coordinate is both a birth and a death threshold on the same axis,
-- the full-dimensional cell count does not exceed opts.max_regions if set.
+- the cell count, including singleton cells at shared birth/death thresholds,
+  does not exceed opts.max_regions if set.
 
-Coincident birth/death thresholds can support lower-dimensional modules. The
-canonical `:auto` route uses `:pl` for those inputs so closed boundary classes
-are retained.
+Coincident birth/death thresholds retain their boundary classes in the native
+box encoder; the canonical `:auto` route can therefore select it as well.
 """
 function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
                              opts::EncodingOptions=EncodingOptions())::Bool
@@ -376,34 +377,15 @@ function supports_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
     n = _infer_box_dim(Ups, Downs)
     all(U -> length(U.ell) == n, Ups) || return false
     all(D -> length(D.u) == n, Downs) || return false
-    for axis in 1:n
-        births = Set(U.ell[axis] for U in Ups)
-        any(D -> D.u[axis] in births, Downs) && return false
-    end
 
     # If max_regions is set, do a cheap upper bound check on the grid size.
     # PLBackend partitions via coordinate grid from generator endpoints.
     if max_regions !== nothing
-        n = _infer_box_dim(Ups, Downs)
-        coords = [QQ[] for _ in 1:n]
-        for U in Ups
-            for i in 1:n
-                push!(coords[i], U.ell[i])
-            end
-        end
-        for D in Downs
-            for i in 1:n
-                push!(coords[i], D.u[i])
-            end
-        end
-        # unique, sorted
-        for i in 1:n
-            coords[i] = sort!(unique!(coords[i]))
-        end
-        # Include both unbounded slabs; check the budget before multiplication.
+        # A shared wall contributes two events and the singleton between them.
+        # Include both unbounded cells; check before multiplication.
         cells = 1
         for i in 1:n
-            width = length(coords[i]) + 1
+            width = length(Set(U.ell[i] for U in Ups)) + length(Set(D.u[i] for D in Downs)) + 1
             cells <= div(max_regions, width) || return false
             cells *= width
         end
@@ -515,7 +497,7 @@ function choose_pl_backend(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset};
     opts = opts
     b = _normalize_pl_backend(opts.backend)
     if b == :pl_backend
-        supports_pl_backend(Ups, Downs; opts=opts) || error("PLBackend requested, but this input is not supported. Use backend=:pl for coincident birth/death boundaries, or backend=:auto to select a suitable encoder.")
+        supports_pl_backend(Ups, Downs; opts=opts) || error("PLBackend requested, but the bounds or cell budget are unsupported. Use backend=:auto to select a suitable encoder.")
         return :pl_backend
     elseif b == :pl
         return :pl
@@ -2924,6 +2906,47 @@ slice_barcodes(M::PModule{K}, slices;
     slice_barcodes(M, slices, opts; kwargs...)
 
 """
+    interval_multiplicity(M; vertices, budget=Advanced.IntervalDecompositionBudget())
+    interval_multiplicity(enc::EncodingResult; vertices, cache=:auto, kwargs...)
+
+Actual thin-interval summand multiplicity on the represented finite base.
+Encoding inputs use the cached finite module; no ambient decomposition or
+encoding-independence claim is made. See `IntervalDecompositions.interval_multiplicity`.
+"""
+interval_multiplicity(M::PModule; kwargs...) = IntervalDecompositions.interval_multiplicity(M;kwargs...)
+function interval_multiplicity(enc::EncodingResult; cache=:auto, kwargs...)
+    enc2 = _encoding_with_session_cache(enc, _resolve_workflow_session_cache(cache))
+    return IntervalDecompositions.interval_multiplicity(pmodule(enc2);kwargs...)
+end
+
+"""
+    interval_decomposition(M; family=:all, witnesses=false, budget=Advanced.IntervalDecompositionBudget())
+    interval_decomposition(enc::EncodingResult; cache=:auto, kwargs...)
+
+Exact interval part and residual dimensions on a finite base. A supplied family
+restricts the claim; `witnesses=true` retains simultaneous splitting maps.
+See `IntervalDecompositions.interval_decomposition` for budgets and completeness.
+"""
+interval_decomposition(M::PModule; kwargs...) = IntervalDecompositions.interval_decomposition(M;kwargs...)
+function interval_decomposition(enc::EncodingResult; cache=:auto, kwargs...)
+    enc2 = _encoding_with_session_cache(enc, _resolve_workflow_session_cache(cache))
+    return IntervalDecompositions.interval_decomposition(pmodule(enc2);kwargs...)
+end
+
+"""
+    is_interval_decomposable(M_or_encoding; kwargs...)
+    is_interval_decomposable(result)
+
+Return true, false or missing according to the complete/selected-family
+contract of `IntervalDecompositions.is_interval_decomposable`. Exhausted search
+budgets throw and are never reported as a negative answer.
+"""
+is_interval_decomposable(r::IntervalDecompositions.IntervalDecompositionResult) =
+    IntervalDecompositions.is_interval_decomposable(r)
+is_interval_decomposable(M::Union{PModule,EncodingResult};kwargs...) =
+    is_interval_decomposable(interval_decomposition(M;kwargs...))
+
+"""
     generalized_rank(M; vertices, witnesses=false, budget=Advanced.GeneralizedRankBudget())
     generalized_rank(enc::EncodingResult; vertices, cache=:auto, kwargs...)
 
@@ -2932,7 +2955,7 @@ queries use the encoding's finite base, not an implicit ambient geometric region
 See `Invariants.generalized_rank` for witness and resource contracts.
 """
 generalized_rank(M::PModule; kwargs...) = Invariants.generalized_rank(M; kwargs...)
-generalized_rank(r::Invariants.GeneralizedRankResult) = Invariants.generalized_rank(r)
+generalized_rank(r::Union{Invariants.GeneralizedRankResult,Invariants.BoundaryZigzagResult}) = Invariants.generalized_rank(r)
 function generalized_rank(enc::EncodingResult; cache=:auto, kwargs...)
     enc2 = _encoding_with_session_cache(enc, _resolve_workflow_session_cache(cache))
     return Invariants.generalized_rank(pmodule(enc2); kwargs...)
@@ -3152,6 +3175,24 @@ function mpp_image(M::PModule{K}, pi;
                    opts::InvariantOptions=InvariantOptions(),
                    kwargs...) where {K}
     return Invariants.mpp_image(M, pi, opts; kwargs...)
+end
+
+
+"""
+    propagate(enc::EncodingResult; source, vectors)
+    propagate(M::PModule; source, vectors)
+
+Follow selected stalk coordinates on the finite module. `source` is a finite
+vertex ID, not an ambient point. An encoding input retains its classifier and
+materializes its module if lazy. Use `propagation_summary` for support/ranks and
+`generated_submodule` for optional inclusion and quotient operations. A finite
+upper ideal is not an ambient lifetime from an arbitrary point in a fiber.
+"""
+propagate(M::PModule; kwargs...) = AbelianCategories.propagate(M; kwargs...)
+function propagate(enc::EncodingResult; source, vectors)
+    r = AbelianCategories.propagate(materialize_module(enc.M); source, vectors)
+    return AbelianCategories.VectorPropagation(r.ambient,r.source,r.vectors,r.images,
+        r.image_dimensions,(;encoding=enc,basis_convention=:ambient_stalk_coordinates))
 end
 
 end # module Workflow

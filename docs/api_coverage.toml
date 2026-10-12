@@ -49,16 +49,28 @@ bindings = [
 ]
 
 [[families]]
+id = "source_representatives"
+title = "Verified source representatives and component histories"
+question = "How do computed chains, cochains and components correspond to original source cells?"
+owners = []
+guides = ["docs/tutorials/source_cells.ipynb"]
+example_status = "original_boundary_activity_and_H0_connectivity_oracles"
+reference_status = "authored"
+reference_pages = ["docs/src/reference/source_representatives.md"]
+example_sources = ["docs/tutorials/source_cells.ipynb", "test/test_source_representatives.jl", "test/test_visualization_a91.jl"]
+review_status = "source_boundary_filtration_and_component_oracles; static_and_browser_acceptance"
+
+[[families]]
 id = "inputs"
 title = "Inputs, filtrations, construction options, budgets, and registries"
 question = "How do my data and a chosen filtration define the input module?"
 owners = ["TamerOp.DataTypes", "TamerOp.DataIngestion", "TamerOp.SyntheticData"]
-reference_pages = ["docs/src/reference/inputs.md"]
-guides = ["docs/ordinary_persistence.md", "docs/ingestion_options.md", "docs/multicover.md", "docs/rhomboid_depth.md", "docs/option_contracts.md"]
-example_sources = []
-example_status = "verified_end_to_end_tutorial_needed"
+reference_pages = ["docs/src/reference/inputs.md", "docs/src/reference/visualization.md"]
+guides = ["docs/tutorials/source_cells.ipynb", "docs/ordinary_persistence.md", "docs/ingestion_options.md", "docs/tutorials/multicover.ipynb", "docs/rhomboid_depth.md", "docs/option_contracts.md"]
+example_sources = ["docs/tutorials/source_cells.ipynb", "docs/tutorials/multicover.ipynb", "test/test_visualization_a93.jl"]
+example_status = "canonical_source_cell_guide_present; geometric_guide_present; other_ingestion_routes_pending"
 reference_status = "backlog"
-review_status = "owner_routing_only; method_families_pending"
+review_status = "filtered_complex_construction_and_orientation_contracts_reviewed; other_method_families_pending"
 backlog = ["Distinguish raw data, filtered complexes, and completed encodings", "Explain grade orientation, axes, truncation, budgets, and extension requirements", "Choose one data route that joins the first inspection lesson", "A113/A114/A52: document top-cell dimensionality and periodic signs, alpha geometry/exactness limits, and supported trifiltration-adapter semantics only as implemented"]
 
 [[families]]
@@ -67,11 +79,11 @@ title = "Finite posets, modules, morphisms, indicators, fringes, and flanges"
 question = "What spaces and maps does this finite mathematical object contain?"
 owners = ["TamerOp.FiniteFringe", "TamerOp.Modules", "TamerOp.AbelianCategories", "TamerOp.IndicatorTypes", "TamerOp.FlangeZn"]
 reference_pages = ["docs/src/reference/modules.md", "docs/src/reference/decomposition.md"]
-guides = ["docs/spaces_and_maps.md", "docs/persistence_modules.md", "docs/finite_encodings.md", "docs/indicator_presentations.md", "docs/tameness.md", "docs/math_categories.md", "docs/visualization.md"]
-example_sources = ["docs/build_scripts/render_spaces_maps.jl", "docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl", "docs/tutorials/inspect_encoding.ipynb"]
-example_status = "square_and_overlapping_summands_oracles_and_inspection_notebook; general_module_tutorial_needed"
+guides = ["docs/tutorials/presentations.ipynb", "docs/recipes/build_module.md", "docs/tutorials/generated_submodules.ipynb", "docs/spaces_and_maps.md", "docs/persistence_modules.md", "docs/finite_encodings.md", "docs/indicator_presentations.md", "docs/tameness.md", "docs/math_categories.md", "docs/visualization.md"]
+example_sources = ["docs/build_scripts/check_presentations.jl", "test/test_visualization_a99.jl", "docs/tutorials/generated_submodules.ipynb", "docs/build_scripts/render_spaces_maps.jl", "docs/build_scripts/check_first_encoding.jl", "docs/build_scripts/check_indicator_presentations.jl", "docs/tutorials/inspect_encoding.ipynb"]
+example_status = "selected_vector_notebook_and_square_oracles; broader_module_morphism_tutorial_pending"
 reference_status = "backlog"
-review_status = "first_path_subset_selected; A83_selected_presentation_queries_reviewed; remaining_method_families_pending"
+review_status = "A99_editor_and_path_witness_contracts_authored; A104_propagation_generated_submodules_and_source_basis_contracts_authored; general_module_and_universal_construction_methods_pending"
 backlog = ["Write the square's indicator constructors and space/map queries first", "Later cover morphisms, kernels, images, and direct sums with nontrivial matrices", "Separate finite-poset modules from ambient presentations", "A46/A50/A104/A111: review multiplicity and splitting witnesses, generated submodule/inclusion/quotient contracts, and additive morphism-induced matching separately from optimal barcode matching", "Write intra-module queries separately from morphisms/universal constructions, certified decomposition and editor validation; define shared result types once"]
 
 [[families]]
@@ -93,13 +105,13 @@ title = "Chain complexes and ordinary persistence"
 question = "How do a filtered complex and its homology give spaces or intervals?"
 owners = ["TamerOp.ChainComplexes", "TamerOp.OrdinaryPersistence", "TamerOp.ModuleComplexes"]
 reference_pages = ["docs/src/reference/complexes.md", "docs/src/reference/ordinary_persistence.md", "docs/src/reference/persistence_variants.md"]
-guides = ["docs/persistence_modules.md", "docs/ordinary_persistence.md", "docs/lazy_inspection.md"]
-example_sources = ["docs/build_scripts/check_first_encoding.jl", "docs/tutorials/ring.ipynb", "docs/tutorials/ordinary_analysis.ipynb"]
-example_status = "ring_oracle_and_16_cell_10_figure_static_publication_verified; complex_tutorial_pending"
+guides = ["docs/recipes/relative_pair.md", "docs/tutorials/source_cells.ipynb", "docs/tutorials/complexes.ipynb", "docs/persistence_modules.md", "docs/ordinary_persistence.md", "docs/lazy_inspection.md"]
+example_sources = ["docs/build_scripts/check_relative_pair.jl", "docs/tutorials/source_cells.ipynb", "docs/tutorials/complexes.ipynb", "docs/build_scripts/check_first_encoding.jl", "docs/tutorials/ring.ipynb", "docs/tutorials/ordinary_analysis.ipynb"]
+example_status = "ring_oracle_and_16_cell_10_figure_static_publication_verified; complexes_guide_7_cells_5_figures_and_publication_export_verified; A118_boundary_recipe_and_interval_specs_verified; broader_complex_workflows_pending"
 reference_status = "backlog"
-review_status = "first_path_subset_selected; degree_conventions_pending; A41_ordinary_representative_retention_oracles_passed"
-review_notes = "A116 adds explicit degree/essential/coordinate policies and a novice analysis/save tutorial; B39/B43/B48 and the existing mathematical lessons own planned explanations. Ordinary persistence supports prime fields, with F2 as the default, opt-in reduction cycles and finite-death bounding chains, and separately requested scale-specific cocycles. The ordinary-persistence guide states coefficient, source-cell, scale and collapse constraints; generated method reference remains in the backlog. Retained-chain and cocycle checks are documented in docs/testing.md. The recorded Chromium triangle checks exercised F2 interval members, retained cycles and filling chains, canvas selection, invalid-input recovery, keyboard access and linked-view lifecycle. That browser evidence does not establish every prime-field or cocycle interaction. The broader fixture matrix remains separate; see test/browser/README.md."
-backlog = ["Document A116 diagram analysis and the copied in-memory interchange contract; link shared metric/feature generics and the owned saved-result schema", "Write cubical_persistence and interval accessors for the ring first", "Distinguish homology from cohomology and specify grading conventions", "Author generated reference coverage for retained persistence representatives and their explicit computation cost", "Later cover module complexes and heavier computed outputs", "A118/A119: specify checked filtered pairs, quotient and connecting maps, and ordinary/relative/extended interval types", "A120/A121/A55: document zigzag events, endpoint decorations, allowed updates, certified correspondence and temporal consumer semantics", "A108: distinguish source cohomological products from derived products; review compatible algebra/cochain inputs and representative-independence conditions", "Partition ordinary result contracts from relative/extended/zigzag/update methods in persistence_variants; shared cycle/cocycle types have one canonical definition"]
+review_status = "first_path_subset_selected; degree_conventions_pending; A41_ordinary_representative_retention_oracles_passed; A42d_spectral_views_math_Cairo_WGL_guide_and_Chromium_verified; A118_quotient_cone_LES_naturality_and_public_API_verified"
+review_notes = "A118 adds checked filtered pairs, exact quotient snapshots and relative homology maps, documented in the pair reference, boundary recipe and B66 account. Independent quotient-rank oracles, signed exact sequences, both parameter orders and concurrent map queries are checked; this does not implement A119 extended persistence. A116 adds explicit degree/essential/coordinate policies and a novice analysis/save tutorial; B39/B43/B48 and the existing mathematical lessons own planned explanations. Ordinary persistence supports prime fields, with F2 as the default, opt-in reduction cycles and finite-death bounding chains, and separately requested scale-specific cocycles. The ordinary-persistence guide states coefficient, source-cell, scale and collapse constraints; generated method reference remains in the backlog. Retained-chain and cocycle checks are documented in docs/testing.md. The recorded Chromium triangle checks exercised F2 interval members, retained cycles and filling chains, canvas selection, invalid-input recovery, keyboard access and linked-view lifecycle. That browser evidence does not establish every prime-field or cocycle interaction. The broader fixture matrix remains separate; see test/browser/README.md."
+backlog = ["Document A116 diagram analysis and the copied in-memory interchange contract; link shared metric/feature generics and the owned saved-result schema", "Write cubical_persistence and interval accessors for the ring first", "Distinguish homology from cohomology and specify grading conventions", "Author generated reference coverage for retained persistence representatives and their explicit computation cost", "Later cover module complexes and heavier computed outputs", "A119: extend persistence_variants with the extended filtration and interval-type contracts", "A120/A121/A55: document zigzag events, endpoint decorations, allowed updates, certified correspondence and temporal consumer semantics", "A108: distinguish source cohomological products from derived products; review compatible algebra/cochain inputs and representative-independence conditions", "Partition ordinary result contracts from relative/extended/zigzag/update methods in persistence_variants; shared cycle/cocycle types have one canonical definition"]
 
 [[families]]
 id = "resolutions"
@@ -107,7 +119,7 @@ title = "Resolutions and Betti or Bass data"
 question = "How is this module assembled from simpler objects?"
 owners = ["TamerOp.IndicatorResolutions"]
 reference_pages = ["docs/src/reference/resolutions.md"]
-guides = ["docs/tutorials/resolutions.ipynb", "docs/tameness.md", "docs/math_categories.md", "docs/lazy_inspection.md"]
+guides = ["docs/tutorials/slices_diagrams.ipynb", "docs/tutorials/resolutions.ipynb", "docs/tameness.md", "docs/math_categories.md", "docs/lazy_inspection.md"]
 example_sources = ["docs/tutorials/resolutions.ipynb", "docs/build_scripts/check_resolution_views.jl"]
 example_status = "resolution_notebook_12_cells_9_figures_executed_and_reviewed_2026_10_05; other_resolution_workflows_pending"
 reference_status = "backlog"
@@ -120,11 +132,11 @@ title = "Hom, Ext, Tor, products, functorial maps, and spectral sequences"
 question = "What algebraic relations can I compute, and in which category?"
 owners = ["TamerOp.DerivedFunctors"]
 reference_pages = ["docs/src/reference/derived.md"]
-guides = ["docs/math_categories.md", "docs/numerical_algebra.md", "docs/lazy_inspection.md"]
-example_sources = []
-example_status = "worked_examples_with_known_answers_needed"
-reference_status = "backlog"
-review_status = "owner_routing_only; products_and_spectral_sequences_pending"
+guides = ["docs/tutorials/derived.ipynb", "docs/implementation/yoneda_products.md", "docs/tutorials/complexes.ipynb", "docs/math_categories.md", "docs/numerical_algebra.md", "docs/lazy_inspection.md"]
+example_sources = ["docs/tutorials/complexes.ipynb", "docs/tutorials/derived.ipynb", "test/test_visualization_a90.jl"]
+example_status = "diamond_composition_and_supplied_Tor_product_examples; broader_functorial_examples_pending"
+reference_status = "partial"
+review_status = "A90_product_views_and_representative_contracts_authored; full_functorial_and_spectral_method_review_pending"
 backlog = ["Explain finite-category versus ambient-category computations and comparison hypotheses", "Cover cheap dimensions before bases and representatives", "Separate products, functorial maps, and spectral-sequence method families"]
 
 [[families]]
@@ -133,12 +145,12 @@ title = "Change of posets, common refinement, and translation"
 question = "How can I compare objects represented on different finite posets?"
 owners = ["TamerOp.ChangeOfPosets"]
 reference_pages = ["docs/src/reference/change_of_posets.md"]
-guides = ["docs/math_categories.md"]
-example_sources = []
-example_status = "map_level_comparison_example_needed"
-reference_status = "backlog"
-review_status = "owner_routing_only; adjunctions_and_derived_methods_pending"
-backlog = ["Show common refinement and semantic result accessors", "Verify translated maps as well as dimensions", "Explain when comparison does or does not preserve a derived computation"]
+guides = ["docs/tutorials/compare_encodings.ipynb", "docs/math_categories.md", "docs/implementation/change_of_posets.md"]
+example_sources = ["docs/tutorials/compare_encodings.ipynb", "test/test_visualization_a88.jl"]
+example_status = "actual_pullback_matrices_and_finite_category_counterexample"
+reference_status = "authored"
+review_status = "restriction_refinement_Kan_comparison_contracts; broader_derived_method_reference_review_pending"
+backlog = ["Complete method-level reference for specialized derived Kan constructions"]
 
 [[families]]
 id = "invariants"
@@ -146,12 +158,12 @@ title = "Invariants, measures, slices, landscapes, images, and distances"
 question = "Which summary answers my question, and what information does it omit?"
 owners = ["TamerOp.Invariants", "TamerOp.InvariantCore", "TamerOp.SignedMeasures", "TamerOp.SliceInvariants", "TamerOp.Fibered2D", "TamerOp.MultiparameterImages"]
 reference_pages = ["docs/src/reference/invariants.md", "docs/src/reference/comparisons.md"]
-guides = ["docs/exact_matching.md", "docs/finite_encodings.md"]
-example_sources = ["docs/examples/generalized_rank.jl", "docs/tutorials/ordinary_analysis.ipynb", "docs/tutorials/distance_witness.ipynb"]
-example_status = "generalized_rank_examples_present; distance_witness_recipe_executed_and_publication_checked; broader_summary_comparison_tutorial_needed"
+guides = ["docs/exact_matching.md", "docs/finite_encodings.md", "docs/tutorials/generalized_rank_queries.ipynb"]
+example_sources = ["docs/tutorials/generalized_rank_queries.ipynb", "docs/recipes/query_region_invariant.md", "docs/examples/generalized_rank.jl", "docs/tutorials/ordinary_analysis.ipynb", "docs/tutorials/distance_witness.ipynb"]
+example_status = "generalized_rank_boundary_GRIL_executable_guide_and_recipe; distance_witness_recipe_executed_and_publication_checked; broader_summary_comparison_tutorial_needed"
 reference_status = "backlog"
 review_status = "A85_exact_matching_witness_math_and_normalization_verified; other_materially_distinct_summary_reviews_pending"
-backlog = ["Document A116 degree-aware diagram methods on the shared bottleneck/Wasserstein and feature generics, including reflected superlevels, repeated members, essential matching and numerical costs", "Choose summaries by mathematical question", "State slice direction, finite-window, exact/sample, and field assumptions", "Include examples showing what a selected summary cannot recover", "Document generalized_rank, interval_rank_summary and gril with finite-base versus ambient-grid contracts, exact fields, witnesses and budgets; track planned usage and mathematics articles in article_inventory.toml", "Document the total compression contract and declared-family-only reconstruction, plus GRIL accessors, shape and feature-vector ordering", "A51/A106/A109: state central charges, contour laws and nilpotent-operator hypotheses for each bounded invariant", "A53/A69/A103/A107: distinguish supplied interleaving certificates, geometric sparsification, support approximation and actual pruning; document guarantees individually", "A110/A111: distinguish signed transport and additive map-induced matching from ordinary optimal barcode distances", "Separate query definitions from comparisons/certificates and decomposition result contracts; cross-reference shared generic methods rather than duplicate signatures"]
+backlog = ["Document A116 degree-aware diagram methods on the shared bottleneck/Wasserstein and feature generics, including reflected superlevels, repeated members, essential matching and numerical costs", "Choose summaries by mathematical question", "State slice direction, finite-window, exact/sample, and field assumptions", "Include examples showing what a selected summary cannot recover", "Document generalized_rank, interval_rank_summary and gril with finite-base versus ambient-grid contracts, exact fields, witnesses and budgets; link the authored guide and retain the planned mathematical lesson in article_inventory.toml", "Document the total compression contract and declared-family-only reconstruction, plus GRIL accessors, shape and feature-vector ordering", "A51/A106/A109: state central charges, contour laws and nilpotent-operator hypotheses for each bounded invariant", "A53/A69/A103/A107: distinguish supplied interleaving certificates, geometric sparsification, support approximation and actual pruning; document guarantees individually", "A110/A111: distinguish signed transport and additive map-induced matching from ordinary optimal barcode distances", "Separate query definitions from comparisons/certificates and decomposition result contracts; cross-reference shared generic methods rather than duplicate signatures"]
 
 [[families]]
 id = "visualization"
@@ -159,13 +171,14 @@ title = "Visualization specifications, renderers, and exports"
 question = "How do I interpret and save a figure of the object I computed?"
 owners = ["TamerOp.Visualization"]
 reference_pages = ["docs/src/reference/visualization.md", "docs/src/reference/visual_sessions.md"]
-guides = ["docs/tutorials/resolutions.ipynb", "docs/spaces_and_maps.md", "docs/visualization.md", "docs/optional_integrations.md"]
-example_sources = ["docs/tutorials/resolutions.ipynb", "docs/build_scripts/check_resolution_views.jl", "docs/build_scripts/render_spaces_maps.jl", "docs/tutorials/inspect_encoding.ipynb", "docs/tutorials/distance_witness.ipynb"]
-example_status = "square_30_cell_11_figure_static_site_and_executed_notebook_publication_verified_2026_10_04; main_path_without_optional_cells_verified; resolutions_12_cell_9_figure_notebook_and_static_exports_verified_2026_10_05"
-reference_status = "backlog"
-review_status = "A81_A82_contracts_and_exact_geometry; A42a_A83_static_inspection; A42b_morphism_exact_sequence_Hom_lift_math_and_Cairo_WGL_exports_verified; A84_anchored_rank_math_Cairo_WGL_and_Chromium_verified; A85_matching_witness_math_Cairo_WGL_and_Chromium_verified; A35_shared_style; A37_A40_A41_native_and_standalone_browser_checks_recorded; ring_and_square_static_publication_verified; broader_fixture_matrix_and_live_notebook_controls_pending; A42c_resolution_visual_contracts_math_Cairo_WGL_and_guide_figures_verified"
-review_notes = "The supported A41 families distinguish whole-line versus viewing-window restrictions, infinite versus known finite offscreen versus censored endpoints, multiplicity groups and opt-in retained ordinary representatives. Prime-field chain and cocycle contracts are separate from the F2 fixtures exercised in the recorded browser run. On 2026-10-03, one fresh-server Chromium 153 run passed all five maintained browser scenarios in 24.4 minutes, with command exit zero, no termination signal and verified process/port/stop-marker cleanup. It covers ordinary triangle intervals and retained chains, whole-line band slices, historical square spaces/maps/presentations, finite-window square slices and large-grayscale 150/200-percent browser zoom. Real pointer events, keyboard horizontal scrolling, exact boundary and zero-composite oracles, active zero blocks, image bases, hover without extra algebra, error recovery and linked-view lifecycle are checked. The actual 24px band canvas, narrow-right screenshot and all six zoom viewport captures (controls and both chart ends at 150/200 percent) passed visual review; crowded x-tick labels rotate while preserving every tick value, interval endpoint and diagram point. Very small standalone figures may still require more height for wrapped headings. The focused diagram run passed 958/958 native assertions in Cairo/WGL. Historical evidence includes the 2026-10-02 four-plus-focused browser runs and 1228/1228 barcode owner-file assertions; these native totals overlap and are not additive. See docs/testing.md and test/browser/README.md. The broader A41 fixture matrix, notebook frontends and other browsers remain pending. General multiparameter source-cycle correspondence and cross-slice class tracking remain A40/prerequisite work. A85 passed 278 focused native assertions and both standalone Chromium scenarios with exit zero; reviewed captures cover diagonal selection, both narrow-chart positions and the exact 5/4 interior optimum. Independent linked viewers, disconnect cleanup, repeated-member pointer selection, sampled versus certified values and error recovery are exercised. The canonical distance recipe executes five code cells and publishes two static figures; this does not certify live notebook integration."
-backlog = ["Resolution views have a canonical usage notebook and authored visual contracts; finish the remaining construction/method-family reference without duplicating visual keyword contracts", "Complete generated reference entries for visualization recipes, including A85 matching-witness sessions and exact-result accessors, A84 anchored-rank and A42b morphism/exact-sequence/Hom/lift method contracts, VisualStyle and all inspection session types", "Retain the five-scenario browser regressions for historical two-square checks, horizontal keyboard scrolling and actual grayscale page zoom", "Validate actual notebook-frontend integration and other browser environments", "Expand A41 browser checks to torus, superlevel, unavailable representatives, raw/clipped intervals, coincident picks, display budgets, incomplete domains, and zoom checks for additional recipes", "A40: develop justified class tracking and source-cycle correspondence for general multiparameter encodings", "Retain standalone browser interaction regressions separately from native Julia callback checks", "Separate view/specification/render/export contracts from live/saved session lifecycle and editor mutation; document backend and opt-in work per object family", "Retain A84 rank-section browser and grayscale regressions; notebook frontends and performance measurements remain separately scoped"]
+guides = ["docs/tutorials/presentations.ipynb", "docs/recipes/build_module.md", "docs/tutorials/live_inspection.ipynb", "docs/recipes/reopen_session.md", "docs/tutorials/comparisons.ipynb", "docs/tutorials/compose_figures.ipynb", "docs/tutorials/source_cells.ipynb", "docs/tutorials/complexes.ipynb", "docs/tutorials/slices_diagrams.ipynb", "docs/tutorials/resolutions.ipynb", "docs/spaces_and_maps.md", "docs/visualization.md", "docs/optional_integrations.md"]
+example_sources = ["docs/build_scripts/check_presentations.jl", "test/test_visualization_a99.jl", "docs/tutorials/live_inspection.ipynb", "docs/build_scripts/check_live_inspection.jl", "test/test_visualization_a100.jl", "test/test_visualization_a98.jl", "docs/tutorials/comparisons.ipynb", "test/test_visualization_a94.jl", "docs/build_scripts/check_compose_figures.jl", "test/test_visualization_a102.jl", "docs/build_scripts/check_complexes.jl", "test/test_visualization_a89.jl", "docs/tutorials/source_cells.ipynb", "docs/tutorials/complexes.ipynb", "docs/tutorials/resolutions.ipynb", "docs/build_scripts/check_resolution_views.jl", "docs/build_scripts/render_spaces_maps.jl", "docs/tutorials/inspect_encoding.ipynb", "docs/tutorials/distance_witness.ipynb"]
+example_status = "A100_13_cell_4_figure_guide_10_cell_3_figure_main_path_and_3_block_recipe_executed; A102_12_cell_8_figure_guide_and_10_cell_7_figure_main_path_verified_2026_10_06; complexes_11_cells_9_figures_executed_and_publication_verified_2026_10_06; square_30_cell_11_figure_static_site_and_executed_notebook_publication_verified_2026_10_04; main_path_without_optional_cells_verified; resolutions_12_cell_9_figure_notebook_and_static_exports_verified_2026_10_05"
+reference_status = "partial"
+review_status = "A99_editor_and_path_witness_contracts_authored; A100_exact_sessions_source_identity_real_exports_and_offline_Chromium_verified; A102_native_exports_and_Chromium_pixel_visibility_verified; A89_chain_quotient_homotopy_source_and_connecting_maps_math_Cairo_WGL_guide_and_Chromium_verified; A81_A82_contracts_and_exact_geometry; A42a_A83_static_inspection; A42b_morphism_exact_sequence_Hom_lift_math_and_Cairo_WGL_exports_verified; A84_anchored_rank_math_Cairo_WGL_and_Chromium_verified; A85_matching_witness_math_Cairo_WGL_and_Chromium_verified; A35_shared_style; A37_A40_A41_native_and_standalone_browser_checks_recorded; ring_and_square_static_publication_verified; A36_A37_required_native_Chromium_and_offline_baseline_verified; named_live_notebook_hosts_unqualified; A42c_resolution_visual_contracts_math_Cairo_WGL_and_guide_figures_verified; A42d_spectral_views_math_Cairo_WGL_guide_and_Chromium_verified; A86_signed_reconstruction_prominence_smoothing_math_Cairo_WGL_and_Chromium_verified; A92_source_cells_exact_activity_math_Cairo_WGL_static_guide_and_Chromium_verified"
+review_notes = "A100 supplies versioned declarative captures, exact available readouts, opt-in checked sources and finite-state offline HTML. Finite modules, supported encodings and ordinary diagrams can resume supported inspectors in Julia; other families retain static snapshots. Actual Cairo SVG/PNG/PDF exports and reopenable sidecars, frozen representative correspondences and no-server Chromium reopening after the exporter exits pass. The 13-cell/four-figure guide, 10-cell/three-figure main path and three-block recipe execute. The session reference is authored; remaining visual-family reference work stays partial. Camera gestures and arbitrary offline queries are not persisted. A102 supplies semantic overlays, named panels, shared scales and authored/checked annotations. It passes 123 dedicated assertions, PNG/SVG/PDF/fixed HTML export checks and two actual Chromium scenarios, including raster visibility over both panels after pan/resize and offline reopening. Its 12-cell/8-figure guide, 10-cell/7-figure main path and runnable short recipe have separate documentation homes; live persisted sessions remain A100. The supported A41 families distinguish whole-line versus viewing-window restrictions, infinite versus known finite offscreen versus censored endpoints, multiplicity groups and opt-in retained ordinary representatives. Prime-field chain and cocycle contracts are separate from the F2 fixtures exercised in the recorded browser run. On 2026-10-03, one fresh-server Chromium 153 run passed all five maintained browser scenarios in 24.4 minutes, with command exit zero, no termination signal and verified process/port/stop-marker cleanup. It covers ordinary triangle intervals and retained chains, whole-line band slices, historical square spaces/maps/presentations, finite-window square slices and large-grayscale 150/200-percent browser zoom. Real pointer events, keyboard horizontal scrolling, exact boundary and zero-composite oracles, active zero blocks, image bases, hover without extra algebra, error recovery and linked-view lifecycle are checked. The actual 24px band canvas, narrow-right screenshot and all six zoom viewport captures (controls and both chart ends at 150/200 percent) passed visual review; crowded x-tick labels rotate while preserving every tick value, interval endpoint and diagram point. Very small standalone figures may still require more height for wrapped headings. The focused diagram run passed 958/958 native assertions in Cairo/WGL. Historical evidence includes the 2026-10-02 four-plus-focused browser runs and 1228/1228 barcode owner-file assertions; these native totals overlap and are not additive. See docs/testing.md and test/browser/README.md. The broader A41 fixture matrix, notebook frontends and other browsers remain pending. Cross-slice class tracking and source-basis recovery for unrelated finite encodings remain separate work; A43 supplies verified finite source-complex correspondences consumed by A89. A85 passed 278 focused native assertions and both standalone Chromium scenarios with exit zero; reviewed captures cover diagonal selection, both narrow-chart positions and the exact 5/4 interior optimum. Independent linked viewers, disconnect cleanup, repeated-member pointer selection, sampled versus certified values and error recovery are exercised. The canonical distance recipe executes five code cells and publishes two static figures; this does not certify live notebook integration. A42d adds 659 focused assertions, a seven-cell/five-figure guide and a standalone Chromium scenario covering page navigation, unknown data, selected differential quotients, linked clients, recovery and teardown. The final chart/readout layouts and eight static gallery views passed visual review. Live notebook frontends and performance budgets remain separate. A86 passed 800 focused assertions (783 signed-view checks plus 17 existing signed-density regressions), with Cairo and WGL required. Both standalone Chromium scenarios passed after fixing stale hover contributions; screenshots cover actual signed-term selection, smoothing, narrow keyboard scrolling and grayscale, with independent viewer disposal and normal server cleanup. The canonical slices-and-diagrams guide executes nine cells and seven static figures. Optional meta-diagrams and timed animation, notebook frontends and performance measurements remain separately scoped; A102 supplies generic layer composition. A92 passed 280 focused native assertions and 417 existing cubical/typed-ingestion regressions, with two actual Chromium scenarios covering ring filling, exact thresholds, source boundary selection, 3D volume selection, linked viewers, recovery and teardown. Visual review caught and fixed stale 3D clipping planes; transformed-vertex checks now protect both renderers. A89 passed 396 focused mathematical/native assertions and 552 neighboring regressions across the recorded targeted runs; repeat native checks are not added to that total. All three standalone Chromium scenarios passed, covering cycles/classes, cone connecting maps and source-cell filling, with linked-view cleanup, invalid-input recovery and narrow keyboard access. PNG/SVG/PDF exports, empty spaces, grayscale, supplied homotopies and snake maps have separate native/visual coverage. The canonical complexes guide now executes eleven cells and nine static figures, extending its earlier spectral examples. Exact source overlays cover supported dimensions zero through two; RealField algebra uses its declared tolerance. Live notebook frontends are not certified by these standalone checks. The canonical source-cells guide exports its actual static figures and routes under Using TamerOp. Its shared A43 continuation also executes, without substituting for separate representative-transport acceptance. Figure budgets and projections do not change mathematical cell activity; arbitrary cellular geometry is supplied explicitly and is not certified to be an embedding."
+backlog = ["Resolution views have a canonical usage notebook and authored visual contracts; finish the remaining construction/method-family reference without duplicating visual keyword contracts", "Complete generated reference entries for visualization recipes, including A86 signed-observable/query/session contracts, A85 matching-witness sessions and exact-result accessors, A84 anchored-rank and A42b morphism/exact-sequence/Hom/lift method contracts, VisualStyle and all inspection session types", "Retain the five-scenario browser regressions for historical two-square checks, horizontal keyboard scrolling and actual grayscale page zoom", "Validate actual notebook-frontend integration and other browser environments", "Expand A41 browser checks to torus, superlevel, unavailable representatives, raw/clipped intervals, coincident picks, display budgets, incomplete domains, and zoom checks for additional recipes", "A40: develop justified class tracking and source-cycle correspondence for general multiparameter encodings", "Retain standalone browser interaction regressions separately from native Julia callback checks", "Separate view/specification/render/export contracts from live/saved session lifecycle and editor mutation; document backend and opt-in work per object family", "Retain A84 rank-section browser and grayscale regressions; notebook frontends and performance measurements remain separately scoped"]
+
 
 [[families]]
 id = "features"
@@ -185,10 +198,10 @@ id = "io"
 title = "Input/output, serialization, and validation"
 question = "What does loading or saving preserve, and how do I inspect an ambiguous input?"
 owners = ["TamerOp.DataFileIO", "TamerOp.Serialization"]
-reference_pages = ["docs/src/reference/io.md"]
-guides = ["docs/optional_integrations.md", "docs/ingestion_options.md"]
-example_sources = ["docs/tutorials/ordinary_analysis.ipynb"]
-example_status = "ordinary_diagram_roundtrip_tutorial_present; other_roundtrip_and_external_input_examples_needed"
+reference_pages = ["docs/src/reference/io.md", "docs/src/reference/visual_sessions.md"]
+guides = ["docs/tutorials/live_inspection.ipynb", "docs/recipes/reopen_session.md", "docs/optional_integrations.md", "docs/ingestion_options.md"]
+example_sources = ["test/test_visual_session_codec.jl", "test/test_visualization_a100.jl", "docs/tutorials/ordinary_analysis.ipynb"]
+example_status = "A100_exact_visual_values_and_owned_sources_roundtripped; ordinary_diagram_roundtrip_tutorial_present; other_roundtrip_and_external_input_examples_needed"
 reference_status = "backlog"
 review_status = "documented_qualified_entries_selected; format_review_pending"
 backlog = ["Document A116 save/load_persistence_diagram_json and inspect/check contracts: strict versioned data, exact grades/types, retained source/representative data, allowlisted metadata and structural validation limits; coordinate A100", "Explain inspect_data_file before loading ambiguous inputs", "Specify field, grades, maps, and provenance preserved by each format", "Document qualified external readers and optional format extensions", "A56: document any adopted Python bridge ownership/copy/layout/environment contract and what crosses as handles versus saved exact data"]
@@ -375,3 +388,89 @@ family = "io"
 evidence = ["src/serialization/external_cas.jl"]
 reason = "Documented Macaulay2 command adapter with a user-facing return contract."
 review_status = "reference_backlog"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.SourceCorrespondence"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.SourceChain"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.SourceValidationSummary"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.source_correspondence"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.lift_source_chain"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.source_chain_data"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.check_source_chain"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.check_source_correspondence"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.DataIngestion.optimize_representative"]
+family = "source_representatives"
+
+[[overrides]]
+bindings = ["TamerOp.OrdinaryPersistence.ComponentHistory", "TamerOp.OrdinaryPersistence.component_history", "TamerOp.OrdinaryPersistence.component_count", "TamerOp.OrdinaryPersistence.components_at", "TamerOp.OrdinaryPersistence.component_members", "TamerOp.OrdinaryPersistence.component_history_summary", "TamerOp.OrdinaryPersistence.component_intervals", "TamerOp.OrdinaryPersistence.component_merges", "TamerOp.OrdinaryPersistence.component_parameter", "TamerOp.OrdinaryPersistence.check_component_history", "TamerOp.Visualization.ComponentInspectionSession"]
+family = "source_representatives"
+
+[[overrides]]
+family = "visualization"
+bindings = ["TamerOp.Visualization.VisualContext", "TamerOp.Visualization.VisualAnchor", "TamerOp.Visualization.VisualAnnotation", "TamerOp.Visualization.visual_panel", "TamerOp.Visualization.overlay_visuals", "TamerOp.Visualization.compose_visuals", "TamerOp.Visualization.correspondence_annotation"]
+
+[[overrides]]
+family = "visualization"
+bindings = ["TamerOp.Visualization.ComparisonCase", "TamerOp.Visualization.VisualComparison", "TamerOp.Visualization.compare_visuals", "TamerOp.Visualization.ComparisonInspectionSession"]
+
+[[overrides]]
+family = "visualization"
+bindings = ["TamerOp.Visualization.VisualCollection", "TamerOp.Visualization.visual_collection", "TamerOp.Visualization.collection_sample", "TamerOp.Visualization.collection_matching", "TamerOp.Visualization.CollectionInspectionSession"]
+
+[[families]]
+id = "ensembles"
+title = "Aligned ensembles and uncertainty"
+question = "Which repeated observations are aligned and what does their band mean?"
+owners = []
+reference_pages = ["docs/src/reference/ensembles.md"]
+guides = ["docs/tutorials/uncertainty.ipynb", "docs/implementation/ensembles.md"]
+example_sources = ["docs/tutorials/uncertainty.ipynb", "test/test_visualization_a95.jl"]
+example_status = "analytic_interval_and_finite_grid_examples"
+reference_status = "authored"
+review_status = "explicit_alignment_empirical_and_fixed_probe_mean_inference_contracts"
+backlog = ["Broader mathematical uncertainty lesson remains a separate article; continuous-domain functional inference needs its own regularity and discretization contract"]
+
+[[overrides]]
+family = "ensembles"
+bindings = ["TamerOp.Featurizers.PersistenceEnsemble", "TamerOp.Featurizers.EnsembleSummary", "TamerOp.Featurizers.persistence_ensemble", "TamerOp.Featurizers.summarize_ensemble", "TamerOp.Featurizers.ensemble_summary", "TamerOp.Featurizers.ensemble_values", "TamerOp.Featurizers.check_ensemble", "TamerOp.Featurizers.EnsembleValidationSummary", "TamerOp.Visualization.EnsembleInspectionSession"]
+
+[[families]]
+id = "decomposition"
+title = "Exact interval multiplicities and splitting witnesses"
+question = "Which interval modules actually split off the represented finite module?"
+owners = ["TamerOp.IntervalDecompositions"]
+reference_pages = ["docs/src/reference/decomposition.md"]
+guides = ["docs/decomposition.md", "docs/tutorials/decomposition.ipynb", "docs/implementation/interval_decomposition.md"]
+example_sources = ["docs/tutorials/decomposition.ipynb", "docs/build_scripts/check_decomposition.jl", "test/test_interval_decompositions.jl"]
+example_status = "independent_interval_sum_chain_rank_and_finite_field_splitting_oracles"
+reference_status = "authored"
+review_status = "A46_exact_finite_base_contract; complete_and_supplied_family_searches_distinguished"
+backlog = ["A50 general indecomposable decomposition and A103 approximation contracts remain separate; A87 consumes the retained interval splitting maps"]
+
+[[overrides]]
+family = "decomposition"
+bindings = ["TamerOp.Workflow.interval_multiplicity", "TamerOp.Workflow.interval_decomposition", "TamerOp.Workflow.is_interval_decomposable"]

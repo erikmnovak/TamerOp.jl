@@ -100,35 +100,35 @@ function _render_matching_inspector(spec;display=:inline,figure=nothing,size=not
         content[]=B.DOM.p("Inspector closed.")
         empty!(axes);empty!(targets)
         fig[] === nothing || empty!(fig[])
+        retained[]=nothing
         lock(browser_lock) do;browser_client[]=nothing;end
         app=app_ref[].value;app === nothing || delete!(_INSPECTION_UI_HANDLES,app)
         close_session && VIZ.close_inspection!(session)
         return nothing
     end
+    retained=Ref{Any}(nothing)
+    update_count=Ref(0)
     function refresh()
         VIZ.inspection_summary(session).closed && return dispose()
         snapshot=VIZ.inspection_snapshot(session)
         updating[]=true
         try
-            foreach(M.off,pointer_observers);empty!(pointer_observers)
-            empty!(axes);empty!(targets)
-            # Build offscreen, then replace the DOM once. Mutating a displayed
-            # axis inserts many WGL scenes synchronously during a browser event.
-            # A fresh figure avoids those round trips and releases the old scene.
-            old_figure=fig[]
-            current=M.Figure(size=figure_size,figure_padding=style.padding,
-                backgroundcolor=VIZ._visual_color(style,VIZ._VisualRole(:background)))
             panels=filter(p->get(p.metadata,:panel_style,nothing)!==:text_only,snapshot.panels)
-            for (i,p) in enumerate(panels)
-                grid=current[cld(i,2),mod1(i,2)]=M.GridLayout()
-                ax=_HANDLERS.render_panel(current,grid,p;style)
-                axes[p.kind]=ax
-                targets[p.kind]=get(p.metadata,:pick_targets,NamedTuple[])
+            drawing=VIZ.VisualizationSpec(:matching_canvas;panels,metadata=(;panel_columns=2))
+            reused=retained[]!==nothing && _visual_update_retained!(M,VIZ,_HANDLERS,retained[],drawing;style)
+            old_figure=fig[]
+            if reused
+                current=fig[];update_count[]+=1
+            else
+                foreach(M.off,pointer_observers);empty!(pointer_observers)
+                empty!(axes)
+                retained[]=_visual_retained_figure(M,VIZ,_HANDLERS,drawing;size=figure_size,style)
+                current=retained[].figure;fig[]=current
+                for (p,h) in zip(panels,retained[].panels);axes[p.kind]=h.axis;end
+                attach_pointer(current);rebuild_count[]+=1
             end
-            _HANDLERS.style_figure(current,style)
-            fig[]=current
-            attach_pointer(current)
-            rebuild_count[]+=1
+            empty!(targets)
+            for p in panels;targets[p.kind]=get(p.metadata,:pick_targets,NamedTuple[]);end
             pair.value[]=session.state.pair === nothing ? "" : string(session.state.pair)
             sample.value[]=session.state.sample === nothing ? "1" : string(session.state.sample)
             q=session.payload.context.query
@@ -139,8 +139,10 @@ function _render_matching_inspector(spec;display=:inline,figure=nothing,size=not
             end
             status_text[]="$(VIZ._matching_scope_label(session.payload.context.scope)): bottleneck cost $(VIZ._interval_value(session.payload.matching.distance)). " *
                 "$(length(snapshot.metadata.displayed_pair_ids)) / $(length(snapshot.metadata.matching_records)) pairs displayed."
-            content[]=current
-            old_figure === nothing || empty!(old_figure)
+            if !reused
+                content[]=current
+                old_figure === nothing || empty!(old_figure)
+            end
             readout[]=_inspection_dom_readout(VIZ.VisualizationSpec(:matching_readout;
                 panels=filter(p->get(p.metadata,:panel_style,nothing)===:text_only,snapshot.panels));style)
         finally;updating[]=false;end
@@ -223,6 +225,7 @@ function _render_matching_inspector(spec;display=:inline,figure=nothing,size=not
             end
             if browser_client[] === nothing
                 browser_client[]=client
+                _inspection_keyboard_navigation!(client, dom)
                 push!(observers,M.on(client.on_close) do ended
                     ended && dispose();nothing
                 end)
@@ -231,7 +234,7 @@ function _render_matching_inspector(spec;display=:inline,figure=nothing,size=not
         end
     end
     app_ref[]=WeakRef(app)
-    _INSPECTION_UI_HANDLES[app]=(;session,figure=fig,axes,targets,controls=(;pair,apply_pair,next,previous,sample,apply_sample,best_sample,optimum,fields,apply_slice,reset,close=close_button),
+    _INSPECTION_UI_HANDLES[app]=(;session,figure=fig,retained,update_count,axes,targets,controls=(;pair,apply_pair,next,previous,sample,apply_sample,best_sample,optimum,fields,apply_slice,reset,close=close_button),
         callbacks=(;pick,hover,refresh),dispose,closed,disabled,observers,pointer_observers,session_token,browser_client,
         rebuild_count,error_text,status_text,hover_text,readout,dom_id,style,figure_size)
     return app

@@ -1,0 +1,55 @@
+{
+  "version": "0.0.37",
+  "url": "https://files.pythonhosted.org/packages/76/48/6899b76598938d28f04a7de36a74555a459d39684188b99e8f9023acac32/cripser-0.0.37.tar.gz",
+  "sdist_sha256": "ca481ea2c9b985fde3af0db7d6cc09719c3830acca9056e99ecb929ec53194f1",
+  "commands": [
+    [
+      "/home/eriknovak/Documents/projects/TamerOp.jl/audit/2026-10-11/cubicalripser_official/environment/venv/bin/python",
+      "-m",
+      "pip",
+      "install",
+      "--no-index",
+      "--find-links",
+      "/home/eriknovak/Documents/projects/TamerOp.jl/audit/2026-10-11/cubicalripser_official/environment/wheelhouse",
+      "numpy==2.5.3",
+      "nanobind==3.1.0",
+      "setuptools==84.0.0",
+      "wheel==0.48.0",
+      "packaging==26.3",
+      "cmake==4.4.4",
+      "ninja==1.13.2"
+    ],
+    [
+      "/home/eriknovak/Documents/projects/TamerOp.jl/audit/2026-10-11/cubicalripser_official/environment/venv/bin/python",
+      "-m",
+      "pip",
+      "install",
+      "-v",
+      "--no-build-isolation",
+      "--no-deps",
+      "/home/eriknovak/Documents/projects/TamerOp.jl/audit/2026-10-11/cubicalripser_official/environment/cripser-0.0.37"
+    ],
+    [
+      "/home/eriknovak/Documents/projects/TamerOp.jl/audit/2026-10-11/cubicalripser_official/environment/venv/bin/cmake",
+      "--build",
+      "/home/eriknovak/Documents/projects/TamerOp.jl/audit/2026-10-11/cubicalripser_official/environment/cripser-0.0.37/build/temp.linux-x86_64-cpython-312",
+      "--target",
+      "cubicalripser",
+      "tcubicalripser",
+      "--config",
+      "Release",
+      "-j",
+      "2"
+    ]
+  ],
+  "release": true,
+  "unmodified_sources_verified": 49,
+  "extensions": {
+    "venv/lib/python3.12/site-packages/cripser/_cripser.abi3.so": "6121811d1a006faa9f32e0847f0110a9522d100e39e9beffd8fd2b87db44a4bd",
+    "venv/lib/python3.12/site-packages/cripser/tcripser.abi3.so": "511db598f5fd514472bad9f5845214a4e1e46a8be082b7062dc9bbb07f4d51b1"
+  },
+  "binaries": {
+    "cubicalripser": "bea35491ff3a2cee9ddf3ab7ee82bcb4cec3c786ef6a0538a9e2f105333285bc",
+    "tcubicalripser": "27be948473811eec1abbaa9ede5360b85a31a42f2d2d0ada308b9b5766249bc6"
+  }
+}

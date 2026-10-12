@@ -72,7 +72,9 @@ end
             try
                 ax = only(block for block in fig.content if block isa M.Axis)
                 texts = [plot for plot in ax.scene.plots if plot isa M.Text]
-                @test length(texts) == length(layers)
+                @test length(texts) == 1
+                plot = only(texts)
+                @test plot.input_text[] == [only(layer.labels) for layer in layers]
                 selected_linewidth = 6 * style.linewidth_scale
                 # Live selection adds a wider stroke after the annotation plots.
                 # Reproduce that overlay independently of pointer event routing.
@@ -84,17 +86,18 @@ end
                     M.resize!(fig,dimensions...)
                     M.update_state_before_display!(fig)
                     viewport = M.widths(M.viewport(ax.scene)[])
-                    for (plot,layer,anchor) in zip(texts,layers,anchors)
-                        @test plot.input_text[] == layer.labels
-                        rendered_anchor = only(plot.positions[])
+                    boxes = M.string_boundingboxes(plot)
+                    for (index,(layer,anchor)) in enumerate(zip(layers,anchors))
+                        @test plot.input_text[][index] == only(layer.labels)
+                        rendered_anchor = plot.positions[][index]
                         # Makie stores display positions as Float32; compare to
                         # that conversion while the specification stays exact.
                         @test Tuple(rendered_anchor)[1:2] == map(eltype(rendered_anchor),anchor)
-                        @test plot.offset[][1] == 0
-                        @test plot.offset[][2] > selected_linewidth/2
+                        @test plot.offset[][index][1] == 0
+                        @test plot.offset[][index][2] > selected_linewidth/2
                         # These are measured glyph bounds in axis-local pixels,
                         # including font metrics, alignment and final projection.
-                        box = M.boundingbox(plot,:pixel)
+                        box = boxes[index]
                         lo,hi = minimum(box)[1:2],maximum(box)[1:2]
                         @test all(isfinite,lo) && all(isfinite,hi)
                         @test minimum(lo) >= -0.5
@@ -285,42 +288,37 @@ end
             fig = V.render(spec;backend,size=(600,560),style)
             try
                 ax = only(filter(item -> item isa M.Axis,fig.content))
-                annotations = filter(plot -> plot isa M.Annotation,ax.scene.plots)
-                @test length(annotations) == 2
-                @test count(plot -> plot.visible[],annotations) == 1
-                annotation = only(filter(plot -> plot.visible[],annotations))
-                optimizer = only(filter(plot -> !plot.visible[],annotations))
+                @test !any(plot -> plot isa M.Annotation,ax.scene.plots)
+                annotation = only(plot for plot in ax.scene.plots if plot isa M.Text)
+                @test annotation.visible[]
                 for dimensions in ((600,560),(760,640))
                     M.resize!(fig,dimensions...)
                     M.update_state_before_display!(fig)
-                    @test all(plot -> !plot.visible[],optimizer.plots)
-                    texts = [plot for parent in annotations for plot in parent.plots if plot isa M.Text]
-                    @test count(plot -> plot.visible[],texts) == 1
-                    @test annotation.target_positions[] == M.Point2d.(collect(unique(exact_points)))
-                    # Native text boxes include multiline glyph extents. Check the
-                    # actual final pixel positions, not guessed character widths.
-                    boxes = annotation.text_bbs[] .+ annotation.offsets[]
+                    @test all(Tuple(p)[1:2] == convert.(eltype(p),q) for (p,q) in zip(annotation.positions[],unique(exact_points)))
+                    # Read actual glyph bounds, including the selected font,
+                    # multiline layout, projection and final pixel offsets.
+                    boxes = M.string_boundingboxes(annotation)
                     viewport = M.widths(M.viewport(ax.scene)[])
-                    if any(box -> any(minimum(box) .< -0.5) || any(maximum(box) .> viewport .+ 0.5),boxes)
+                    if any(box -> any(minimum(box)[1:2] .< -0.5) || any(maximum(box)[1:2] .> viewport .+ 0.5),boxes)
                         println(stderr,repr((;backend,fixture,fontsize,viewport,
-                            anchors=annotation.screenpoints_target[],offsets=annotation.offsets[],boxes,
-                            labels=annotation.text[])))
+                            anchors=annotation.positions[],offsets=annotation.offset[],boxes,
+                            labels=annotation.input_text[])))
                         flush(stderr)
                     end
                     for box in boxes
-                        lo,hi = minimum(box),maximum(box)
+                        lo,hi = minimum(box)[1:2],maximum(box)[1:2]
                         @test all(isfinite,lo) && all(isfinite,hi)
                         @test minimum(lo) >= -0.5
                         @test maximum(hi .- viewport) <= 0.5
                     end
                     for i in eachindex(boxes), j in (i+1):length(boxes)
-                        overlap = min.(maximum(boxes[i]),maximum(boxes[j])) .-
-                            max.(minimum(boxes[i]),minimum(boxes[j]))
+                        overlap = min.(maximum(boxes[i])[1:2],maximum(boxes[j])[1:2]) .-
+                            max.(minimum(boxes[i])[1:2],minimum(boxes[j])[1:2])
                         @test min(overlap...) <= 0.5
                     end
-                    offsets = copy(annotation.offsets[])
+                    offsets = copy(annotation.offset[])
                     M.update_state_before_display!(fig)
-                    @test annotation.offsets[] == offsets
+                    @test annotation.offset[] == offsets
                     @test spec.metadata.interval_points === exact_points
                     @test spec.metadata.records === exact_records
                 end

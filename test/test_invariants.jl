@@ -450,6 +450,49 @@ end
     
 end
 
+@testset "A27 comparable-pair rank traversal" begin
+    # A direct sum of rectangle intervals on a 4 x 3 grid, with deliberately
+    # reversed vertex labels. Count surviving summands independently of map
+    # composition, its memo layout, and the implementation's pair traversal.
+    points = reverse(vec([(i, j) for i in 1:4, j in 1:3]))
+    intervals = [((1,1),(4,3)), ((1,2),(3,3)), ((2,1),(4,2)),
+                 ((2,2),(2,2)), ((4,3),(4,3))]
+    P = FF.FinitePoset([all(points[a][k] <= points[b][k] for k in 1:2)
+                        for a in eachindex(points), b in eachindex(points)])
+    labels = [[s for (s,(lo,hi)) in enumerate(intervals)
+               if all(lo[k] <= p[k] <= hi[k] for k in 1:2)] for p in points]
+    expected = Dict((a,b) => length(intersect(labels[a], labels[b]))
+        for a in eachindex(points), b in eachindex(points)
+        if all(points[a][k] <= points[b][k] for k in 1:2))
+    for sparse_maps in (false, true)
+        maps = Dict((a,b) => (sparse_maps ? sparse : identity)(
+            K[CM.coerce(field, s == t) for s in labels[b], t in labels[a]])
+            for (a,b) in FF.cover_edges(P))
+        M = MD.PModule{K}(P, length.(labels), maps; field=field)
+        for threaded in (false, true), zeros_stored in (false, true)
+            want = zeros_stored ? expected : filter(p -> last(p) > 0, expected)
+            MD._clear_cover_cache!(P)
+            result = TO.rank_invariant(M; opts=TO.InvariantOptions(threads=threaded),
+                                       store_zeros=zeros_stored)
+            @test Dict(result) == want
+            @test Dict(TO.rank_invariant(M; opts=TO.InvariantOptions(threads=threaded),
+                                        store_zeros=zeros_stored)) == want
+            @test all(TO.rank_map(M, a, b) == r for ((a,b),r) in want)
+        end
+    end
+    # All-zero modules exercise omitted output; an empty category exercises
+    # the threaded zero-chunk case without special output sentinels.
+    for Q in (P, FF.FinitePoset(falses(0,0)))
+        Z = MD.zero_pmodule(Q; field=field)
+        for threaded in (false,true)
+            @test isempty(TO.rank_invariant(Z; opts=TO.InvariantOptions(threads=threaded)))
+            allranks = TO.rank_invariant(Z; opts=TO.InvariantOptions(threads=threaded), store_zeros=true)
+            @test length(allranks) == count(FF.leq(Q,a,b) for a in 1:FF.nvertices(Q), b in 1:FF.nvertices(Q))
+            @test all(iszero, values(allranks))
+        end
+    end
+end
+
 
 @testset "Hilbert distances" begin
     P = chain_poset(3)

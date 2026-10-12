@@ -168,8 +168,31 @@ where TamerOp takes substantially less time for the matched requests. The
 over the field F₂, whose arithmetic is modulo two. Its aggregate difference
 is smaller, and individual cases favor each tool.
 
-Each report states its inputs, versions, timing conditions and limits, so you
-can judge what the evidence means for your work.
+The [Ripser.py comparison](../benchmarks/ripser.md) covers ordinary Rips
+persistence, including computations on selected subsets of points, called
+landmarks, and retained cocycles, which evaluate homology classes. On the
+1,024-point circle, the query takes 7.01 seconds with TamerOp and 30.4 seconds
+with Ripser.py. Larger planar inputs also favor TamerOp; landmark results
+are mixed, and some sparse and small requests favor Ripser.py.
+
+The separate [original C++ Ripser comparison](../benchmarks/ripser_cpp.md)
+studies larger requests for barcodes. TamerOp is about 1.8 times as fast
+on the two circle inputs; most dense planar cases and the larger sphere
+perform similarly. C++ Ripser is 1.6–1.8 times as fast on the sparse
+spheres. These observations were made on a shared machine, with substantial variation
+in absolute times.
+
+The [CubicalRipser comparison](../benchmarks/cubicalripser.md) studies large
+images and volumes. TamerOp is 2.18 times as fast in the aggregate for the fixed
+set of requests. For a smooth `256³` array whose values specify when voxels
+appear, the request takes 6.67 seconds with TamerOp and 14.2 seconds with
+CubicalRipser. Binary volumes whose values are assigned to vertices favor
+CubicalRipser, while smooth 2D cases are much closer. The report explains
+these input conventions and how the returned barcodes were compared.
+
+The two Ripser studies use different workloads and timing boundaries. Each
+report states its inputs, versions, timing conditions, and limits, so you can
+judge what the evidence means for your work.
 
 For the algorithms behind the results, read the
 [implementation accounts](../implementation/index.md).

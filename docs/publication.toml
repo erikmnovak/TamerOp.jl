@@ -24,12 +24,104 @@ source = "tutorials/distance_witness.ipynb"
 page = "recipes/distance_witness.md"
 timeout = 900
 
+[[notebooks]]
+source = "tutorials/slices_diagrams.ipynb"
+page = "guides/slices_diagrams.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/complexes.ipynb"
+page = "guides/complexes.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/source_cells.ipynb"
+page = "guides/source_cells.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/compare_encodings.ipynb"
+page = "guides/compare_encodings.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/generated_submodules.ipynb"
+page = "guides/generated_submodules.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/compose_figures.ipynb"
+page = "guides/compose_figures.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/derived.ipynb"
+page = "guides/derived.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/comparisons.ipynb"
+page = "guides/comparisons.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/multicover.ipynb"
+page = "guides/multicover.md"
+timeout = 900
+
+[[notebooks]]
+source = "tutorials/live_inspection.ipynb"
+page = "guides/live_inspection.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/presentations.ipynb"
+page = "guides/presentations.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/generalized_rank_queries.ipynb"
+page = "guides/generalized_rank.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/features.ipynb"
+page = "guides/features.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/uncertainty.ipynb"
+page = "guides/uncertainty.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/decomposition.ipynb"
+page = "guides/decomposition.md"
+timeout = 1200
+
+[[notebooks]]
+source = "tutorials/ordinary_analysis.ipynb"
+page = "recipes/ordinary_analysis.md"
+timeout = 900
+
 [reading_map]
 source = "reading_map.toml"
 page = "reading_map.md"
 
 # Existing chapters retain their canonical locations during site migration.
 [guides]
+"decomposition.md" = "explanations/decomposition.md"
+"implementation/interval_decomposition.md" = "implementation/interval_decomposition.md"
+"implementation/ensembles.md" = "implementation/ensembles.md"
+"recipes/query_region_invariant.md" = "recipes/query_region_invariant.md"
+"implementation/generalized_rank.md" = "implementation/generalized_rank.md"
+"recipes/build_module.md" = "recipes/build_module.md"
+"recipes/relative_pair.md" = "recipes/relative_pair.md"
+"implementation/relative_persistence.md" = "implementation/relative_persistence.md"
+"implementation/serialization.md" = "implementation/serialization.md"
+"implementation/inspection_sessions.md" = "implementation/inspection_sessions.md"
+"recipes/reopen_session.md" = "recipes/reopen_session.md"
+"recipes/compose_figure.md" = "recipes/compose_figure.md"
 "two_parameters.md" = "explanations/two_parameters.md"
 "persistence_modules.md" = "persistence_modules.md"
 "finite_encodings.md" = "finite_encodings.md"
@@ -42,7 +134,6 @@ page = "reading_map.md"
 "lazy_inspection.md" = "guides/lazy_inspection.md"
 "visualization.md" = "guides/visualization.md"
 "ingestion_options.md" = "guides/ingestion_options.md"
-"multicover.md" = "guides/multicover.md"
 "rhomboid_depth.md" = "guides/rhomboid_depth.md"
 "exact_grades.md" = "guides/exact_grades.md"
 "numerical_algebra.md" = "guides/numerical_algebra.md"
@@ -54,6 +145,7 @@ page = "reading_map.md"
 "benchmark_style.md" = "contributing/benchmark_style.md"
 "../CONTRIBUTING.md" = "contributing/contributing.md"
 "testing.md" = "contributing/testing.md"
+"visualization_support.md" = "contributing/visualization_support.md"
 "benchmarking.md" = "contributing/benchmarking.md"
 "benchmark_suites.md" = "contributing/benchmark_suites.md"
 "releasing.md" = "contributing/releasing.md"
@@ -62,7 +154,14 @@ page = "reading_map.md"
 "api_inventory.md" = "contributing/api_inventory.md"
 "implementation/index.md" = "implementation/index.md"
 "implementation/qq_coordinates.md" = "implementation/qq_coordinates.md"
+"implementation/box_encoding.md" = "implementation/box_encoding.md"
 "implementation/visual_specs.md" = "implementation/visual_specs.md"
+"implementation/feature_transforms.md" = "implementation/feature_transforms.md"
+"implementation/yoneda_products.md" = "implementation/yoneda_products.md"
+"implementation/rhomboid_construction.md" = "implementation/rhomboid_construction.md"
+"implementation/change_of_posets.md" = "implementation/change_of_posets.md"
+"implementation/submodules_and_quotients.md" = "implementation/submodules_and_quotients.md"
+"implementation/source_representatives.md" = "implementation/source_representatives.md"
 "implementation/references.md" = "implementation/references.md"
 
 "benchmarks/index.md" = "benchmarks/index.md"
@@ -71,4 +170,8 @@ page = "reading_map.md"
 "benchmarks/phat.md" = "benchmarks/phat.md"
 "benchmarks/phat_v2/README.md" = "benchmarks/phat_v2/README.md"
 "benchmarks/ripser.md" = "benchmarks/ripser.md"
+"benchmarks/ripser_cpp.md" = "benchmarks/ripser_cpp.md"
+"benchmarks/cubicalripser.md" = "benchmarks/cubicalripser.md"
+"benchmarks/cubicalripser_v1/README.md" = "benchmarks/cubicalripser_v1/README.md"
+"benchmarks/ripser_cpp_v1/README.md" = "benchmarks/ripser_cpp_v1/README.md"
 "benchmarks/ripser_v1/README.md" = "benchmarks/ripser_v1/README.md"

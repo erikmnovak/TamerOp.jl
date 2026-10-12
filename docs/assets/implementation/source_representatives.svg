@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="420" viewBox="0 0 820 420" role="img" aria-labelledby="title desc">
+  <title id="title">A retained correspondence connects a class to source cells</title>
+  <desc id="desc">Computed chains map to source chains by i, commuting with boundary. A retained retraction p goes back; cocycles pull back by its transpose. A selected cycle or death filling is lifted, checked against original boundaries and activity, and only then drawn using retained geometry.</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#475569"/></marker></defs>
+  <rect x="1" y="1" width="818" height="418" rx="16" fill="#fff" stroke="#d5dde7"/>
+  <g font-family="system-ui,sans-serif" text-anchor="middle" fill="#172d40">
+    <text x="410" y="35" font-size="17" font-weight="700">RETAIN THE COMPARISON, THEN EXPLAIN A CLASS</text>
+    <rect x="35" y="70" width="275" height="90" rx="10" fill="#edf5fb" stroke="#5083a5"/>
+    <text x="172" y="106" font-size="20">Computed chains C</text><text x="172" y="135" font-size="16">cells, grades, boundary</text>
+    <rect x="510" y="70" width="275" height="90" rx="10" fill="#edf5fb" stroke="#5083a5"/>
+    <text x="647" y="106" font-size="20">Source chains S</text><text x="647" y="135" font-size="16">original IDs and orientations</text>
+    <path d="M312 94H502" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="410" y="82" font-size="16">chain lift i</text>
+    <path d="M508 143H318" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="410" y="171" font-size="16">retraction p, when retained</text>
+    <path d="M172 163V226" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M647 163V226" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="35" y="235" width="275" height="77" rx="10" fill="#f5f7fa" stroke="#8b9daf"/>
+    <text x="172" y="266" font-size="18">Choose a retained member</text><text x="172" y="293" font-size="16">cycle z or death filling f</text>
+    <rect x="510" y="235" width="275" height="77" rx="10" fill="#edf7f2" stroke="#48866b"/>
+    <text x="647" y="266" font-size="18">Check original equations</text><text x="647" y="293" font-size="16">boundary and activity at scale</text>
+    <path d="M313 271H502" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="410" y="258" font-size="16">apply i</text>
+    <text x="410" y="349" font-size="18">Cocycles use pᵀ, restricted to active source cells.</text>
+    <text x="410" y="385" font-size="17">The overlay consumes these records and retained geometry.</text>
+  </g>
+</svg>

@@ -796,7 +796,8 @@ function representatives(pi::GridEncodingMap{N,T}) where {N,T}
     reps = Vector{NTuple{N,T}}(undef, total)
     idxs = ones(Int, N)
     for lin in 1:total
-        reps[lin] = ntuple(i -> pi.coords[i][idxs[i]], N)
+        reps[lin] = ntuple(i -> pi.orientation[i] == 1 ?
+                          pi.coords[i][idxs[i]] : -pi.coords[i][idxs[i]], N)
         for i in 1:N
             idxs[i] += 1
             if idxs[i] <= pi.sizes[i]

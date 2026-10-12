@@ -1,14 +1,15 @@
 # Supplied algebraic maps and witnesses. Construction/validation happens while
 # making the specification; a renderer only receives copied coefficients.
 
-available_visuals(::DerivedFunctors.HomSpace) = (:hom_basis,)
-available_visuals(::ModuleComplexes.ModuleCochainMap) = (:chain_map,)
+available_visuals(::DerivedFunctors.HomSpace) = (:hom_basis,:graded_dimensions,)
+available_visuals(::ModuleComplexes.ModuleCochainMap) = (:chain_map,:chain_inspector)
 available_visuals(::ModuleComplexes.ModuleCochainHomotopy) = (:homotopy_comparison,)
 
 
-_visual_request_keywords(::DerivedFunctors.HomSpace, ::Symbol) =
-    (:basis_index, :vertex, :pair, :matrix_limit)
-_visual_request_keywords(::ModuleComplexes.ModuleCochainMap, ::Symbol) =
+_visual_request_keywords(::DerivedFunctors.HomSpace, kind::Symbol) =
+    kind===:graded_dimensions ? (:matrix_limit,) : (:basis_index, :vertex, :pair, :matrix_limit)
+_visual_request_keywords(::ModuleComplexes.ModuleCochainMap, kind::Symbol) =
+    kind===:chain_inspector ? _CHAIN_KEYS :
     (:degree, :vertex, :matrix_limit, :induced)
 _visual_request_keywords(::ModuleComplexes.ModuleCochainHomotopy, ::Symbol) =
     (:degree, :vertex, :matrix_limit, :induced, :induced_maps)
@@ -17,10 +18,12 @@ _visual_request_keywords(::DerivedFunctors.ProjectiveResolution, kind::Symbol) =
     (:target_resolution, :morphism, :lift, :comparison_lift, :homotopy,
      :degree, :vertex, :matrix_limit)
 
-_visual_request_cost(::DerivedFunctors.HomSpace, ::Symbol) =
+_visual_request_cost(::DerivedFunctors.HomSpace, kind::Symbol) =
+    kind===:graded_dimensions ? (;work=:stored_dimensions,basis=:not_requested,timing=:not_measured) :
     (; work=:selected_hom_basis_morphism, basis=:explicit_selection_materializes_basis,
        algebra=:already_computed_hom_space, timing=:not_measured)
-_visual_request_cost(::ModuleComplexes.ModuleCochainMap, ::Symbol) =
+_visual_request_cost(::ModuleComplexes.ModuleCochainMap, kind::Symbol) =
+    kind===:chain_inspector ? _chain_cost() :
     (; work=:supplied_cochain_map_validation, selected_matrices=:degree_and_vertex,
        induced=:explicit_opt_in_computes_cohomology_modules, timing=:not_measured)
 _visual_request_cost(::ModuleComplexes.ModuleCochainHomotopy, ::Symbol) =
@@ -50,6 +53,10 @@ function _comparison_degree!(issues, t, degrees)
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, H::DerivedFunctors.HomSpace, kind::Symbol; kwargs...)
+    if kind===:graded_dimensions
+        _comparison_matrix_limit!(issues,get(kwargs,:matrix_limit,(12,12)))
+        return issues
+    end
     i = get(kwargs, :basis_index, nothing)
     n = DerivedFunctors.dim(H)
     (i === nothing || (i isa Integer && !(i isa Bool) && 1 <= i <= n)) ||
@@ -74,6 +81,7 @@ the zero Hom space instead displays an informative no-basis view.
 """
 function _visual_spec(H::DerivedFunctors.HomSpace, kind::Symbol;
                       basis_index=nothing, vertex=nothing, pair=nothing, matrix_limit=(12, 12))
+    kind===:graded_dimensions && return _derived_dimensions(H;matrix_limit)
     kind === :hom_basis || throw(ArgumentError("Unsupported Hom visualization $kind."))
     before = DerivedFunctors.hom_summary(H).basis_cached
     if DerivedFunctors.dim(H) == 0
@@ -111,6 +119,7 @@ function _cochain_plot_degrees(H::ModuleComplexes.ModuleCochainHomotopy)
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, f::ModuleComplexes.ModuleCochainMap, kind::Symbol; kwargs...)
+    kind===:chain_inspector && return _append_chain_issues!(issues,f;kwargs...)
     degrees = _cochain_plot_degrees(f)
     _comparison_degree!(issues, get(kwargs, :degree, first(degrees)), degrees)
     _comparison_vertex!(issues, _cochain_plot_poset(f), get(kwargs, :vertex, 1))
@@ -239,8 +248,10 @@ in the selected degree, including its chosen quotient bases. No lift or
 cohomology computation runs inside a rendering backend.
 """
 function _visual_spec(f::ModuleComplexes.ModuleCochainMap, kind::Symbol;
-                      degree=first(_cochain_plot_degrees(f)), vertex=1,
-                      matrix_limit=(12, 12), induced=false)
+                      degree=first(kind===:chain_inspector ? ModuleComplexes.degree_range(ModuleComplexes.source(f)) : _cochain_plot_degrees(f)), vertex=1,
+                      matrix_limit=(12, 12), induced=false, kwargs...)
+    kind===:chain_inspector && return _chain_view(f;degree,vertex,matrix_limit,kwargs...)
+    isempty(kwargs) || throw(ArgumentError("Unsupported chain-map options."))
     kind === :chain_map || throw(ArgumentError("Unsupported cochain-map visualization $kind."))
     validation = _cochain_checked_map(f)
     C, D = ModuleComplexes.source(f), ModuleComplexes.target(f)

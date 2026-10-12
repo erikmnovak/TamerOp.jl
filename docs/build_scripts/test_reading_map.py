@@ -76,6 +76,37 @@ class ReadingMapTests(unittest.TestCase):
         self.assertEqual(result.count('data-entry="true"'), 2)
         self.assertEqual(result.count("End of this route."), 2)
 
+    def test_focused_views_share_identity_outline_and_cycle_checks(self):
+        self.config["nodes"][-1].update(display="focused", entry=False)
+        self.config["edges"][-1]["view"] = "algebra"
+        self.config["views"] = [{"id": "algebra", "title": "Algebra", "description": "A further question.",
+            "width": 600, "height": 600, "placements": [
+                {"id": "encoding", "x": 150, "y": 100}, {"id": "maps", "x": 150, "y": 350}]}]
+        result = self.render()
+        self.assertEqual(result.count('<details class="reading-map-outline">'), 1)
+        self.assertEqual(result.count('data-node="maps"'), 1)
+        self.assertEqual(result.count('id="reading-map-arrow"'), 1)
+        self.assertEqual(result.count('id="reading-map-arrow-algebra"'), 1)
+        self.assertIn('url(#reading-map-arrow-algebra)', result)
+        self.assertIn('Further mathematical question', result)
+        self.assertIn('maps.html', result.split('<details class="reading-map-outline">')[1])
+        broken = copy.deepcopy(self.config)
+        broken["edges"].append(dict(self.edge("maps", "encoding"), view="algebra"))
+        with self.assertRaisesRegex(ValueError, "cycle"):
+            self.render(broken)
+        broken = copy.deepcopy(self.config)
+        broken["views"][0]["placements"][-1]["id"] = "absent"
+        with self.assertRaisesRegex(ValueError, "known node"):
+            self.render(broken)
+        broken = copy.deepcopy(self.config)
+        broken["views"][0]["placements"][-1]["x"] = 550
+        with self.assertRaisesRegex(ValueError, "outside canvas"):
+            self.render(broken)
+        broken = copy.deepcopy(self.config)
+        broken["views"][0]["placements"][0]["source"] = "wrong.md"
+        with self.assertRaisesRegex(ValueError, "only id"):
+            self.render(broken)
+
     def test_declared_primary_and_alternate_reach_nodes_and_supporting_guides(self):
         self.config["nodes"][0].update(next="encoding.md", alternate="theory.md")
         self.config["edges"].append(self.edge("ring", "theory"))

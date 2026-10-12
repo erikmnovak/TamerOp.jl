@@ -10,7 +10,7 @@ using SparseArrays
     N = MD.PModule{K}(P, [1], Dict{Tuple{Int,Int},Matrix{K}}(); field)
     H = DF.Hom(M, N)
     @test DF.dim(H) == 2
-    @test V.available_visuals(H) == (:hom_basis,)
+    @test V.available_visuals(H) == (:hom_basis,:graded_dimensions)
     @test !DF.hom_summary(H).basis_cached
     spec = V.visual_spec(H; basis_index=2, vertex=1)
     @test spec.kind == :hom_basis

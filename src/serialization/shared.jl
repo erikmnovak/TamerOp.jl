@@ -1114,6 +1114,7 @@ Base.@kwdef mutable struct _ProductOfChainsPosetJSON <: _PosetJSON
     kind::String = "ProductOfChainsPoset"
     n::Int = 0
     sizes::Vector{Int} = Int[]
+    orientation::Vector{Int} = Int[]
     leq::Union{Nothing,_MaskPackedWordsJSON} = nothing
 end
 
@@ -1200,6 +1201,7 @@ Base.@kwdef mutable struct _PLEncodingMapBoxesJSON <: _PiJSON
     sig_y::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
     sig_z::_MaskPackedWordsJSON = _MaskPackedWordsJSON()
     reps::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
+    exact_reps::Union{Nothing,_ExactCoordinateRowsJSON} = nothing
     Ups::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
     Downs::Vector{Vector{Float64}} = Vector{Vector{Float64}}()
     cell_shape::Vector{Int} = Int[]

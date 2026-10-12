@@ -135,7 +135,7 @@ function persistence_cocycle(diag::PersistenceDiagram; dim::Integer, scale,
         order=diag.order, interval=(birth, something(death, diag.order === :sublevel ? Inf : -Inf)),
         variance=:contravariant, choice=:noncanonical_coboundary_reduction)
     retained === nothing && return merge(context, (;available=false, reason=:not_retained,
-        cochain=nothing, source_vertices=nothing, indexing=:not_available))
+        cochain=nothing, source_vertices=nothing, indexing=:not_available,source_cochain=nothing))
     records = kind === :finite ? retained.finite : retained.essential
     slot <= length(records) && index <= length(records[slot]) ||
         throw(ArgumentError("retained cocycles disagree with diagram intervals."))
@@ -148,8 +148,9 @@ function persistence_cocycle(diag::PersistenceDiagram; dim::Integer, scale,
         cell_ids=Tuple(c.ids[selected]), cell_grades=Tuple(c.grades[selected]),
         coefficients=Tuple(c.coefficients[selected]))
     vertices = r.vertices === nothing ? nothing : Tuple(Tuple(r.vertices[i]) for i in selected)
-    return merge(context, (;available=true, reason=:retained, cochain,
+    result = merge(context, (;available=true, reason=:retained, cochain,
         source_vertices=vertices, indexing=retained.indexing))
+    return _cocycle_source(diag,result)
 end
 
 function _check_cocycle_storage!(issues, diag)

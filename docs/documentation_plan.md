@@ -143,12 +143,20 @@ optional detours labelled and distinguishable without color, and a usable
 keyboard/text outline. A footer can offer one primary and one optional
 continuation even when a focused map exposes several branches. Check cycles,
 published-lesson coverage, endpoint links, unclipped mathematics and real
-desktop/mobile/light/dark rendering. The current fixed-coordinate diagram
-needs a deliberate renderer/data-model change for this expansion; this plan
-does not silently wire nonexistent pages into it.
+desktop/mobile/light/dark rendering. The local renderer now supports focused
+views of the same graph, as used by the interval-summand branch. Broader
+coverage still requires authored lessons, reconciled knowledge and continuation
+metadata, and a readable layout for each view. Planned relations do not create
+routes to unwritten pages.
 
 The complete planned lesson relation appears in the appendix below. It is an
 authoring design; migrate actual routes only as sources are ready and reviewed.
+
+The interval-summand branch now connects the square inspection to
+`decomposition_lesson` in a focused view of the same graph and shared outline.
+Its guide, `ref_decomposition` and B53 share the square and three-line examples.
+Keep the finite-base completeness statement separate from ambient pullback,
+general A50 indecomposables and A103 approximations as those articles grow.
 
 ### Library use: investigations with a clear stopping boundary
 
@@ -284,7 +292,7 @@ workflow, task, contract or mechanism.
 | Topic | Mathematics | Usage and bounded task | Reference and implementation |
 | --- | --- | --- | --- |
 | Direct descriptions and recovery | `persistence_modules`, `indicator_presentations`, `representation_domains`, `finite_encodings` | `guide_inputs`, `guide_presentations`; `build_module`, `build_presentation` | `ref_modules`, `ref_encodings`; B06-B12 |
-| Geometric inputs and source topology | `filtrations_homology`, cloud/image/graph lessons, `geometric_bifiltrations` | `ordinary_persistence`, `multicover`, `guide_representatives`; `voxel_cavity`, `trace_source_class` | `ref_inputs`, `ref_ordinary_persistence`; B16-B29 |
+| Geometric inputs and source topology | `filtrations_homology`, cloud/image/graph lessons, `geometric_bifiltrations` | `ordinary_persistence`, `multicover`, `guide_representatives`; `voxel_cavity`, `trace_source_class` | `ref_inputs`, `ref_ordinary_persistence`, `ref_source_representatives`; B16-B29 |
 | Maps, subobjects and categorical constructions | `diamond_maps`, `module_operations`, `hom_spaces`, `universal_constructions` | `guide_morphisms`, `guide_generated_submodules`; `kernel_quotient` | `ref_modules`; B06-B08, B32 |
 | Refinement and base change | `change_of_posets`, `pushforwards_lesson`, `math_categories` | `compare_encodings`; `transport_encoding` | `ref_change_of_posets`; B15 |
 | Resolutions, derived algebra and complexes | `resolutions_lesson`, `derived_functors`, complex/product lessons | `guide_resolutions`, `guide_derived`, `guide_complexes`; `compute_hom_ext` | Relevant algebra reference; B30-B35, B51-B52, B55 |
@@ -295,6 +303,14 @@ workflow, task, contract or mechanism.
 | Comparison, features and inference | `distances_stability`, `features_lesson`, `uncertainty_lesson`, `morphism_matchings_lesson` | Diagram, feature, signed, uncertainty and learning guides; `distance_witness`, `feature_table` | `ref_comparisons`, `ref_features`; B39-B43, B61-B62, B71-B72 |
 | Interpretation and interaction | `reading_module_figures` plus the subject lesson for each view | Subject guides plus `guide_live_inspection`, `guide_comparisons`, `guide_visualize_share`; `compose_figure`, `reopen_session` | `ref_visualization`, `ref_visual_sessions`; B44-B48 |
 | Exactness, execution and reproducibility | `coefficients_lesson`, category/encoding assumptions at point of use | `numerical_algebra`, `lazy_inspection`, `reuse_computations`, `guide_data_io`; field/reuse/save recipes | `ref_fields`, `ref_results`, `ref_io`; B01-B05, B48-B50, measured C-series reports |
+
+The generalized-rank branch now has an executable usage guide and a focused
+branching-region recipe. Its finite-region, repeated-occurrence boundary and
+continuous-worm examples are the shared examples for the planned mathematical
+lesson. B54 owns exact algorithms and future optimization mechanisms; B46 owns
+transactional interaction and reuse. A boundary barcode explains a grid-index
+region rank, while GRIL queries the declared continuous extension. Preserve that
+distinction across all five article families.
 
 Use the same example's mathematical identities across these treatments: field,
 category, parameter units, grades, map bases, source cells and expected answer.
@@ -317,8 +333,8 @@ require the links needed to understand and use the supported feature.
 | `spaces_and_maps.md` | Retain intra-module investigation and presentation inspection. | Link inter-module algebra and generated objects separately; reuse live controls without removing mathematical interpretation. |
 | `math_categories.md` | Keep the mathematical category/comparison argument. | Move operational API/conversion/cache tables to transport/derived usage or reference when ready; never move away hypotheses needed by the argument. |
 | `exact_matching.md` | Keep operational scope and a meaningful witness. | B40 owns the optimizer proof; comparison and interleaving lessons own general meaning. Preserve a direct link and essential hypotheses at use. |
-| `lazy_inspection.md` | Keep cheap inspection versus requested computation. | Specialized products move to derived usage; lifecycle/reuse choices go to the reuse guide. |
-| `multicover.md`, `rhomboid_depth.md`, `exact_grades.md` | Extend useful input choices without becoming algorithm transcripts. | B13 and B23-B26 own internal grade transport, exact construction and cap/discovery mechanisms. |
+| `lazy_inspection.md` | Develop inspection, deferred computation and reuse as one guide. | Move specialized product instruction to derived usage. Add the missing repeated-query or batch example here, then reconcile the overlapping planned `reuse_computations` identity and its incoming references. |
+| `tutorials/multicover.ipynb`, `rhomboid_depth.md`, `exact_grades.md` | Extend useful input choices without becoming algorithm transcripts. | The multicover notebook links balls, retained models and invariants, then returns to finite encodings. B23 now owns the shared exact construction and inspector; B13 and B24–B26 keep their grade-transport and deeper cap/discovery/degenerate-model scopes. The geometric lesson remains a separate planned explanation in the mathematical map. |
 | `option_contracts.md` | Keep shared effective-option rules. | Detailed method keywords move to canonical domain reference entries, avoiding two specifications. |
 | Existing foundations | Preserve the worked reasoning; strengthen direct-input and onward-algebra entrances. | `representation_domains` and the direct-construction guide supply breadth; the encoding lesson remains a coherent recovery argument. |
 | Planned `relative_extended_lesson` | Preserve its identity but narrow it to filtered pairs. | New `extended_persistence_lesson` owns the later ordinary-to-relative interval construction. No published source or URL is being removed. |
@@ -445,7 +461,7 @@ footers and publication availability are resolved later by the route owner.
 | `generalized_rank_lesson` | Summaries | slices_invariants | slices_invariants |
 | `support_geometry_lesson` | Summaries | finite_encodings | slices_invariants |
 | `algebraic_support` | Structure | diamond_maps | diamond_maps |
-| `decomposition_lesson` | Structure | module_operations | module_operations |
+| `decomposition_lesson` | Structure | finite_encodings, indicator_presentations | square |
 | `relative_rank_exact_lesson` | Structure | resolutions_lesson, generalized_rank_lesson | resolutions_lesson |
 | `hn_skyscraper_lesson` | Structure | module_operations, algebraic_support | algebraic_support |
 | `jordan_multirank_lesson` | Structure | slices_invariants, coefficients_lesson | slices_invariants |
@@ -461,3 +477,159 @@ footers and publication availability are resolved later by the route owner.
 | `persistent_products_lesson` | Topology variants | cohomology_lesson | cohomology_lesson |
 | `cohomological_coordinates_lesson` | Topology variants | cohomology_lesson | cohomology_lesson |
 | `reading_module_figures` | Interpreting views | finite_encodings | square |
+
+### Source-cell correspondence across article families
+
+The `guide_representatives` notebook now joins filtered-cell inspection to
+cycles, death fillings, scale-specific cocycles and a bounded exact weighted
+support example. B29 owns filtered comparison maps, equal-grade contractions,
+contravariance, source equations and costs; `ref_source_representatives` owns
+those API contracts. The ordinary guide retains its first calls and links this
+continuation. The same notebook develops H0 memberships and source merge events,
+then contrasts histories on specified multicritical slices. The complex guide now owns
+selected-vector quotients, induced maps and connecting-map exploration, with
+source overlays reusing the same records rather than a competing geometry API.
+
+Keep the mathematical development in `filtrations_homology` and
+`cohomology_lesson`: compare a cycle with a cocycle on the same example and
+explain why geometry requires a retained comparison map. When authored, those
+mathematical articles belong in the reading-map poset and accessible outline.
+The library guide and B29 remain outside that mathematical map. Future sparse
+contraction and representative optimizations must document unchanged guarantees,
+retention costs and declared objectives in B29; benchmark evidence belongs in
+its own report. `trace_source_class` can remain a focused recipe only if its
+independent lookup value exceeds the notebook's short selected-class workflow.
+
+### Refinement and transport article integration
+
+`compare_encodings` is the canonical executable guide for the shared square,
+realized/product distinction, restriction, Kan unit/counit and finite-category
+counterexample. `ref_change_of_posets` owns contracts; B15 owns representation,
+algorithm, verification and optimization explanations. The mathematical
+`change_of_posets` and `pushforwards_lesson` remain planned reading-map lessons;
+these usage/reference/implementation pages do not become mathematical poset
+nodes. A future `transport_encoding` recipe should extract one focused task
+from the guide rather than repeat its survey. Extend the same three articles
+for new comparison witnesses while preserving explicit category and variance.
+
+### Selected vectors and generated submodules
+
+`guide_generated_submodules` now has its canonical notebook source. It follows
+one algebraic object from selected coordinates through images, generated
+submodule, inclusion and quotient, using actual region and matrix views. The
+finite encoding remains the bridge from the module to original parameters;
+finite-label support is explicitly distinguished from a lifetime anchored at
+an ambient point. The source-cycle link joins B29 and the source-cell guide
+through a supplied coordinate identification.
+
+The precise contracts live in `ref_modules`; B08 follows propagation through
+the reusable image and cokernel mechanisms. Continue their broader module and
+universal-construction coverage within those existing identities. The
+`diamond_maps` and `module_operations` mathematical lessons remain planned:
+they will motivate closure, minimality and the submodule/summand distinction
+and enter the common mathematical graph when authored. No guide or
+implementation account is added to that graph. The selection-to-quotient task
+is already a short runnable section of the guide, so it does not need a duplicate
+recipe page. Future HN and decomposition work links to this shared construction.
+Optimization belongs in B08's propagation, coordinate recovery and retention
+account, with measurements kept in benchmark material.
+
+### Derived-product integration
+
+`guide_derived` now uses the finite diamond to connect cheap Ext dimensions,
+chosen representatives, signed Yoneda composition and explicit Tor products.
+`ref_derived` owns request and return contracts; B34 owns lifts, quotient
+certificates, multiplication-table reuse and product-law checks. B44 remains
+the shared rendering account. Extend induced-map exploration within the guide
+and additive-complex algorithms within B33 as those treatments mature.
+
+The planned `derived_functors` and `products_lesson` remain mathematical
+lessons with their own future reading-map roles. The exploratory notebook,
+reference and implementation account do not become substitute map nodes.
+The existing `compute_hom_ext` recipe retains its narrower input-to-class
+question; it need not duplicate the product guide to publish this addition.
+
+### Figure-composition integration
+
+The `guide_visualize_share` composition notebook connects sampled scalar views,
+signed contributions and retained representatives through named panels and
+explicit annotation meanings. Its figures are canonical notebook outputs;
+`compose_figure` is the short task-oriented entrance. This adds no mathematical
+reading-map node. The guide's fixed HTML export must not be described as the
+saved live-session workflow owned by `guide_live_inspection` and `reopen_session`.
+
+
+### Comparisons across fields, degrees and constructions
+
+`guide_comparisons` is the canonical Using TamerOp notebook for A94. It owns
+alignment of finite labels or original coordinates, shared-scale observables,
+rank rows, ordinary bars, and linked selections. The coefficient lesson owns
+the mathematical foundation; this guide does not add a reading-map node.
+Refinement certificates stay in the change-of-poset
+workflow (`compare_encodings.ipynb`), and distance assignments in their recipe.
+The visualization reference owns contracts; B44 explains query preparation,
+masking, interval membership, provenance and cache reuse. The A44 continuation lives in `guide_features` (`tutorials/features.ipynb`):
+ambient landscapes, declared coordinate fields, fixed-coordinate sections and
+shared signed scales. Keep links in both directions with `guide_comparisons`;
+finite-probe comparisons do not by themselves cover arbitrary scalar fields.
+B43 owns parameterization, windows and numerical interpolation, B44 owns plane
+orientation and drawing, and B46 owns linked selection and lifecycle. No new
+mathematical reading-map node is needed. Future feature transforms and batch
+assembly extend these existing article identities.
+
+The comparison guide also owns the collection-level transition from named feature
+columns to supplied distance/kernel tables, declared embeddings and selected-pair
+witnesses (A98). Keep it in **Using TamerOp**: feature definitions and a small
+interval example explain the choices, while the API reference owns shapes and
+budgets and B44 owns preparation and reuse. Collection inspection does not add a
+mathematical learning-map node or an implicit statistical-inference workflow.
+
+### Captured-view integration
+
+`guide_live_inspection` now follows one finite square-supported module through
+exact selections, capture, closing and reopening, with an ordinary diagram as
+the bounded alternative. It owns the common lifecycle rather than duplicating
+algebra or slice investigations. `reopen_session` is the short operational
+entrance; `ref_visual_sessions` owns precise state and runtime contracts. B46
+explains transactions, retained snapshots and finite browser state selection;
+B48 explains owned sources, exact coordinate companions, content identities
+and relative resources. The existing composition guide continues into this
+route when readers want to preserve more than one selected figure.
+
+The five-category boundary remains deliberate. No new mathematical node is
+needed for an operational save/reopen capability. Mathematical source and
+interval interpretation stay with their subject lessons; guide, recipe,
+reference and implementation accounts link horizontally through the same
+catalogue identities. Future editor, temporal and certificate work extends
+those scopes without implying that current saved records can execute arbitrary
+computations. Optimization accounts distinguish capture/fingerprinting and
+source replay costs from cheap precomputed display, keeping measured results
+in benchmark material.
+
+### Finite input authoring across the five families
+
+A99 uses the existing `guide_presentations` identity for the canonical
+`presentations.ipynb` guide and `build_module` for a bounded repair recipe.
+Their finite diagrams make the algebraic input entrance concrete beside
+filtrations. The guide can later extend to lattice and geometric supports;
+that extension must retain the ambient classifier, not infer it from a drawing.
+Existing mathematics (`persistence_modules`, `diamond_maps` and
+`indicator_presentations`) owns the definitions, so this editor adds no map
+node. Reference contracts extend `ref_visual_sessions` and `ref_modules`;
+B46 explains draft validity, path witnesses, history and export, while B48 owns
+the saved value codec. Future optimization belongs in B46 with the same
+validation and witness contract; measurements belong in benchmark reports.
+
+### Ensemble observations across the article families
+
+`guide_uncertainty` is the canonical notebook for A95: ordinary repeated
+landscapes lead into scalar queries on finite encodings, descriptive spread,
+support frequency and conditional/approximate mean inference on fixed probes.
+Its focused selection/export procedure stays within that guide. `ref_ensembles`
+owns signatures and contracts, while B72 explains alignment, reductions, whole-row
+resampling and costs. B43 continues to own individual feature transforms, and
+B44/B46 the shared renderer/session machinery. `uncertainty_lesson` remains the
+planned mathematical treatment: develop its sampling counterexamples and add
+it to the focused mathematical reading map when that lesson is authored.
+Continuous-domain confidence claims must have an explicit regularity and grid
+error argument; a sampled display alone is insufficient.

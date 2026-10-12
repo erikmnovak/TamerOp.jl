@@ -346,7 +346,7 @@ end
             coords=[collect(ax) for ax in pi.coords],
             sig_y=_pack_masks_obj(pi.sig_y),
             sig_z=_pack_masks_obj(pi.sig_z),
-            reps=[collect(r) for r in pi.reps],
+            exact_reps=_exact_coordinate_rows(pi.reps),
             Ups=[collect(u.ell) for u in pi.Ups],
             Downs=[collect(d.u) for d in pi.Downs],
             cell_shape=collect(pi.cell_shape),
@@ -424,15 +424,15 @@ function _pi_from_typed(::AbstractPoset, obj::_PLEncodingMapBoxesJSON)
     n = obj.n
     length(obj.coords) == n || error("PLEncodingMapBoxes.coords length mismatch.")
     coords = ntuple(i -> Vector{Float64}(obj.coords[i]), n)
-    reps = [ntuple(i -> Float64(r[i]), n) for r in obj.reps]
+    reps = [ntuple(i -> QQ(r[i]), n) for r in _coordinate_rows_from_obj(obj.reps, obj.exact_reps)]
     Ups = [PLBackend.BoxUpset(Vector{Float64}(u)) for u in obj.Ups]
     Downs = [PLBackend.BoxDownset(Vector{Float64}(d)) for d in obj.Downs]
     sig_y = _decode_masks(obj.sig_y, "PLEncodingMapBoxes.sig_y", length(Ups))
     sig_z = _decode_masks(obj.sig_z, "PLEncodingMapBoxes.sig_z", length(Downs))
     length(sig_y) == length(reps) || error("PLEncodingMapBoxes.sig_y region count mismatch.")
     length(sig_z) == length(reps) || error("PLEncodingMapBoxes.sig_z region count mismatch.")
-    MY = max(1, cld(max(length(Ups), 1), 64))
-    MZ = max(1, cld(max(length(Downs), 1), 64))
+    MY = cld(length(Ups), 64)
+    MZ = cld(length(Downs), 64)
     sig_to_region = Dict{PLBackend.SigKey{MY,MZ},Int}()
     @inbounds for t in eachindex(sig_y)
         ywords = PLBackend._pack_bitvector_words(sig_y[t], Val(MY))
@@ -459,8 +459,8 @@ function _encoding_obj(H::FringeModule{K};
                        include_leq::Union{Bool,Symbol}=:auto) where {K}
     P = H.P
 
-    U_masks = _pack_masks_obj([U.mask for U in H.U])
-    D_masks = _pack_masks_obj([D.mask for D in H.D])
+    U_masks = _pack_masks_obj([U.mask for U in H.U]; ncols=nvertices(P))
+    D_masks = _pack_masks_obj([D.mask for D in H.D]; ncols=nvertices(P))
     phi = _phi_obj(H)
 
     obj = Dict(

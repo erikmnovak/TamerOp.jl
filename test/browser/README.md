@@ -8,8 +8,10 @@ canvas pointer events must reach Julia, update the mathematical selection, and r
 corresponding readout and drawing to the browser. Screenshots and failure traces
 provide evidence of the rendered result.
 
-This is an optional, focused browser suite. It does not run the package suite or
-certify notebook frontends, Firefox, or other browsers. The broader
+This focused browser suite is required in the Visualization CI workflow. It
+does not run the full package suite or certify notebook frontends, Firefox, or
+other browsers. The [support matrix](../../docs/visualization_support.md) records
+family coverage and the distinction between supported and verified paths. The broader
 [A41 acceptance checklist](../../docs/testing.md#a41-interval-semantics-and-retained-representatives)
 also includes fixtures and visual checks beyond this harness. Installing the
 tools alone does not establish that any browser check has passed.
@@ -17,7 +19,10 @@ tools alone does not establish that any browser check has passed.
 ## Set up the dependencies
 
 Use Julia 1.12 and Node.js 22 or another version supported by the pinned
-Playwright packages. The lockfile pins `@playwright/test` and its `playwright`
+Playwright packages. The maintained Julia browser environment requires Bonito
+5.2 or later within major version 5. Its embedded applications use Bonito's
+single-pass App rendering; results from this lane do not certify Bonito 4
+embedding or notebook frontends. The lockfile pins `@playwright/test` and its `playwright`
 CLI to 1.63.0, and the optional browser MCP server to `@playwright/mcp` 0.0.83.
 
 From the repository root, prepare the optional Julia environment if needed:
@@ -29,7 +34,7 @@ JULIA_NUM_PRECOMPILE_TASKS=1 julia --startup-file=no --project=test/browser \
 
 This develops the current checkout into the browser environment and uses one
 precompilation task. An existing environment containing this checkout,
-WGLMakie, and JSON3 can be used instead through `TAMEROP_JULIA_PROJECT`.
+CairoMakie, WGLMakie, Bonito 5.2+, and JSON3 can be used instead through `TAMEROP_JULIA_PROJECT`.
 
 Install the JavaScript dependencies and both Chromium builds:
 
@@ -83,6 +88,13 @@ the rational numbers. Its diagonal restriction has the closed intervals
 `[0,2]` and `[1,3]`. These independent expected values connect the historical
 manual checks to the maintained browser suite.
 
+The `/fields` route provides two asymmetric four-coordinate scalar fields with
+two layers. Run `npm test -- fields.spec.mjs` for its focused scenario. It checks
+ordered coordinate planes, global scales and baseline differences, real slider
+and chart input, visible slider synchronization after a remote reset, invalid
+input recovery, narrow chart access and viewer cleanup. The fixture exposes
+read-only selection and native heatmap data; test input goes through the UI.
+
 Each page creates a fresh viewer. Pages for the same fixture share its inspection
 session, which allows linked selection and viewer-disconnection checks. Closing
 the shared inspector closes that fixture session; restart the server before
@@ -127,6 +139,46 @@ Traces retain actions and DOM snapshots without continuously recording WebGL
 frames. Explicit checkpoints and failures still save screenshots, keeping the
 evidence useful without duplicating a large sequence of plot images.
 
+
+The default lane runs live applications only. Export acceptance is a separate
+lane with no Julia web server. First execute native export checks with explicit
+artifact paths (from the repository root):
+
+```sh
+mkdir -p test/browser/artifacts
+TAMEROP_COMPOSITION_HTML="$PWD/test/browser/artifacts/composition.html" \
+TAMEROP_PORTABLE_SESSION_OUTPUT="$PWD/test/browser/artifacts/session.html" \
+TAMEROP_STATIC_HTML="$PWD/test/browser/artifacts/static.html" \
+TAMEROP_BATCHED_HTML="$PWD/test/browser/artifacts/batched.html" \
+  python test/visualization_contracts.py --run-native
+```
+
+After that Julia process exits, run from `test/browser`:
+
+```sh
+TAMEROP_COMPOSITION_HTML="$PWD/artifacts/composition.html" \
+TAMEROP_PORTABLE_SESSION="$PWD/artifacts/session.html" \
+TAMEROP_STATIC_HTML="$PWD/artifacts/static.html" \
+TAMEROP_BATCHED_HTML="$PWD/artifacts/batched.html" npm run test:offline
+```
+
+Missing fixtures are errors. The no-server lane reopens fixed SVG composition,
+precomputed saved views and WGL scenes with the browser offline. The A38 scene
+exercises batched edges, polygons, vertical faces, bars, halo labels and literal coefficient
+tables across reload and resize. No live Julia
+control is inferred from a successful static export. The recorded fixtures must
+come from the current checkout's native run.
+
+The volume scenario at `/volume` checks a four-dimensional asymmetric array,
+the selected axis order, two independently retained fixed indices, keyboard and
+pointer slider updates, separate clients, narrow layout and disposal. Shared
+inspector helpers check accessible names, visible focus and real Tab navigation,
+including Tab/Shift+Tab escape from canvases after figure rebuilds. Scenario
+controls exercise Enter/Space alongside actual canvas pointer picks. The shared
+acceptance reporter rejects runtime skips and missing or unsuccessful results;
+`node --test acceptance-guard.test.mjs` checks this rule without starting Julia
+or a browser.
+
 ## Browser zoom and horizontal access
 
 At a narrow width, the plots retain their drawing dimensions inside scrollable
@@ -134,6 +186,11 @@ panels. The tests focus each panel and use the left/right arrow keys to reach
 both ends. They also click the barcode and the right-hand diagram after
 scrolling, checking that Julia receives the intended selection. The page itself
 must fit the viewport, and scrolling must preserve the mathematical query.
+Offline saved-session and composition figures similarly retain their intrinsic
+SVG dimensions. Their scenarios use real keyboard and horizontal wheel input,
+verify visible focus and unchanged geometry, and reopen the exports without
+Julia or network access. Review the screenshots too: page-fit checks do not
+detect scientific text that has been scaled below a readable size.
 
 [style-zoom.spec.mjs](style-zoom.spec.mjs) launches full Chromium with a fresh,
 temporary profile and the repository's [zoom extension](zoom-extension/manifest.json).
@@ -240,3 +297,173 @@ The matching scenario opens an independent linked viewer, verifies shared
 selection and disconnect cleanup, and uses keyboard arrows to reach both ends
 of the charts at a narrow viewport. Bonito's reconnect grace is allowed before
 requiring the disconnected viewer to be disposed.
+
+For spectral pages, `spectral.spec.mjs` exercises `/spectral` on the slice
+server. A padded filtered bicomplex has two dimension-two terms on E2 and a
+rank-one d2. With computation disabled, E3 must be unknown; computing it leaves
+one dimension at each endpoint. The test selects a term with actual pointer
+input, checks the selected kernel/image contributions, linked-page navigation,
+invalid input recovery, the associated graded limit and narrow keyboard access.
+
+## Signed-observable inspection
+
+Run `npx playwright test signed.spec.mjs` for the A86 cross-module fixture.
+The maintained scenarios check actual term picking, exact query edits,
+smoothing, rejected edits, direct-query reuse, narrow keyboard scrolling,
+grayscale and linked-view/disconnect cleanup. They use the same mathematical
+session as the static guide. The fixtures and read-only telemetry are in
+`signed-fixtures.jl`; static algebra/render tests are in
+`../test_visualization_a86.jl`. Browser acceptance does not establish live
+notebook-frontend support or class correspondence between changed modules.
+
+### Filtered source cells (A92)
+
+`complex.spec.mjs` uses `/complex` for the top-cell image ring and `/complex-3d`
+for a voxel skeleton. It verifies actual parameter and dimension controls,
+center picking and readouts, exact rational boundary queries, inactive context,
+linked sessions, transactional errors, keyboard scrolling and explicit close.
+The 3D fixture retains an active volume while drawing its 2-skeleton. Source
+representative overlays and live notebook frontends are separate acceptance
+scopes. Reuse the same native environment and server lifecycle described above;
+run `complex.spec.mjs` explicitly to avoid launching unrelated browser suites.
+
+
+### Source representatives (A43)
+
+`source.spec.mjs` exercises `/source` and `/source-periodic`: real interval
+picking, explicit original-member choice, F3 source cycles/death fillings,
+periodic duplicate members, rejected edits, linked viewers, keyboard selection,
+narrow layouts, reset and disposal. The source overlays must appear only after
+representative selection and disappear on reset or closure. Run this file with
+the normal fixture server and retain screenshots/state with the test artifacts.
+
+`transport.spec.mjs` uses `/transport` to verify refinement selection on all
+three actual finite-poset panels, preimage ambiguity, naturality matrices,
+exact parameter entry, linked state, rollback, responsive scrolling and cleanup.
+Its telemetry is read-only; test actions use the normal DOM and pointer events.
+
+`chains.spec.mjs` exercises the chain/cochain inspector, mapping-cone connecting
+maps and exact source-cell selections. It enters ambient and quotient vectors,
+checks cycles, boundaries and noncycles, follows actual canvas picks, tests
+fractional coefficients and zero-dimensional spaces, and covers failed updates,
+linked viewer disposal, narrow keyboard scrolling and session closure. The
+fixtures expose read-only mathematical state and pick positions; all selections
+use ordinary browser controls or pointer events.
+
+### H0 components and merge histories (A91)
+
+`components.spec.mjs` uses `/components` and `/components-slice` on the slice
+fixture server. It clicks actual bar, source-vertex and merge-node targets;
+checks source identities before and exactly at a rational event; distinguishes
+a deceased bar from its descendant component; and exercises event navigation,
+invalid-input recovery, independent linked views, narrow keyboard scrolling and
+close/disconnect cleanup. The multicritical fixture reaches the original
+parameter `(3/2, 3)` at slice scale `3/2`. Read-only telemetry exposes actual
+prepared records and pointer delivery; it does not call selection callbacks.
+
+### Semantic compositions (A102)
+
+`composition.spec.mjs` uses `/composition` for the live native figure. It checks
+that the rendered endpoints agree with independent source/interval projections
+after axis changes, real pointer panning and figure resizing. A narrow viewport
+retains a scrollable native scene. Pixel probes also require the curve to be
+visible above both panels; correct coordinates alone do not establish visibility.
+`TAMEROP_COMPOSITION_HTML=/absolute/file.html`
+enables the second scenario: reopen the exported fixed composition with browser
+network access disabled, inspect the annotation meaning, and compare its wide
+and narrow SVG proportions. Generate the HTML from `compose_visuals` using
+`save_visual(...; format=:html)` with CairoMakie. Both scenarios are required
+when accepting changes to composition exports.
+
+### Comparisons across fields and degrees
+
+`comparison.spec.mjs` exercises `/comparisons` and `/comparisons-ordinary`.
+It checks dimensions versus characteristic-dependent ranks, signed baseline
+changes, actual canvas hover/picking, selected matrices, rejected input,
+unordered masks, shared sessions, control typography, narrow layout, ordinary death endpoints,
+view switches and cleanup. Telemetry only observes the rendered fixture;
+selection travels through the browser controls and pointer events.
+
+The fixture embeds the returned Bonito app directly as a DOM child. Rendering
+it with `jsrender` before embedding renders its DOM twice and loses the widget
+stylesheet associations in Bonito 5.2; the typography assertion guards this.
+
+```sh
+npx playwright test comparison.spec.mjs
+```
+
+The A93 scenario, `geometric.spec.mjs`, uses `/geometric` to follow exact radius
+changes into the closed two-site cap, source-label highlighting, the parameter
+plane and homology. It also checks a rational value immediately below contact,
+linked clients, invalid-depth rollback, narrow layout and teardown. Run it with
+`npm test -- geometric.spec.mjs`; use distinct `TAMEROP_BROWSER_INTERVAL_PORT`,
+`TAMEROP_BROWSER_SLICE_PORT` and `TAMEROP_BROWSER_STOP_FILE` when another chat or
+process is using the harness.
+
+### Collections of supplied results (A98)
+
+`collection.spec.mjs` uses `/collections` on the slice server. It selects a
+feature cell and an embedding point with actual mouse events, switches among
+feature/distance/kernel tables, checks exact readouts and sample views, opens a
+supplied pair witness, and verifies linked viewers, invalid selection rollback,
+narrow-screen scrolling and cleanup. The fixture retains read-only telemetry;
+it does not invoke selection functions from the test. Run it with the existing
+Playwright setup and `collection.spec.mjs` as the file filter.
+
+## Saved views without a Julia server
+
+A100 has a separate no-server lane. Its producer creates two actual Cairo
+views of a finite-module calculation, retains exact selections and includes
+literal markup in a caption to exercise safe text handling. Run the producer
+to completion before starting the browser check:
+
+```sh
+TAMEROP_PORTABLE_SESSION_OUTPUT=/tmp/tamerop-saved-view.html \
+  julia --project=docs test/runtests.jl \
+  --file=test_visual_session_exports.jl --require-extension=TamerOpCairoMakieExt
+cd test/browser
+TAMEROP_PORTABLE_SESSION=/tmp/tamerop-saved-view.html \
+  npx playwright test --config=portable-session.config.mjs portable-session.spec.mjs
+```
+
+The browser copies the file, opens it with networking disabled, changes saved
+states with the keyboard, checks exact JSON downloads, and closes/reopens its
+context at a narrow viewport. It asserts that no HTTP or WebSocket requests
+occur. This tests finite precomputed selection; it does not certify arbitrary
+new queries or notebook frontend controls. The SVG contains its drawing assets.
+
+### Finite-module and presentation authoring
+
+`editor.spec.mjs` uses `/editor` and `/editor-presentation`. Its two maintained
+scenarios edit the actual labelled tables and buttons, read exact Julia
+witnesses, check failed order/support/dimension relations, exercise undo/redo
+and downloads, synchronize two clients, and verify cleanup and a narrow
+viewport. The fixture telemetry is read-only; it does not bypass the controls.
+Run against a fresh server because explicit closure ends each shared fixture.
+These are live standalone Chromium checks, not notebook-host certification.
+
+
+`generalized-rank.spec.mjs` owns the finite-region and continuous-worm inspectors.
+It exercises exact typed coordinates, real occurrence/bar/level and domain
+pointer input, invalid-query rollback, matrix toggles, linked-client propagation,
+narrow keyboard scrolling and closure. The fixture reports mathematical state
+and drawn target positions; selections use the visible controls and canvas.
+
+### Bounded source-preview exports
+
+`test_visualization_a39.jl` checks actual Cairo/WGL coordinates and writes
+`TAMEROP_SOURCE_PREVIEW_HTML` when set. The offline lane opens that file after
+the producer exits, disables networking, reloads and resizes the figure, and
+checks keyboard escape. Run `source-preview-offline.spec.mjs` with
+`portable-session.config.mjs`; it belongs to the offline lane only.
+The native owner also checks original source IDs, display counts, preparation
+budgets, coordinate mutation, bounded shared reuse and independent neighbor
+oracles. This does not qualify a live notebook frontend.
+
+The `ensemble.spec.mjs` scenario exercises A95's prepared ensemble inspector at
+`/ensembles`: nonuniform probe picking, read-only hover, original-value and band
+readouts, replicate/source linkage, every summary view, invalid-input rollback,
+keyboard controls, linked-view disconnect, narrow chart scrolling and close.
+Inference is prepared before opening the viewer; selecting a point never reruns
+bootstrap sampling. This standalone Chromium scenario does not qualify a live
+IJulia, Pluto or VS Code host.

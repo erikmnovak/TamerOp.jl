@@ -159,7 +159,8 @@ end
     save_persistence_diagram_json(path, diagram; profile=:compact, pretty=nothing)
 
 Save a versioned owned result, including exact grade values/types, coefficient
-field, orientation, all degrees, provenance and available cycles/cocycles.
+field, orientation, all degrees, provenance, available cycles/cocycles and
+retained source correspondences (schema version 2).
 Supported metadata consists of scalar/array/tuple/dictionary data, source types
 from a closed allowlist, and landmark selections. Unsupported objects fail before
 writing; they are never silently converted to display strings. Finite Float64 values
@@ -171,11 +172,11 @@ function save_persistence_diagram_json(path::AbstractString,diagram;profile::Sym
     diagram isa OP.PersistenceDiagram || throw(ArgumentError("expected a PersistenceDiagram"))
     data = OP.persistence_diagram_data(diagram)
     payload = _pd_encode(data)
-    obj = Dict("kind"=>"PersistenceDiagram","schema_version"=>1,
+    obj = Dict("kind"=>"PersistenceDiagram","schema_version"=>2,
         "field_characteristic"=>data.field.p,"order"=>String(data.order),
         "finite_counts"=>length.(data.finite),"essential_counts"=>length.(data.essential),
         "representatives_available"=>data.representatives !== nothing,
-        "cocycles_available"=>data.cocycles !== nothing,"data"=>payload)
+        "cocycles_available"=>data.cocycles !== nothing,"source_available"=>data.source !== nothing,"data"=>payload)
     return _json_write(path,obj;pretty=compact)
 end
 
@@ -183,15 +184,15 @@ end
     load_persistence_diagram_json(path)
 
 Strictly restore an owned diagram. Only allowlisted data types are reconstructed;
-no source text is evaluated. Structural representative validation is performed,
-but independent algebraic certification requires the original complex.
+no source text is evaluated. Source correspondences and original boundary
+equations are checked when retained; endpoint-only files supply no such evidence.
 """
 function load_persistence_diagram_json(path::AbstractString)
     try
         obj = JSON3.read(read(path,String))
-        _pd_keys(obj,("kind","schema_version","field_characteristic","order","finite_counts","essential_counts","representatives_available","cocycles_available","data"))
+        _pd_keys(obj,("kind","schema_version","field_characteristic","order","finite_counts","essential_counts","representatives_available","cocycles_available","source_available","data"))
         obj["kind"] == "PersistenceDiagram" && obj["schema_version"] isa Integer &&
-            !(obj["schema_version"] isa Bool) && obj["schema_version"] == 1 || throw(ArgumentError("unsupported persistence diagram schema"))
+            !(obj["schema_version"] isa Bool) && obj["schema_version"] == 2 || throw(ArgumentError("unsupported persistence diagram schema"))
         obj["field_characteristic"] isa Integer && !(obj["field_characteristic"] isa Bool) || throw(ArgumentError("invalid field header"))
         for key in ("finite_counts","essential_counts")
             obj[key] isa AbstractVector && all(n -> n isa Integer && !(n isa Bool) && n >= 0,obj[key]) || throw(ArgumentError("invalid count header"))
@@ -200,7 +201,7 @@ function load_persistence_diagram_json(path::AbstractString)
         summary = describe(result)
         summary.field.p == obj["field_characteristic"] && String(summary.order) == obj["order"] &&
             collect(summary.finite_counts) == obj["finite_counts"] && collect(summary.essential_counts) == obj["essential_counts"] &&
-            summary.representatives_available === obj["representatives_available"] && summary.cocycles_available === obj["cocycles_available"] ||
+            summary.representatives_available === obj["representatives_available"] && summary.cocycles_available === obj["cocycles_available"] && summary.source_available === obj["source_available"] ||
             throw(ArgumentError("persistence header disagrees with its data"))
         return result
     catch err

@@ -1,0 +1,700 @@
+{
+  "cases": [
+    {
+      "id": "2d_V_noise_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_noise_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_noise_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_noise_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true
+    },
+    {
+      "id": "2d_T_noise_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_noise_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_noise_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_noise_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true
+    },
+    {
+      "id": "2d_V_binary_size1",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_binary_size2",
+      "shape": [
+        5632,
+        5632
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_binary_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_binary_reserved",
+      "shape": [
+        5639,
+        5621
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    },
+    {
+      "id": "2d_T_binary_size1",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_binary_size2",
+      "shape": [
+        5632,
+        5632
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_binary_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_binary_reserved",
+      "shape": [
+        5639,
+        5621
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    },
+    {
+      "id": "2d_V_smooth_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_smooth_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_smooth_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_V_smooth_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    },
+    {
+      "id": "2d_T_smooth_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_smooth_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_smooth_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "2d_T_smooth_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    },
+    {
+      "id": "3d_V_noise_size1",
+      "shape": [
+        144,
+        144,
+        144
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_noise_size2",
+      "shape": [
+        160,
+        160,
+        160
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_noise_size3",
+      "shape": [
+        176,
+        176,
+        176
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_noise_reserved",
+      "shape": [
+        163,
+        155,
+        167
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true
+    },
+    {
+      "id": "3d_T_noise_size1",
+      "shape": [
+        144,
+        144,
+        144
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_noise_size2",
+      "shape": [
+        160,
+        160,
+        160
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_noise_size3",
+      "shape": [
+        176,
+        176,
+        176
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_noise_reserved",
+      "shape": [
+        163,
+        155,
+        167
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true
+    },
+    {
+      "id": "3d_V_binary_size1",
+      "shape": [
+        80,
+        80,
+        80
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_binary_size2",
+      "shape": [
+        96,
+        96,
+        96
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_binary_size3",
+      "shape": [
+        112,
+        112,
+        112
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_binary_reserved",
+      "shape": [
+        99,
+        91,
+        103
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    },
+    {
+      "id": "3d_T_binary_size1",
+      "shape": [
+        80,
+        80,
+        80
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_binary_size2",
+      "shape": [
+        96,
+        96,
+        96
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_binary_size3",
+      "shape": [
+        112,
+        112,
+        112
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_binary_reserved",
+      "shape": [
+        99,
+        91,
+        103
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    },
+    {
+      "id": "3d_V_smooth_size1",
+      "shape": [
+        192,
+        192,
+        192
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_smooth_size2",
+      "shape": [
+        224,
+        224,
+        224
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_smooth_size3",
+      "shape": [
+        256,
+        256,
+        256
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_V_smooth_reserved",
+      "shape": [
+        227,
+        219,
+        231
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    },
+    {
+      "id": "3d_T_smooth_size1",
+      "shape": [
+        192,
+        192,
+        192
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_smooth_size2",
+      "shape": [
+        224,
+        224,
+        224
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_smooth_size3",
+      "shape": [
+        256,
+        256,
+        256
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false
+    },
+    {
+      "id": "3d_T_smooth_reserved",
+      "shape": [
+        227,
+        219,
+        231
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true
+    }
+  ],
+  "sizes": {
+    "2d_noise": [
+      4096,
+      5120,
+      6144
+    ],
+    "2d_binary": [
+      5120,
+      5632,
+      6144
+    ],
+    "2d_smooth": [
+      4096,
+      5120,
+      6144
+    ],
+    "3d_noise": [
+      144,
+      160,
+      176
+    ],
+    "3d_binary": [
+      80,
+      96,
+      112
+    ],
+    "3d_smooth": [
+      192,
+      224,
+      256
+    ]
+  },
+  "samples": 3,
+  "passes": 3,
+  "limits": {
+    "rss_bytes": 8589934592,
+    "available_bytes": 2147483648,
+    "phase_seconds": 180,
+    "worker_seconds": 1800,
+    "total_seconds": 14400
+  },
+  "weights": "equal weight per case; 4 cases in each of 12 lane/structure strata",
+  "practical_band": [
+    0.9090909090909091,
+    1.1
+  ],
+  "selection": "absolute seconds and resource feasibility; no relative-performance selection",
+  "created": 1791740673.5535247
+}

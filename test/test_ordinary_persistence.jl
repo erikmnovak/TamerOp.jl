@@ -281,7 +281,7 @@ end
     @test OP.finite_intervals(rips; dim=0) == [(0.0, 2.0)]
     @test OP.essential_births(rips; dim=0) == [0.0]
     # The ordinary image/typed-filtration path must preserve the same exact
-    # upper-star values, including a cache populated by another invocation.
+    # upper-star values, including when the caller supplies an ingestion cache.
     values = fill(b, 3, 3)
     values[2, 2] = a
     cache = CM.EncodingCache()
@@ -292,8 +292,8 @@ end
         @test OP.finite_intervals(typed; dim=1) == [(b, a)]
         @test OP.essential_births(typed; dim=0) == [b]
     end
-    # Topology and ordinal ranks agree, but grades belong to this invocation.
-    # A topology-cache hit must not return the previous exact endpoints.
+    # Grades belong to this invocation even when a cache is supplied.
+    # The direct grid path and general cached path must not reuse old endpoints.
     changed_values = fill(b + 7, 3, 3)
     changed_values[2, 2] = a + 3
     changed = OP.persistence_diagram(DT.ImageNd(changed_values), filtration;
@@ -386,7 +386,6 @@ end
     @test_throws ArgumentError OP.cubical_persistence(zeros(0, 2))
     @test_throws ArgumentError OP.cubical_persistence(zeros(2, 0); input=:vertices)
     @test_throws ArgumentError OP.cubical_persistence(zeros(2, 2); input=:pixels)
-    @test_throws ArgumentError OP.cubical_persistence(zeros(2, 2, 2); input=:top_cells)
     for periodic in ((true,), (true, true, true), (1, 0), [true, 1], :periodic)
         @test_throws ArgumentError OP.cubical_persistence(zeros(2, 2); periodic=periodic)
         @test_throws ArgumentError OP.cubical_persistence(zeros(2, 2); periodic=periodic, input=:vertices)
@@ -496,7 +495,7 @@ end
     @test TamerOp.essential_births(diagram; dim=0) == [0]
     @test TamerOp.describe(diagram) == OP.persistence_diagram_summary(diagram)
     @test TamerOp.provenance(diagram) == RES.provenance(diagram)
-    @test TamerOp.provenance(diagram).backend === :f2_clearing
+    @test TamerOp.provenance(diagram).backend === :f2_cubical_grid
     @test TamerOp.provenance(diagram).approximation === :none_in_reduction
     @test TamerOp.provenance(diagram).discretization === :none
     @test TamerOp.result_summary(diagram) == OP.persistence_diagram_summary(diagram)
@@ -642,7 +641,7 @@ end
         retained = OP.cubical_persistence(values; periodic, order, input=:vertices, representatives=true)
         @test plain.finite_by_dim == retained.finite_by_dim
         @test plain.essential_by_dim == retained.essential_by_dim
-        @test plain.meta.backend === :f2_clearing
+        @test plain.meta.backend === (any(periodic) ? :f2_clearing : :f2_cubical_grid)
         @test retained.meta.backend === :f2_column_reduction
     end
 end
@@ -2782,7 +2781,7 @@ end
         original=OP.PersistenceDiagram([[(0,2)]],[[0]])
         SER.save_persistence_diagram_json(path,original)
         source=read(path,String)
-        for (key,value) in (("schema_version",2),("schema_version",true),("kind","Other"),
+        for (key,value) in (("schema_version",3),("schema_version",true),("kind","Other"),
                 ("field_characteristic",3),("field_characteristic",2.5),("finite_counts",[true]),
                 ("essential_counts",[0]),("order","superlevel"),("extra",1),
                 ("representatives_available",0),("cocycles_available",true))
@@ -3076,4 +3075,772 @@ end
         @test D.finite_by_dim[2]==[(1.0,1.5)]
         @test isempty(D.essential_by_dim[2])
     end
+end
+
+# Deliberately carries no values: budget/overflow rejection must precede any
+# attempt to read an input or enumerate its cells.
+struct _A113ShapeOnly{N} <: AbstractArray{Int,N}
+    dims::NTuple{N,Int}
+end
+Base.size(A::_A113ShapeOnly) = A.dims
+Base.getindex(::_A113ShapeOnly, I...) = error("budget preflight read a value")
+
+@testset "A113 independent top-cell tensor complexes and persistent maps" begin
+    shapes = ((1,), (3,), (1,2), (1,1,1), (2,1,2), (1,2,1,1), (1,1,1,1,1))
+    for shape in shapes
+        N = length(shape)
+        periods = unique([ntuple(_->false,N), ntuple(isodd,N), ntuple(_->true,N)])
+        for periodic in periods, order in (:sublevel,:superlevel)
+            values = reshape([mod(i+div(i,2),2) for i in 1:prod(shape)], shape)
+            reference = _a21_cubical_oracle(values,periodic,:top_cells,order;signed=true)
+            # Source identities establish the change of cell ordering without
+            # using the production grade or incidence routine in the oracle.
+            model = DI.filtered_complex(values; periodic,order)
+            G = DI.graded_complex(model)
+            @test DI.check_filtered_complex(model;throw=true).valid
+            counts = length.(reference.cells)
+            @test DT.cell_counts(G) == counts
+            permutations = Vector{Int}[]
+            for d in 0:N
+                ids = model.sources[G.dim_offsets[d+1]:G.dim_offsets[d+2]-1]
+                keys = [ntuple(a->s.mask[a]==0 ? s.origin[a] : -s.origin[a],N) for s in ids]
+                indices = [findfirst(==(key),reference.cells[d+1]) for key in keys]
+                @test all(!isnothing,indices)
+                push!(permutations,Int.(indices))
+                @test first.(G.grades[G.dim_offsets[d+1]:G.dim_offsets[d+2]-1]) ==
+                    reference.grades[d+1][permutations[end]]
+            end
+            for d in 1:N
+                @test Matrix(G.boundaries[d]) == -reference.boundaries[d][permutations[d],permutations[d+1]]
+                d==1 || @test iszero(G.boundaries[d-1]*G.boundaries[d])
+            end
+            # Maps across all event and inter-event levels, including both ends
+            # of every finite bar, are checked independently in each field.
+            for p in (2,3,101)
+                D = TamerOp.cubical_persistence(values; periodic,order,field=CM.Fp(p))
+                _a112_check_maps(D,reference,p)
+            end
+        end
+    end
+end
+
+@testset "A113 cavities exact grades and products of circles" begin
+    for order in (:sublevel,:superlevel), p in (2,3,101)
+        low = big(1)//big(1); high = low + big(1)//(big(2)^70)
+        birth,death = order===:sublevel ? (low,high) : (high,low)
+        values = fill(birth,3,3,3); values[2,2,2]=death
+        D = OP.cubical_persistence(values; order,field=CM.Fp(p))
+        @test OP.finite_intervals(D;dim=2)==[(birth,death)]
+        @test OP.essential_births(D;dim=0)==[birth]
+        @test all(isempty(OP.finite_intervals(D;dim=d)) for d in (0,1,3))
+        @test all(isempty(OP.essential_births(D;dim=d)) for d in 1:3)
+        # The class at the earlier event maps nontrivially before filling,
+        # then to zero at filling; endpoint rounding would erase this bar.
+        middle=(birth+death)/2
+        @test _a21_barcode_map_rank(D,2,birth,middle,order)==1
+        @test _a21_barcode_map_rank(D,2,birth,death,order)==0
+        # A product of m circles and N-m closed intervals has these Betti
+        # numbers, including singleton periodic axes with zero boundary.
+        for N in (1,3,4,6), m in (0,N-1,N)
+            shape=ntuple(_->1,N);per=ntuple(a->a<=m,N)
+            torus=OP.cubical_persistence(fill(birth,shape);periodic=per,order,field=CM.Fp(p))
+            @test [length(OP.essential_births(torus;dim=d)) for d in 0:N] ==
+                [d<=m ? binomial(m,d) : 0 for d in 0:N]
+            @test all(isempty(OP.finite_intervals(torus;dim=d)) for d in 0:N)
+        end
+    end
+    # Four-dimensional top cells support genuine finite H3 persistence.
+    shell=fill(0,3,3,3,3);shell[2,2,2,2]=2
+    D=OP.cubical_persistence(shell)
+    @test OP.finite_intervals(D;dim=3)==[(0,2)]
+    @test all(isempty(OP.finite_intervals(D;dim=d)) for d in (0,1,2,4))
+    for (low,high) in ((UInt(0),UInt(2)),(typemin(Int),typemin(Int)+2))
+        values=fill(high,3,3,3);values[2,2,2]=low
+        D=OP.cubical_persistence(values;order=:superlevel)
+        @test OP.finite_intervals(D;dim=2)==[(high,low)]
+    end
+    low,high=setprecision(BigFloat,512) do
+        (BigFloat(1),BigFloat(1)+BigFloat(2)^(-300))
+    end
+    setprecision(BigFloat,128) do
+        values=fill(low,3,3,3);values[2,2,2]=high
+        D=OP.cubical_persistence(values)
+        @test OP.finite_intervals(D;dim=2)==[(low,high)]
+        @test all(x->precision(x)==512,only(OP.finite_intervals(D;dim=2)))
+    end
+end
+
+@testset "A113 higher-dimensional representatives and cohomology" begin
+    for p in (2,3,101), order in (:sublevel,:superlevel)
+        values=reshape([0,1,0,1],2,1,2)
+        periodic=(true,false,true)
+        G=OP._top_cell_complex(values,periodic,order,OPT.ConstructionOptions())
+        D=OP.cubical_persistence(values;periodic,order,field=CM.Fp(p),
+                                 representatives=true,cocycles=true)
+        _a112_check_representatives(G,D,p)
+        _a117_check_cocycles(G,D,p)
+    end
+    # A spatial shell tests an actual finite H2 cycle and its 3-chain filling.
+    values=fill(0,3,3,3);values[2,2,2]=2
+    G=OP._top_cell_complex(values,(false,false,false),:sublevel,OPT.ConstructionOptions())
+    D=OP.cubical_persistence(values;field=CM.F3(),representatives=true)
+    _a112_check_representatives(G,D,3)
+end
+
+@testset "A113 construction budgets before enumeration" begin
+    values=zeros(Int,2,2,2)
+    # Tensor product (3+2t)^3 has 125 cells and 54 edges.
+    for budget in (OPT.ConstructionBudget(max_simplices=124),
+                   OPT.ConstructionBudget(max_edges=53),
+                   OPT.ConstructionBudget(memory_budget_bytes=1))
+        options=OPT.ConstructionOptions(;budget)
+        for call in (OP.cubical_persistence,DI.filtered_complex)
+            @test_throws ArgumentError call(_A113ShapeOnly((2,2,2));construction=options)
+        end
+    end
+    allowed=OPT.ConstructionOptions(budget=OPT.ConstructionBudget(
+        max_simplices=125,max_edges=54,memory_budget_bytes=1_000_000))
+    @test OP.essential_births(OP.cubical_persistence(values;construction=allowed);dim=0)==[0]
+    @test DT.cell_counts(DI.graded_complex(DI.filtered_complex(values;construction=allowed)))==[27,54,36,8]
+    for shape in ((typemax(Int),1),ntuple(_->1,70)), call in (OP.cubical_persistence,DI.filtered_complex)
+        @test_throws ArgumentError call(_A113ShapeOnly(shape))
+    end
+    @test DI._estimate_cubical_cell_counts(ntuple(_->1,70);periodic=ntuple(_->true,70)) ==
+          [binomial(big(70),d) for d in 0:70]
+    # Count the cells themselves, including periodic loops whose boundaries
+    # cancel; do not use nnz(boundary) as a surrogate for edge count.
+    for call in (OP.cubical_persistence,DI.filtered_complex)
+        @test_throws ArgumentError call(fill(0,1,1,1);periodic=true,
+            construction=OPT.ConstructionOptions(budget=OPT.ConstructionBudget(max_edges=2)))
+        for input in (:top_cells,:vertices), options in (
+            OPT.ConstructionOptions(sparsify=:knn),OPT.ConstructionOptions(collapse=:dominated_edges))
+            @test_throws ArgumentError call(values;input,construction=options)
+        end
+        @test_throws ArgumentError call(zeros(0,2,2))
+        @test_throws ArgumentError call(fill(1))
+        @test_throws ArgumentError call(fill(Inf,1,1,1))
+        @test_throws ArgumentError call(values;periodic=(true,false))
+        @test_throws ArgumentError call(values;periodic=(true,false,1))
+    end
+    # The new public budget also reaches the existing vertex route.
+    @test_throws ArgumentError OP.cubical_persistence(values;input=:vertices,
+        construction=OPT.ConstructionOptions(budget=OPT.ConstructionBudget(max_edges=0)))
+end
+
+@testset "C22 vertex budgets preserve cubical persistence maps" begin
+    # A large constant rectangle has just one essential connected component.
+    # The former dense preflight rejected it even with a 3 GiB allowance.
+    options = OPT.ConstructionOptions(budget=OPT.ConstructionBudget(memory_budget_bytes=64*1024^2))
+    values = fill(2//3,128,128)
+    diagram = OP.cubical_persistence(values;input=:vertices,construction=options)
+    @test OP.essential_births(diagram;dim=0) == [2//3]
+    @test isempty(OP.finite_intervals(diagram;dim=0))
+    @test isempty(OP.finite_intervals(diagram;dim=1))
+    @test isempty(OP.essential_births(diagram;dim=1))
+    # Signed tensor-complex oracles check the actual persistent maps, including
+    # periodic loops, singleton axes, exact rational grades and odd primes.
+    for shape in ((3,), (2,2), (2,1,2), (1,2,1,2)),
+        order in (:sublevel,:superlevel), prime in (2,3,101)
+        N=length(shape);periodic=ntuple(i->isodd(i),N)
+        vals=reshape([mod(i,3)//3 for i in 1:prod(shape)],shape)
+        reference=_a21_cubical_oracle(vals,periodic,:vertices,order;signed=true)
+        d=OP.cubical_persistence(vals;input=:vertices,periodic,order,field=CM.Fp(prime),construction=options)
+        _a112_check_maps(d,reference,prime)
+        typed=OP.persistence_diagram(DT.ImageNd(vals),DI.CubicalFiltration(;periodic,construction=options);
+            order,field=CM.Fp(prime),cache=CM.EncodingCache())
+        @test d.finite_by_dim == typed.finite_by_dim
+        @test d.essential_by_dim == typed.essential_by_dim
+    end
+end
+
+@testset "C22 grid-native independent persistence maps" begin
+    # The oracle forms tensor boundaries independently and compares every
+    # persistence-map rank, not only dimensions at individual thresholds.
+    for shape in ((3,), (2,3), (2,2,2), (1,2,2)), input in (:vertices,:top_cells),
+        order in (:sublevel,:superlevel)
+        values=reshape([mod(5i+div(i,3),3)//3 for i in 1:prod(shape)],shape)
+        D=_a21_test_cubical_maps(values,ntuple(_->false,length(shape)),input,order)
+        @test D.meta.backend === :f2_cubical_grid
+        @test D.meta.chain_validation === :cubical_tensor_identity
+    end
+end
+
+@testset "C22 grid-native exact grades and general-path parity" begin
+    # Independent seeded arrays include all singleton-axis placements. The
+    # explicit reducer provides a second algorithm beyond the map-rank oracle.
+    rng=MersenneTwister(220091)
+    for shape in ((1,), (7,), (1,4), (4,1), (4,5), (1,1,1),
+                  (1,3,4), (3,1,4), (3,4,1), (3,4,3)),
+        input in (:vertices,:top_cells), order in (:sublevel,:superlevel), sample in 1:3
+        values=reshape(rand(rng,-3:4,prod(shape)),shape)
+        before=copy(values)
+        per=ntuple(_->false,length(shape))
+        G=input===:vertices ? OP._vertex_cubical_complex(values,per,order,OPT.ConstructionOptions(),nothing) :
+            OP._top_cell_complex(values,per,order,OPT.ConstructionOptions())
+        expected=OP.persistence_diagram(G;order)
+        actual=OP.cubical_persistence(values;input,order)
+        @test actual.finite_by_dim==expected.finite_by_dim
+        @test actual.essential_by_dim==expected.essential_by_dim
+        @test values==before
+    end
+    for values in ([0.1 0.9 -0.3;0.4 0.2 1.1],
+                   [-0.0 0.0;0.0 -0.0],
+                   reshape(BigInt(2)^100 .+ BigInt[0,2,0,3,1,0],2,3),
+                   [1//7 2//7;4//7 0//7]),
+        input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        a=OP.cubical_persistence(values;input,order)
+        b=OP.cubical_persistence(values;input,order,representatives=true)
+        @test a.finite_by_dim==b.finite_by_dim
+        @test a.essential_by_dim==b.essential_by_dim
+        @test eltype(a.essential_by_dim[1])===eltype(values)
+    end
+end
+
+@testset "C22 grid-native dispatch and preserved capabilities" begin
+    values=[0 0 0;0 3 0;0 0 0]
+    for input in (:vertices,:top_cells)
+        base=OP.cubical_persistence(values;input)
+        for kwargs in ((representatives=true,), (cocycles=true,), (source=true,), (field=CM.F3(),), (field=CM.Fp(101),))
+            retained=OP.cubical_persistence(values;input,kwargs...)
+            @test retained.meta.backend !== :f2_cubical_grid
+            @test retained.finite_by_dim==base.finite_by_dim
+            @test retained.essential_by_dim==base.essential_by_dim
+        end
+        torus=OP.cubical_persistence(fill(2//3,1,1);input,periodic=true)
+        @test length.(torus.essential_by_dim)==[1,2,1]
+        @test torus.meta.backend !== :f2_cubical_grid
+        higher=OP.cubical_persistence(fill(2//3,1,1,1,1);input)
+        @test higher.meta.backend !== :f2_cubical_grid
+        @test length.(higher.essential_by_dim)==[1,0,0,0,0]
+        for budget in (OPT.ConstructionBudget(max_edges=0),
+                       OPT.ConstructionBudget(max_simplices=0),
+                       OPT.ConstructionBudget(memory_budget_bytes=1))
+            @test_throws ArgumentError OP.cubical_persistence(values;input,
+                construction=OPT.ConstructionOptions(;budget))
+        end
+    end
+    typed=OP.persistence_diagram(DT.ImageNd(values),DI.CubicalFiltration())
+    direct=OP.cubical_persistence(values;input=:vertices)
+    @test typed.meta.backend===:f2_cubical_grid
+    @test typed.finite_by_dim==direct.finite_by_dim
+    # Ranking is unnecessary even when exact vertices cannot be represented
+    # as distinct Float64 values. Explicit odd-field/periodic routes keep them.
+    low=BigInt(2)^100;high=low+1
+    for field in (CM.F2(),CM.F3(),CM.Fp(101)),order in (:sublevel,:superlevel)
+        data=order===:sublevel ? [low,high,low,high] : [high,low,high,low]
+        a=OP.cubical_persistence(data;input=:vertices,field,order,periodic=true)
+        @test only(a.finite_by_dim[1])==(order===:sublevel ? (low,high) : (high,low))
+    end
+end
+
+@testset "C22 cubical forest is a filtered cycle coordinate system" begin
+    # Independent tensor boundaries certify the prerequisite for deleting H0
+    # forest rows: the forest spans each prefix, and projection to its other
+    # edges is injective on that prefix's cycle space.
+    for shape in ((3,4),(2,3,3),(1,3,3),(3,1,3),(3,3,1)),
+        input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        N=length(shape)
+        x=reshape([mod(7i+div(i,4),5)//3 for i in 1:prod(shape)],shape)
+        g=OP._cubical_barcode_grid(x,input,order)
+        edges=OP._cubical_grade_order(g.grades[2],order)
+        forest=OP._cubical_grid_h0!(Tuple{eltype(x),eltype(x)}[],eltype(x)[],g,edges,order)
+        oracle=_a21_cubical_oracle(x,ntuple(_->false,N),input,order)
+        lookup=Dict(c=>i for (i,c) in enumerate(oracle.cells[2]))
+        labels=NTuple{N,Int}[]
+        dims=ntuple(a->shape[a]+(input===:top_cells),N)
+        for axis in 1:N
+            block=ntuple(a->dims[a]-(a==axis),N)
+            for c in CartesianIndices(block)
+                push!(labels,ntuple(a->a==axis ? -c[a] : c[a],N))
+            end
+        end
+        oracle_forest=falses(length(labels))
+        for i in eachindex(labels)
+            oracle_forest[lookup[labels[i]]]=forest[i]
+        end
+        for level in unique(vec(x))
+            active=findall(v->order===:sublevel ? v<=level : v>=level,oracle.grades[2])
+            B=oracle.boundaries[1][:,active]
+            selected=oracle_forest[active]
+            @test _a21_binary_rank(B[:,selected])==count(selected)
+            @test _a21_binary_rank(B)==count(selected)
+            Z=_a21_binary_cycles(B)
+            @test _a21_binary_rank(Z[.!selected,:])==size(Z,2)
+        end
+    end
+end
+
+@testset "C22 cubical pruning exhaustive tied binary grids" begin
+    # Every binary assignment on these grids is checked against the explicit
+    # complex reducer; the persistent-map tests independently certify maps.
+    for shape in ((2,3),(2,2,2)),bits in 0:(1<<prod(shape))-1,
+        input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        x=reshape([Int((bits>>(i-1))&1) for i in 1:prod(shape)],shape)
+        per=ntuple(_->false,length(shape))
+        G=input===:vertices ? OP._vertex_cubical_complex(x,per,order,OPT.ConstructionOptions(),nothing) :
+            OP._top_cell_complex(x,per,order,OPT.ConstructionOptions())
+        expected=OP.persistence_diagram(G;order)
+        actual=OP.cubical_persistence(x;input,order)
+        @test actual.finite_by_dim==expected.finite_by_dim
+        @test actual.essential_by_dim==expected.essential_by_dim
+    end
+end
+
+@testset "C22 compact component roots preserve signed sizes" begin
+    # Two independent trees. Negative root entries are component sizes;
+    # compression may change parent links but must preserve those sizes.
+    for I in (Int32,Int)
+        parents=I[2,3,-3,5,-2]
+        @test [OP._cubical_compact_root!(parents,i) for i in 1:5]==[3,3,3,5,5]
+        @test parents[3]==-3 && parents[5]==-2
+        @test all(i->parents[i]>0,(1,2,4))
+        singleton=I[-1]
+        @test OP._cubical_compact_root!(singleton,1)==1
+        @test singleton==I[-1]
+    end
+end
+
+@testset "C22 direct square boundaries retain a finite tunnel" begin
+    # A square annulus times an interval has one H1 class. Filling its central
+    # column kills that class. A singleton third axis also checks thin grids.
+    # Distinct rational events below Float64 resolution must remain distinct.
+    lo=big(1)//big(1);hi=lo+big(1)//big(2)^70
+    for shape in ((3,3,1),(3,3,2)),input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        birth,death=order===:sublevel ? (lo,hi) : (hi,lo)
+        values=fill(birth,shape);values[2,2,:].=death
+        D=OP.cubical_persistence(values;input,order,field=CM.F2())
+        @test D.finite_by_dim[2]==[(birth,death)]
+        @test isempty(D.finite_by_dim[1])
+        @test isempty(D.finite_by_dim[3])
+        @test D.essential_by_dim[1]==[birth]
+        @test all(isempty,D.essential_by_dim[2:end])
+    end
+end
+
+@testset "C22 implicit square replay matches independent tensor boundaries" begin
+    rng=MersenneTwister(2210113)
+    for shape in ((2,3,3),(1,3,3),(3,1,3),(3,3,1)),
+        input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        values=reshape(rand(rng,0:4,prod(shape)),shape)
+        grid=OP._cubical_barcode_grid(values,input,order)
+        oracle=_a21_cubical_oracle(values,(false,false,false),input,order)
+        dims=ntuple(a->shape[a]+(input===:top_cells),3)
+        # Label the cells independently by products of vertices and edges.
+        labels=[NTuple{3,Int}[] for _ in 1:2]
+        for degree in 1:2,mask in 0:7
+            count_ones(mask)==degree || continue
+            block=ntuple(a->dims[a]-((mask>>(a-1))&1),3)
+            for c in CartesianIndices(block)
+                push!(labels[degree],ntuple(a->iszero(mask & (1<<(a-1))) ? c[a] : -c[a],3))
+            end
+        end
+        edge_ids=Dict(c=>i for (i,c) in enumerate(labels[1]))
+        face_ids=Dict(c=>i for (i,c) in enumerate(oracle.cells[3]))
+        # Arbitrary injective row relabeling and deletion isolate replay from
+        # the production forest-selection and rank-construction routines.
+        n=length(labels[1]);ranks=randperm(rng,n)
+        ranks[1:3:end].=0
+        active=OP._ParityColumn(n);out=Int[]
+        for (face,label) in enumerate(labels[2])
+            coefficients=oracle.boundaries[2][:,face_ids[label]]
+            expected=sort!([ranks[edge_ids[oracle.cells[2][i]]]
+                for i in findall(isodd,coefficients) if ranks[edge_ids[oracle.cells[2][i]]]!=0];rev=true)
+            OP._cubical_replay_square!(active,grid,ranks,face)
+            OP._drain_column!(out,active)
+            @test out==expected
+            OP._cubical_replay_square!(active,grid,ranks,face)
+            OP._cubical_replay_square!(active,grid,ranks,face)
+            @test OP._column_pivot(active)==0
+        end
+    end
+end
+
+
+@testset "C22 local cancellation preserves nontrivial persistence maps" begin
+    # Four exact levels force both transient topology and tied zero-length
+    # pairs. Independent tensor matrices determine every persistent map rank.
+    for input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        values=reshape([mod(11i+div(i,4),4)//7 for i in 1:27],3,3,3)
+        diagram=_a21_test_cubical_maps(values,(false,false,false),input,order)
+        @test diagram.meta.backend===:f2_cubical_grid
+    end
+end
+
+@testset "C22 local table certificates" begin
+    # Reconstruct relative tensor boundaries independently of the packed loader
+    # and the unrolled neighborhood classifier; reduce every admissible mask.
+    slots=[(a,b,c) for a in -1:1 for b in -1:1 for c in -1:1]
+    lookup=Dict(s=>i for (i,s) in enumerate(slots))
+    bits(s)=UInt32(1)<<(lookup[s]-1)
+    deps=UInt32[reduce(|,(bits(ntuple(j->j==a ? 0 : s[j],3)) for a in 1:3 if s[a]!=0);init=UInt32(0)) for s in slots]
+    sequence=sortperm(slots;by=s->(count(!iszero,s),s))
+    patterns=UInt32[bits((0,0,0))]
+    for slot in sequence
+        slots[slot]==(0,0,0) && continue
+        append!(patterns,[m | (UInt32(1)<<(slot-1)) for m in patterns if m & deps[slot]==deps[slot]])
+    end
+    @test length(unique(patterns))==15935
+    for (input,table) in zip((:vertices,:top_cells),OP._CUBICAL_LOCAL_TABLES)
+        vertex=input===:vertices
+        degrees=[count(x->vertex ? x!=0 : x==0,s) for s in slots]
+        key(s)=(sum(1<<(a-1) for a in 1:3 if vertex ? s[a]!=0 : s[a]==0;init=0),
+                reverse(ntuple(a->vertex ? min(s[a],0) : Int(s[a]==1),3)))
+        cells=[sort(findall(==(d),degrees);by=i->key(slots[i])) for d in 0:3]
+        boundaries=zeros(UInt32,27)
+        for (i,s) in enumerate(slots), a in 1:3
+            if vertex && s[a]!=0
+                boundaries[i] = xor(boundaries[i],bits(ntuple(j->j==a ? 0 : s[j],3)))
+            elseif !vertex && s[a]==0
+                for side in (-1,1)
+                    boundaries[i] = xor(boundaries[i],bits(ntuple(j->j==a ? side : s[j],3)))
+                end
+            end
+        end
+        @test sort(filter(!iszero,table.keys))==sort(patterns)
+        for mask in patterns
+            idx=OP._cubical_local_planindex(table,mask)
+            negative=UInt32[];pairs=Tuple{Int,UInt32}[]
+            for d in 1:2
+                pivots=Dict{Int,Tuple{UInt32,UInt32}}();neg=UInt32(0)
+                for cell in cells[d+1]
+                    iszero(mask & (UInt32(1)<<(cell-1))) && continue
+                    col=UInt32(0);chain=UInt32(1)<<(cell-1)
+                    for (j,row) in enumerate(cells[d])
+                        !iszero(boundaries[cell] & mask & (UInt32(1)<<(row-1))) && (col |= UInt32(1)<<(j-1))
+                    end
+                    while col!=0
+                        pivot=32-leading_zeros(col)
+                        haskey(pivots,pivot) || break
+                        previous,combination=pivots[pivot];col=xor(col,previous);chain=xor(chain,combination)
+                    end
+                    if col!=0
+                        pivot=32-leading_zeros(col);pivots[pivot]=(col,chain)
+                        neg |= UInt32(1)<<(cell-1)
+                        d==2 && push!(pairs,(cells[d][pivot],chain))
+                    end
+                end
+                push!(negative,neg)
+            end
+            @test table.negative_edges[idx]==negative[1]
+            @test table.negative_faces[idx]==negative[2]
+            actual=[(Int(p & UInt32(31))+1,p>>5) for p in table.pairs[Int(table.pair_offsets[idx]):Int(table.pair_offsets[idx+1])-1]]
+            @test actual==pairs
+        end
+    end
+end
+
+@testset "C22 public relative tables exact endpoints and capabilities" begin
+    # Every admissible local mask can be realized at the center of a 3x3x3
+    # rank array. This tests the unrolled classifier separately from its tables.
+    center=CartesianIndex(2,2,2);indices=LinearIndices((3,3,3))
+    for (vertices,table) in zip((true,false),OP._CUBICAL_LOCAL_TABLES)
+        shifts=[sum(s[a]*3^(a-1) for a in 1:3) for s in table.slots]
+        ranks=fill(Int32(28),27)
+        for mask in filter(!iszero,table.keys)
+            for (slot,offset) in enumerate(table.slots)
+                offset==(0,0,0) && continue
+                present=!iszero(mask & (UInt32(1)<<(slot-1)))
+                ranks[indices[center+CartesianIndex(offset)]]=xor(present,!vertices) ? slot : slot+28
+            end
+            @test OP._cubical_local_pattern(table,ranks,center,14,(3,3,3),shifts,vertices)==mask
+        end
+    end
+    rng=MersenneTwister(221101)
+    arrays=(reshape(rand(rng,-4:4,27).//7,3,3,3),
+            reshape(BigInt(2)^100 .+ rand(rng,0:4,27),3,3,3),
+            reshape(rand(rng,27),3,3,3),fill(-0.0,3,3,3),
+            reshape([isodd(i) ? -0.0 : 0.0 for i in 1:27],3,3,3),
+            @view(reshape(collect(1:60),3,4,5)[1:2:3,:,1:2:5]))
+    for values in arrays,input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        before=copy(values)
+        actual=TamerOp.cubical_persistence(values;input,order)
+        expected=OP.cubical_persistence(values;input,order,representatives=true)
+        @test actual.finite_by_dim==expected.finite_by_dim
+        @test actual.essential_by_dim==expected.essential_by_dim
+        @test eltype(actual.essential_by_dim[1])===eltype(values)
+        @test isequal(values,before)
+        @test actual.meta.local_reduction===:relative_tables
+        @test actual.meta.source==(shape=size(values),periodic=(false,false,false))
+        @test actual.meta.grade_arithmetic===:exact_input_values
+        @test actual.meta.approximation===:none_in_reduction
+    end
+    for input in (:vertices,:top_cells),order in (:sublevel,:superlevel)
+        shell=zeros(Int,3,3,3);shell[2,2,2]=4;order===:superlevel && (shell .*= -1)
+        D=TamerOp.cubical_persistence(shell;input,order)
+        @test D.finite_by_dim[3]==[(0,order===:sublevel ? 4 : -4)]
+        @test D.essential_by_dim==[[0],Int[],Int[],Int[]]
+        for kwargs in ((representatives=true,), (cocycles=true,), (source=true,), (field=CM.F3(),), (field=CM.Fp(101),))
+            retained=TamerOp.cubical_persistence(shell;input,order,kwargs...)
+            @test !hasproperty(retained.meta,:local_reduction)
+            @test retained.finite_by_dim==D.finite_by_dim
+        end
+    end
+    for shape in ((1,1,1),(2,3,4)),input in (:vertices,:top_cells)
+        vals=fill(0,shape);per=(false,false,false)
+        dims=ntuple(a->shape[a]+Int(input===:top_cells),3)
+        counts=DI._estimate_cubical_cell_counts(dims;periodic=per)
+        total=sum(counts);incidences=sum(2d*counts[d+1] for d in 1:3)
+        allowance=input===:vertices ? DI._estimate_cubical_construction_bytes(counts,3,1) :
+            total*((2*3+20)*sizeof(Int)+Base.elsize(Vector{NTuple{1,Int}}))+6sizeof(Int)*incidences+sizeof(Int)*(total+3)
+        # Same construction allowance as the general route: table storage is
+        # package data, not a fresh image cache or an advertised RSS bound.
+        for bytes in (1,Int(allowance)-1)
+            @test_throws ArgumentError TamerOp.cubical_persistence(vals;input,
+                construction=OPT.ConstructionOptions(budget=OPT.ConstructionBudget(memory_budget_bytes=bytes)))
+        end
+        d=TamerOp.cubical_persistence(vals;input,construction=OPT.ConstructionOptions(
+            budget=OPT.ConstructionBudget(memory_budget_bytes=Int(allowance),max_simplices=Int(total),max_edges=Int(counts[2]))))
+        @test d.essential_by_dim[1]==[0]
+        typed=OP.persistence_diagram(DT.ImageNd(vals),DI.CubicalFiltration())
+        @test typed.meta.local_reduction===:relative_tables
+    end
+    # Constant package tables are read-only during independent requests.
+    before=deepcopy(OP._CUBICAL_LOCAL_TABLES)
+    serial=[TamerOp.cubical_persistence(reshape(mod.(1:27,k),3,3,3)) for k in 2:5]
+    tasks=[Threads.@spawn TamerOp.cubical_persistence(reshape(mod.(1:27,k),3,3,3)) for k in 2:5]
+    for (task,expected) in zip(tasks,serial)
+        actual=fetch(task)
+        @test actual.finite_by_dim==expected.finite_by_dim
+        @test actual.essential_by_dim==expected.essential_by_dim
+    end
+    for (a,b) in zip(before,OP._CUBICAL_LOCAL_TABLES),name in fieldnames(typeof(a))
+        @test getfield(a,name)==getfield(b,name)
+    end
+end
+
+# Relative-pair oracles form the quotient separately at each scale. In
+# particular they do not reduce a mapping cone or call production pair helpers.
+function _a118_quotient(G, selected, agrades, t, order, p)
+    ref = _a112_reference(G)
+    active(g) = order === :sublevel ? g <= t : g >= t
+    ks = [findall(active,g) for g in ref.grades]
+    as = [selected[d][findall(active,agrades[d])] for d in eachindex(selected)]
+    qs = [setdiff(ks[d],as[d]) for d in eachindex(ks)]
+    ds = [mod.(BigInt.(ref.boundaries[d][qs[d],qs[d+1]]),p) for d in eachindex(ref.boundaries)]
+    return qs,ds
+end
+function _a118_rank_oracle(G, selected, agrades, s, t, order, p, dim)
+    src,sd = _a118_quotient(G,selected,agrades,s,order,p)
+    dst,td = _a118_quotient(G,selected,agrades,t,order,p)
+    d=dim+1
+    z=_a112_cycles(dim==0 ? zeros(Int,0,length(src[d])) : sd[dim],p)
+    mapped=zeros(BigInt,length(dst[d]),size(z,2))
+    for (j,id) in enumerate(src[d])
+        i=findfirst(==(id),dst[d]); i===nothing || (mapped[i,:]=z[j,:])
+    end
+    b=d==length(dst) ? zeros(Int,length(dst[d]),0) : td[d]
+    return _a112_rank(hcat(b,mapped),p)-_a112_rank(b,p)
+end
+_a118_ints(M) = map(x->x.val,Matrix(M))
+function _a118_check_pair(G,selected,agrades,field,order;levels)
+    p=field.p
+    pair=OP.filtered_pair(G,selected;grades=agrades,field,order)
+    diagram=OP.persistence_diagram(pair)
+    @test OP.check_persistence_diagram(diagram;throw=true).valid
+    @test OP.check_filtered_pair(pair;throw=true).valid
+    hs=[OP.relative_homology(pair;scale=t) for t in levels]
+    for (i,h) in enumerate(hs)
+        c=h.complex
+        q,diffs=_a118_quotient(G,selected,agrades,levels[i],order,p)
+        @test CC.dimensions(c)==length.(q)
+        for dim in 0:length(selected)-1
+            @test OP.relative_cells(c;dim).cell_indices==Tuple(q[dim+1])
+            boundary=OP.relative_boundary(c;dim)
+            dim==0 || @test _a118_ints(boundary)==diffs[dim]
+            @test all(iszero,boundary*OP.relative_boundary(c;dim=dim+1))
+            z=CC.basis(h;dim)
+            @test all(iszero,boundary*z)
+            b=_a118_ints(OP.relative_boundary(c;dim=dim+1))
+            @test _a112_rank(hcat(b,_a118_ints(z)),p)-_a112_rank(b,p)==size(z,2)
+            maps=OP.relative_maps(h;dim)
+            @test all(iszero,maps.projection*maps.inclusion)
+            @test all(iszero,maps.connecting*maps.projection)
+            @test _a112_rank(_a118_ints(maps.inclusion),p)+_a112_rank(_a118_ints(maps.projection),p)==CC.dimensions(h;part=:ambient)[dim+1]
+            @test _a112_rank(_a118_ints(maps.projection),p)+_a112_rank(_a118_ints(maps.connecting),p)==CC.dimensions(h)[dim+1]
+            if dim>0
+                lower=OP.relative_maps(h;dim=dim-1)
+                @test all(iszero,lower.inclusion*maps.connecting)
+                @test _a112_rank(_a118_ints(lower.inclusion),p)+_a112_rank(_a118_ints(maps.connecting),p)==CC.dimensions(h;part=:subcomplex)[dim]
+            end
+            if dim==length(selected)-1
+                @test _a112_rank(_a118_ints(maps.inclusion),p)==CC.dimensions(h;part=:subcomplex)[dim+1]
+            end
+        end
+    end
+    for i in eachindex(levels),j in i:length(levels),dim in 0:length(selected)-1
+        src,dst=hs[i],hs[j]
+        expected=_a118_rank_oracle(G,selected,agrades,levels[i],levels[j],order,p,dim)
+        @test _a21_barcode_map_rank(diagram,dim,levels[i],levels[j],order)==expected
+        m=OP.relative_structure_map(src,dst;dim)
+        @test _a112_rank(_a118_ints(m),p)==expected
+        sm,tm=OP.relative_maps(src;dim),OP.relative_maps(dst;dim)
+        km=OP.relative_structure_map(src,dst;dim,part=:ambient)
+        am=OP.relative_structure_map(src,dst;dim,part=:subcomplex)
+        @test km*sm.inclusion==tm.inclusion*am
+        @test m*sm.projection==tm.projection*km
+        if dim>0
+            @test OP.relative_structure_map(src,dst;dim=dim-1,part=:subcomplex)*sm.connecting==tm.connecting*m
+        end
+        for part in (:ambient,:subcomplex,:relative)
+            cm=OP.relative_structure_map(src.complex,dst.complex;dim,part)
+            if dim>0
+                @test OP.relative_boundary(dst.complex;dim,part)*cm==
+                    OP.relative_structure_map(src.complex,dst.complex;dim=dim-1,part)*OP.relative_boundary(src.complex;dim,part)
+            end
+        end
+    end
+    return pair,diagram,hs
+end
+
+@testset "A118 hand-derived filtered pairs and exact-sequence signs" begin
+    for field in (CM.F2(),CM.F3(),CM.Fp(101)), order in (:sublevel,:superlevel)
+        orient(x)=order===:sublevel ? x : -x
+        G=DT.GradedComplex([[7,7],[7]],[sparse(reshape([-1,1],2,1))],[(orient(0),),(orient(0),),(orient(1),)])
+        selected=[[1,2],Int[]]; ag=[[orient(0),orient(0)],Int[]]
+        pair,diagram,hs=_a118_check_pair(G,selected,ag,field,order;levels=orient.([-1,0,1,2]))
+        @test OP.essential_births(diagram;dim=1)==[orient(1)]
+        @test isempty(OP.finite_intervals(diagram;dim=0))
+        @test OP.provenance(diagram).construction.effective===:quotient
+        maps=OP.relative_maps(hs[3];dim=1)
+        @test _a118_ints(maps.connecting)==reshape([field.p-1,1],2,1)
+        # Cells enter A separately; the edge is finally identified with zero.
+        selected=[[1,2],[1]]; ag=[orient.([2,3]),[orient(4)]]
+        _,d,_=_a118_check_pair(G,selected,ag,field,order;levels=orient.([-1,0,1,2,3,4,5]))
+        @test OP.finite_intervals(d;dim=0)==[(orient(0),orient(1)),(orient(0),orient(2))]
+        @test OP.finite_intervals(d;dim=1)==[(orient(3),orient(4))]
+        @test OP.provenance(d).construction.effective===:mapping_cone
+        # A filled triangle relative to its oriented boundary has one H2 class.
+        B1=[-1 -1 0;1 0 -1;0 1 1]; B2=reshape([1,-1,1],3,1)
+        disk=DT.GradedComplex([[1,2,3],[4,5,6],[7]],sparse.([B1,B2]),[(orient(v),) for v in [0,0,0,1,1,1,3]])
+        pair,d,hs=_a118_check_pair(disk,[[1,2,3],[1,2,3],Int[]],[orient.([0,0,0]),orient.([1,1,1]),Int[]],field,order;levels=orient.([-1,0,1,2,3,4]))
+        @test OP.essential_births(d;dim=2)==[orient(3)]
+        @test all(isempty,d.finite_by_dim)
+        h=hs[5]; delta=OP.relative_maps(h;dim=2).connecting
+        @test CC.basis(h;dim=1,part=:subcomplex)*delta==CM.coeff_type(field).(B2)
+        @test OP.provenance(pair).subcomplex_cell_ids==((1,2,3),(4,5,6),())
+    end
+end
+
+@testset "A118 empty equal characteristic-dependent and randomized pairs" begin
+    rng=MersenneTwister(118)
+    for p in (2,3,101), order in (:sublevel,:superlevel), trial in 1:3
+        field=CM.Fp(p); orient(x)=order===:sublevel ? x : -x
+        G,_=_a112_simplicial_fixture(rng,order)
+        n=length(G.cells_by_dim)
+        empty_pair=OP.filtered_pair(G,[Int[] for _ in 1:n];field,order)
+        abs=OP.persistence_diagram(G;field,order); rel=OP.persistence_diagram(empty_pair)
+        @test rel.finite_by_dim==abs.finite_by_dim
+        @test rel.essential_by_dim==abs.essential_by_dim
+        allcells=[collect(eachindex(cs)) for cs in G.cells_by_dim]
+        equal=OP.persistence_diagram(OP.filtered_pair(G,allcells;field,order))
+        @test all(isempty,equal.finite_by_dim) && all(isempty,equal.essential_by_dim)
+        # A skeleton is a coordinate subcomplex even after basis changes.
+        cutoff=rand(rng,0:3)
+        selected=[d<=cutoff+1 ? copy(allcells[d]) : Int[] for d in 1:n]
+        # Dimension-separated delayed grades guarantee a nested pair.
+        ag=[orient.(rand(rng,(3d+3):(3d+4),length(ids))) for (d,ids) in enumerate(selected)]
+        # Two scales per successive topological event suffice here; hand
+        # fixtures above also test every event exactly and on both sides.
+        levels=orient.([-1,3,6,9,12,16])
+        _a118_check_pair(G,selected,ag,field,order;levels)
+    end
+    for p in (2,3,101,9223372036854775783)
+        field=CM.Fp(p)
+        # A selected lower cell has characteristic-dependent ambient incidence.
+        G=DT.GradedComplex([[1],[2]],[sparse(reshape([2],1,1))],[(0,),(1,)])
+        _a118_check_pair(G,[[1],Int[]],[[2],Int[]],field,:sublevel;levels=[0,1,2,3])
+        # Negative incidence in the cone must not overflow at typemin(Int).
+        G=DT.GradedComplex([[1],[2]],[sparse(reshape([typemin(Int)],1,1))],[(0,),(1,)])
+        _a118_check_pair(G,[[1],[1]],[[2],[3]],field,:sublevel;levels=[0,1,2,3,4])
+    end
+end
+
+@testset "A118 input contracts exact grades provenance and public surface" begin
+    field=CM.F3()
+    G=DT.GradedComplex([[10,10],[10]],[sparse(reshape([-1,1],2,1))],[(0//1,),(0//1,),(1//3,)])
+    pair=TamerOp.filtered_pair(G,[[2,1],Int[]];grades=[[2//3,1//3],Rational{Int}[]],field)
+    @test pair isa TamerOp.FilteredPair
+    @test OP.check_filtered_pair(pair).valid
+    @test OP.filtered_pair_summary(pair).ambient_cells==(2,1)
+    @test CC.describe(OP.FilteredPairValidationSummary(pair)).valid
+    @test OP.FilteredPairValidationSummary(pair)==OP.FilteredPairValidationSummary(pair)
+    @test hash(OP.FilteredPairValidationSummary(pair))==hash(OP.FilteredPairValidationSummary(pair))
+    @test occursin("FilteredPair",sprint(show,pair))
+    @test TOA.relative_homology===OP.relative_homology
+    h=TOA.relative_homology(pair;scale=2//3)
+    @test CC.dimensions(h)==[0,1]
+    @test TOA.basis(h;dim=1)==CC.basis(h;dim=1)
+    @test TOA.basis(h;dim=0,part=:subcomplex)==CC.basis(h;dim=0,part=:subcomplex)
+    @test OP.relative_cells(h.complex;dim=0,part=:subcomplex).cell_grades==(1//3,2//3)
+    @test occursin("RelativeHomology",sprint(show,h))
+    @test occursin("RelativeComplex",sprint(show,h.complex))
+    @test CC.describe(h).field==field
+    @test FF.field(h)==field
+    @test OP.provenance(h).scale==2//3
+    d=TamerOp.persistence_diagram(pair)
+    @test OP.provenance(d).homology===:relative
+    @test OP.essential_births(d;dim=1)==[2//3]
+    mktempdir() do dir
+        path=joinpath(dir,"pair.json")
+        TamerOp.save_persistence_diagram_json(path,d)
+        restored=TamerOp.load_persistence_diagram_json(path)
+        @test OP.provenance(restored).pair==OP.provenance(d).pair
+        @test restored.finite_by_dim==d.finite_by_dim
+    end
+    @test_throws ArgumentError OP.filtered_pair(G,[[3],Int[]])
+    @test_throws ArgumentError OP.filtered_pair(G,[[1,1],Int[]])
+    @test_throws ArgumentError OP.filtered_pair(G,Any[[true],Int[]])
+    @test_throws ArgumentError OP.filtered_pair(G,[Int[],[1]])
+    @test_throws ArgumentError OP.filtered_pair(G,[[1,2],[1]];grades=[[1,1],[0]])
+    @test_throws ArgumentError OP.filtered_pair(G,[[1],Int[]];grades=[[-1],Int[]])
+    @test_throws ArgumentError OP.filtered_pair(G,[[1]])
+    @test_throws ArgumentError OP.filtered_pair(G,[[1],Int[]];grades=[[Inf],Int[]])
+    @test_throws ArgumentError OP.relative_homology(pair;scale=Inf)
+    @test_throws ArgumentError OP.relative_boundary(h.complex;dim=-1)
+    @test_throws ArgumentError CC.basis(h;dim=true)
+    @test_throws ArgumentError CC.dimensions(h;part=:typo)
+    @test_throws ArgumentError OP.relative_structure_map(h,OP.relative_homology(pair;scale=0);dim=1)
+    other=OP.relative_homology(OP.filtered_pair(G,[Int[],Int[]];field);scale=1)
+    @test_throws ArgumentError OP.relative_structure_map(h,other;dim=1)
+    # Input mutation cannot change the pair, nor later pair mutation a snapshot.
+    G.grades[1]=(9//1,)
+    @test OP.check_filtered_pair(pair).valid
+    pair.grades[1][1]=-1//1
+    @test !OP.check_filtered_pair(pair).valid
+    @test OP.provenance(h).subcomplex_grades==((1//3,2//3),())
+    @test_throws ArgumentError OP.persistence_diagram(pair)
+    emptyG=DT.GradedComplex([Int[],Int[]],[spzeros(Int,0,0)],Tuple{Rational{Int}}[])
+    empty=OP.filtered_pair(emptyG,[Int[],Int[]];field)
+    @test CC.dimensions(OP.relative_homology(empty;scale=0))==[0,0]
+    @test all(isempty,OP.persistence_diagram(empty).essential_by_dim)
+end
+
+@testset "A118 zero-degree pairs exact scalar types and snapshot composition" begin
+    for grades in ((big(2)^100,big(2)^100+1), (1//3,2//3),
+                   setprecision(BigFloat,256) do; (BigFloat(1)/3,BigFloat(2)/3); end)
+        a,b=grades
+        G=DT.GradedComplex([[4]],SparseMatrixCSC{Int,Int}[],[(a,)])
+        pair=OP.filtered_pair(G,[[1]];grades=[[b]],field=CM.F3())
+        d=OP.persistence_diagram(pair)
+        @test OP.finite_intervals(d;dim=0)==[(a,b)]
+        @test typeof(first(OP.finite_intervals(d;dim=0))[1])===typeof(a)
+        @test length(d.finite_by_dim)==1
+        @test isempty(OP.essential_births(d;dim=0))
+        snapshots=[OP.relative_homology(pair;scale=t) for t in (a,a,b)]
+        @test CC.dimensions.(snapshots)==[[1],[1],[0]]
+        @test size(OP.relative_maps(snapshots[1];dim=0).connecting)==(0,1)
+        f=OP.relative_structure_map(snapshots[1],snapshots[2];dim=0)
+        g=OP.relative_structure_map(snapshots[2],snapshots[3];dim=0)
+        @test g*f==OP.relative_structure_map(snapshots[1],snapshots[3];dim=0)
+        @test OP.relative_complex(snapshots[1])===snapshots[1].complex
+    end
+    G=DT.GradedComplex([[4]],SparseMatrixCSC{Int,Int}[],[(0,)])
+    @test_throws ArgumentError OP.filtered_pair(G,[[1]];grades=[[1//3]])
+    # Actual Boolean storage reaches the validator without vector promotion.
+    @test_throws ArgumentError OP.filtered_pair(G,[Bool[true]])
+    interval=DT.GradedComplex([[1,2],[3]],[sparse(reshape([-1,1],2,1))],[(0,),(0,),(1,)])
+    h=OP.relative_homology(OP.filtered_pair(interval,[[1,2],Int[]];field=CM.Fp(101));scale=1)
+    tasks=[Threads.@spawn OP.relative_maps(h;dim=1) for _ in 1:8]
+    expected=OP.relative_maps(h;dim=1)
+    @test all(task->fetch(task)==expected,tasks)
 end

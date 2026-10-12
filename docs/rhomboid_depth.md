@@ -5,7 +5,7 @@ If only a few coverage depths matter, a bounded construction can avoid storing
 the full range. It must still retain the cells that connect features at the
 chosen depths. This guide explains that boundary issue and why the resulting
 finite module has the required spaces and maps within its window. Start with
-the [multicover guide](multicover.md) for the radius/depth interpretation and
+the [multicover guide](tutorials/multicover.ipynb) for the radius/depth interpretation and
 the available construction methods.
 
 `RhomboidFiltration(depth_range=(lo, hi))` represents the inclusive integer
@@ -167,7 +167,7 @@ equality checks between enumeration backends. Label first-operation and warm
 timings separately, and include ordinary package loading when measuring a
 fresh process. Julia allocation counters exclude CDD/GMP's native working
 memory. Compatible requests can reuse compiled geometry through the
-[session cache](multicover.md#reusing-exact-geometry).
+[session cache](tutorials/multicover.ipynb#reusing-exact-geometry).
 
 A depth window and radius cutoff can produce an empty complex. Empty graded
 and simplex-tree stages retain their two parameter coordinates and exact

@@ -1,5 +1,10 @@
 # Vietoris–Rips persistence: TamerOp and Ripser.py
 
+This page measures **Ripser.py**, whose Python API uses a modified C++ engine.
+The separate [original C++ Ripser report](ripser_cpp.md) measures larger,
+barcode-only requests through upstream Ripser's command-line interface.
+Its results and scope are distinct from the measurements below.
+
 **Final comparison v1, 2026-10-05.** Both programs completed all **37 requests**
 with verified outputs: 31 previously studied development requests and six
 evaluation cases reserved before optimization. TamerOp's strongest measured
@@ -100,7 +105,7 @@ labeled development aggregate. They are not a random sample of user workloads.
 
 All ratios divide Ripser.py time by TamerOp time; values above one favor TamerOp.
 
-| Development aggregate phase | Ripser/TamerOp | Paired-pass range |
+| Development aggregate phase | Ripser.py/TamerOp | Paired-pass range |
 | :--- | ---: | ---: |
 | Native construction | 4.11 | 3.51–5.23 |
 | Complete query | 1.32 | 1.18–1.49 |
@@ -124,7 +129,7 @@ means points or vertices, with the selected landmark count shown separately.
 The interval count includes all returned degrees and essential bars, excluding
 zero-length intervals. Retained cocycles are computed inside the query timer.
 
-| Request | Input size | Field / through | Cocycles | Intervals | TamerOp (ms) | Ripser.py (ms) | Ripser/TamerOp |
+| Request | Input size | Field / through | Cocycles | Intervals | TamerOp (ms) | Ripser.py (ms) | Ripser.py/TamerOp |
 | :--- | ---: | :--- | :--- | ---: | ---: | ---: | ---: |
 | Circle (point cloud) | 96 | F2 / H1 | No | 97 | 5.81 | 20 | 2.93 |
 | Sphere (point cloud) | 64 | F3 / H2 | Yes | 81 | 13.8 | 41.8 | 2.84 |
@@ -184,7 +189,7 @@ landmark metric. No code was tuned after seeing their outcomes. Relabeling
 tests sensitivity to vertex order; it does not introduce a new module type.
 They are a small separate generalization check, not evidence about all inputs.
 
-| Request | Input size | Field / through | Cocycles | Intervals | TamerOp (ms) | Ripser.py (ms) | Ripser/TamerOp |
+| Request | Input size | Field / through | Cocycles | Intervals | TamerOp (ms) | Ripser.py (ms) | Ripser.py/TamerOp |
 | :--- | ---: | :--- | :--- | ---: | ---: | ---: | ---: |
 | Jittered circle (point cloud) | 512 | F2 / H1 | Yes | 513 | 854 | 3,510 | 4.13 |
 | Random planar (distances) | 128 | F101 / H2 | No | 159 | 25.4 | 127 | 4.83 |

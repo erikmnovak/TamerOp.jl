@@ -294,15 +294,18 @@ the scoped study is complete.
 
 ## Planned competitor comparisons
 
-Roadmap recorded 2026-09-30. **All 21 libraries below are in the comparison
-programme**; the status below distinguishes completed studies from planned work.
+Roadmap recorded 2026-09-30, expanded 2026-10-06. **All 22 libraries below are
+in the comparison programme**; the status below distinguishes completed studies
+from planned work. CubicalRipser joins as C22; its fixed official study is now closed.
 Each comparison should help us understand a part of the finite-encoding workflow: constructing a
 module, retaining and analyzing its maps, or obtaining an invariant or figure.
 Specialized tools also give useful comparisons for direct filtration and
 barcode tasks that do not require constructing an encoding.
 
-The table preserves the order of **estimated remaining work, from least to
-most**, as of 2026-09-30, before QPA v1 and PHAT v2 were completed. This includes
+For the original 21 entries, the table preserves the order of **estimated
+remaining work, from least to most**, as of 2026-09-30, before QPA v1 and PHAT v2
+were completed. C22 is listed first by execution priority and has no historical
+effort rank. The original estimates include
 adapters, independent correctness checks, warmup/reset verification, timing and
 reporting for the intended overlap. It credits existing work rather than
 estimating every study from scratch. It is a planning judgment, not a measured
@@ -311,11 +314,11 @@ effort ranking or a ranking of importance, speed, or total library size.
 Positions within a few places of one another are approximate. Unknown TamerOp
 optimization work is not predictable from the competitor's feature list. Each
 study still needs its bounded charter; these ranks do not set case counts,
-machine-hour budgets or deadlines. The C01–C21 identifiers stay fixed when the
+machine-hour budgets or deadlines. The C01–C22 identifiers stay fixed when the
 effort order changes.
 
-**Status (2026-10-05):** C01 (QPA v1), C18 (PHAT v2) and C14 (Ripser.py v1)
-are complete at their fixed scopes. The [PHAT report](benchmarks/phat.md)
+**Status (2026-10-06):** C01 (QPA v1), C18 (PHAT v2), C14 (Ripser.py v1),
+and the separate original C++ Ripser companion study are complete at their fixed scopes. The [PHAT report](benchmarks/phat.md)
 covers 48 medium/large inputs across sixteen structural variants. The
 [Ripser.py report](benchmarks/ripser.md) covers 31 development requests and six
 separately reported reserved evaluation cases, with four paired process passes.
@@ -324,11 +327,17 @@ and credit compatible evidence before deciding what remains to run. The scope
 column identifies candidate common requests, not a completed certification that
 every listed operation is already comparable in both implementations.
 
+**Latest completed comparison: [C22, CubicalRipser](benchmarks/cubicalripser.md).**
+Its image/volume-to-barcode workflow tests a cubical specialist directly. The
+completed PHAT supplied-matrix comparison and both Rips reports retain their
+original scopes; none substitutes for this new study.
+
 | Effort rank | ID | Library | Intended comparison scope | What must be aligned before timing |
 | ---: | --- | --- | --- | --- |
+| — | C22 | [CubicalRipser / cripser](https://github.com/shizuo-kaji/CubicalRipser) | Ordinary cubical persistence over F₂ from scalar arrays; vertex-valued and top-cell filtrations, with separately matched representative-cycle requests where supported by the pinned release. **Official study closed: 48 large requests, 864 accepted samples and exact barcode agreement; see the [report](benchmarks/cubicalripser.md).** | Match V/T construction, dimension range, boundaries, array axes, orientation, essential and zero-length bars. Begin with 2D and 3D vertex/top-cell input; A113 supplies the higher-dimensional top-cell construction, independently checked before cross-tool qualification. |
 | 1 | C18 | [PHAT](https://bitbucket.org/phat-code/phat/) | Supplied filtered boundary matrices to complete ordinary barcodes over F₂. | Same matrix and ordering; match finite and essential intervals, tied grades, and all supplied homology degrees; charge native and output conversion. |
 | 2 | C14 | [Ripser.py](https://ripser.scikit-tda.org/en/latest/) | Vietoris–Rips persistence from point clouds and dense/sparse distances, weighted vertices, landmark selection and supported cocycles. The selected comparator uses the Ripser engine through Ripser.py's public interface. | Same metric, threshold, field and homology degrees; keep barcode-only and cocycle-retaining requests separate. The intended final comparison includes supported representative outputs, matched by field, scale and class checks rather than literal coefficient equality. A barcode-only request does not require a full encoding. |
-| 3 | C16 | [PersistenceDiagrams.jl](https://mtsch.github.io/PersistenceDiagrams.jl/stable/) | Diagram distances/matchings, landscapes, images, Betti curves and plotting. | Same diagrams, endpoint/essential-bar conventions, feature parameters and sampling grid. |
+| 3 | C16 | [PersistenceDiagrams.jl](https://mtsch.github.io/PersistenceDiagrams.jl/stable/) | **Development pilot completed:** distances/full bottleneck matching, sampled landscapes/silhouettes, and matched Gaussian images; 35 paired cases verified and one explicit memory-limit outcome. Betti curves and plotting remain candidate extensions. See the initial C16 charter below. | Same diagrams, endpoint/essential-bar conventions, feature parameters and sampling grid; both Julia tools exclude compilation and reset mathematical work. |
 | 4 | C04 | [FlangePresentations.jl](https://gitlab.com/flenzen/flangepresentations.jl) | Construct flat-injective presentations of finite-dimensional persistence modules from free resolutions. | Match supported module classes and starting information; verify represented spaces and maps, and charge any required resolution construction. |
 | 5 | C07 | [mpfree](https://alexanderrolle.github.io/) | Bifiltered chain complexes to minimal presentations of persistent homology. | Match homology degree, coefficient field, grading and minimality; validate the presented module. |
 | 6 | C08 | [2pac](https://gitlab.com/flenzen/2pac) | Two-parameter persistent cohomology and supported presentation/resolution outputs. | Fix homology/cohomology conversion, grading, field and requested resolution range. |
@@ -372,6 +381,341 @@ they do not assume that TamerOp already implements all those outputs or authoriz
 new mathematical features solely to make a comparison possible. If no equivalent
 request exists, record the capability difference and the supported subset rather
 than treating missing functionality as an indefinitely large benchmark task.
+
+### PersistenceDiagrams.jl: C16 harness and initial charter
+
+The next comparison concerns **analysis of supplied barcodes**, after the
+filtration-to-barcode work measured against PHAT, Ripser and CubicalRipser.
+The local harness pins the unchanged registered PersistenceDiagrams.jl 0.9.10
+release. It uses native diagram constructors and public query interfaces in
+separate Julia processes. The correctness qualification, protocol smoke and 36-case development pilot
+are complete. The pilot produced 35 verified paired comparisons; TamerOp reached
+the 4 GiB process limit during the nested 4,096-bar curve case in both passes.
+All emitted answers passed the declared checks, with zero timed compilation.
+PersistenceDiagrams was faster on every completed case. Early measurements
+remain shared-host diagnostics; supplemental family blocks followed quiet-host
+confirmation. Major TamerOp query/allocation costs need profiling before formal
+freeze and reserved evaluation; a formal performance report remains.
+
+Three complete requests define the initial scope:
+
+1. Bottleneck distance with a complete matching, and Wasserstein distances
+   with outer exponents 1 and 2 and ground norm L-infinity.
+2. The first k sampled landscapes and an unnormalized sum-of-tents silhouette
+   on identical sample points.
+3. Gaussian persistence images with lifetime weights and identical four-corner
+   averages. TamerOp's public image routine samples the corner grid; the
+   required normalization and averaging are charged to its query.
+
+These conventions matter: the libraries' image and silhouette defaults differ.
+A corner average is not an exact pixel integral. The competitor's default
+bottleneck matching display lists only maximal-cost pairs; the harness requests
+its complete matching through the public accessor. Different optimal witnesses
+are accepted only after checking coverage, multiplicity and achieved cost.
+
+The bounded manifest contains **37 correctness controls, 36 development
+requests and 9 reserved requests**. Development covers nested, clustered,
+near-diagonal and repeated intervals, with three sizes per request family.
+Distance inputs have 16/64/192 bars on the left and three-quarters as many on
+the right; curve inputs have 64/512/4096 bars; image inputs have 32/128/512.
+Sampling resolution also grows. Reserved inputs add short/long mixtures,
+staircases and independent clustered instances. Reserve their execution until
+candidate evaluation. Pilot calibration may set one bounded size adjustment
+before formal freeze; it must retain adverse cases and timeouts.
+
+Both Julia tools warm methods on separate inputs, discard results, reconstruct
+native diagrams, and verify reset state. Each construction and query timing
+must report zero compilation and recompilation counters. The harness keeps
+construction, query and their sum distinct, alongside allocations, retained
+objects and process RSS. It verifies exact small assignments independently,
+checks feature formulas directly, and compares all outputs across tools.
+Defaults limit a case including warmup to 180 seconds, a tool process to 30
+minutes, and observed process RSS to 4 GiB. These are qualification/pilot limits;
+formal passes, a total campaign budget and quiet-host conditions must be frozen
+before publication measurements.
+
+**A retained qualification failure:** PersistenceDiagrams.jl 0.9.10 returns zero
+for an empty first diagram against a nonempty second diagram, including
+bottleneck and Wasserstein requests. Reversing the arguments gives the expected
+nonzero answers. A second control with an empty first diagram and one essential
+bar also exposes the Wasserstein failure (bottleneck correctly returns infinity).
+The harness records these exact upstream failures and produces
+no timing ratio for them; neither swapping arguments nor patching the competitor
+is permitted. The 45 planned performance requests are nonempty. This narrower
+scope can be qualified without representing the empty-input behavior as correct.
+
+Betti curves, Wasserstein matching witnesses, entropy curves, plotting and MLJ
+pipelines remain outside this initial timing charter until their actual common
+outputs are qualified. A global barcode entropy is not an entropy curve, and
+plotting coverage needs a display contract. These exclusions do not authorize
+adding unrelated features solely to imitate the competitor. Close C16 at the
+frozen qualified scope after addressing feasible major TamerOp bottlenecks,
+running reserved evaluation and publishing both favorable and unfavorable results.
+
+### CubicalRipser: completed comparison
+
+**C22, official comparison closed 2026-10-11.** Compare with the
+[Shizuo Kaji CubicalRipser distribution](https://github.com/shizuo-kaji/CubicalRipser),
+which provides the Python package `cripser` and C++ executables. It specializes
+in scalar arrays rather than the distance-based Rips requests in C14. The
+[paper by Kaji, Sudo and Ahara](https://arxiv.org/abs/2005.12692) describes the
+image/volume setting. Current repository documentation is an overlap inventory,
+not certification that every feature is in the release selected for timing.
+
+The initial shared question is: how quickly can each tool produce the complete
+ordinary barcode of the same cubical filtration? Use TamerOp's direct cubical
+entrypoint; constructing an encoding is not part of this requested answer.
+
+| Initial lane | Meaning of the array entries | Requested barcode |
+| --- | --- | --- |
+| 2D V-construction | Vertex values; a cell enters at the maximum of its vertices | H₀–H₁ |
+| 2D T-construction | Square values; a face enters at the minimum of incident squares | H₀–H₁ |
+| 3D V-construction | Vertex values on a volume | H₀–H₂ |
+| 3D T-construction | Voxel values; a face enters at the minimum of incident voxels | H₀–H₂ |
+
+These are sublevel conventions. Start over F₂ with nonperiodic boundaries;
+match superlevels by explicit sign and endpoint conversion. V and T give
+different filtrations, even for the same numeric array. TamerOp supports both
+conventions in arbitrary positive array dimension; A113 adds top-cell input
+with exact grades, periodic axes and construction budgets. Its tensor-complex
+oracles do not replace qualification against the pinned CubicalRipser release.
+Use 1D and 4D examples in both conventions as bounded correctness/feasibility checks before
+deciding whether they justify scored cases. Periodicity, other fields, zigzags
+and differentiable training are outside the initial scope unless separately
+qualified; missing overlap receives no speed ratio.
+
+The local harness now pins **cripser 0.0.36**, built from unchanged source in
+Release mode, and snapshots the TamerOp candidate. All **56 standard full-barcode
+controls** agree with an independent cubical rank oracle. Two process passes
+also verify **48 compiled, uncached smoke samples** across the four barcode
+lanes. These tiny shared-machine checks establish harness operation, not a
+performance conclusion.
+
+Two optional routes remain excluded. The pinned build's `top_dim=True` route
+fails nonzero 2D/3D cavity probes (empty V answers and native T failures), while
+ordinary full-barcode calls pass. Separately, 12 of 24 representative controls
+fail the stronger interval-generator lifetime condition in CubicalRipser;
+valid birth cycles need not vanish at their attached finite death. This is an
+output-contract distinction, not a failure of the verified barcodes. The
+harness blocks all representative timing requests pending an explicitly
+qualified common contract. It preserves these outcomes without modifying the
+competitor.
+
+The **12-request pilot has now been rerun in both process orders** after correcting
+the vertex construction estimate. All eight selected barcode requests match;
+four representative requests remain excluded. All **96 timed samples** verify,
+with zero reported Julia compilation or recompilation. The same fixtures,
+3 GiB construction allowance and 6 GiB RSS cap remain in place. The revised
+candidate changes only the cubical construction guard: sparse topology, grades,
+incidences and assembly workspace replace hypothetical dense boundary matrices.
+The 56 independent barcode controls and 8,607 focused test assertions pass.
+
+The October 7 profile attributed about 77–80% of sampled 48³ top-cell execution
+and 89% of allocation traffic to topology and sparse-boundary construction.
+The October 9 follow-up replaces per-cell dictionaries with arithmetic grid
+indices, allocates exact-size cell and sparse arrays, and computes face plans
+once per orientation. Cell order, integer boundary signs, periodic cancellation,
+source identities and cache behavior are preserved; the dedicated 2D route is
+unchanged.
+
+The cumulative constructor experiments and complete-query comparisons support
+retaining the change. Across the four fixed 3D requests, the fresh-process median speed ratios
+range from **1.2–3.8×**, with fresh mathematics after compilation. These
+shared-host point estimates have substantial between-process variation.
+Two process passes per library version, interleaved baseline–candidate–candidate–baseline
+and with reversed tool order, verify **192 accepted samples** in total. All
+56 independent barcode qualification controls and **29,333 focused assertions**
+pass. Optional representative and top-degree lanes retain their prior exclusions.
+CubicalRipser remains substantially faster on the large 3D requests; the exact
+times and allocation measurements remain in the local October 9 construction
+study. No competitor source or resource allowance was changed.
+A further 48 verified, compilation-free samples tightly alternate the two
+constructors inside the same public pipeline. They support the large 3D gains
+(about 3.3× for top cells and 1.9× for vertices), but the small noisy vertex case
+has no dependable gain. The unchanged 2D route retains a roughly 10% slowdown
+on the large vertex control in this diagnostic; preserve it and check under
+quieter conditions before making precise performance claims. This auxiliary
+check uses a benchmark-only dispatcher and does not replace the original study.
+
+The subsequent [grid-native cubical path](ordinary_persistence.md#cubical-inputs-and-periodicity)
+removes explicit boundary construction for nonperiodic 1D-3D F2 barcode requests.
+Exact recursive grades, primal/dual union-find and arithmetic square reduction
+replace the general-complex pipeline; advanced requests retain their general
+route, with direct exact vertex grading. All 56 standard barcode controls and
+50,050 focused assertions pass. The same eight requests verify in 192 accepted,
+compilation-free samples, with **2.69-24.42x** baseline speedups and **72.7-95.1%**
+less allocation traffic. The 48-cubed vertex query falls from 1.18 s to 65.6 ms;
+top cells fall from 313 ms to 72.3 ms. Comparisons are now mixed: noisy 24-cubed
+cases favor TamerOp, large 2D vertex input is similar, and smooth 48-cubed cases
+still favor CubicalRipser by about 1.43-1.55x. Shared-host variation and existing
+optional-route exclusions remain visible. No size endpoint or budget changed.
+
+The pairing/traversal follow-up retains H0 forest reuse and direct linear cell traversal; two tested local-pair shortcuts were rejected on complete-query performance. 52,134 focused assertions and all 56 standard barcode controls pass. 3D allocation traffic falls 8.7-32.4%. The 192-sample public comparison is inconclusive under substantial host variation: every case reverses from slower to faster between process pairs, with aggregate before/after ratios 0.77-1.40x. A separate 160-sample paired diagnostic finds 1.15-1.55x ratios for 3D, with similar CPU-time ratios and no consistent cleanup regression. Preserve both sets of evidence; quieter public-query confirmation remains open.
+
+The October 10 H1/storage follow-up retains direct handling of square boundaries
+with unused pivots and compact signed parent/size metadata. Fused storage, a
+singleton-cancellation prepass and extra dispatch helpers were rejected for
+lack of consistent additional benefit. All 51,765 focused mathematical/contract
+assertions and 443 source guards pass. In 160 compilation-free public-query
+samples, full barcodes agree; the four 3D controls improve 1.16-1.45x, with large
+vertex/top-cell queries falling from 54.25/65.24 ms to 40.01/45.06 ms. Allocation
+traffic falls 11.2-13.2% on large 3D controls and 28.7-33.1% in 2D, but rises
+1.9-8.0% on small 3D controls. The noisy 2D top-cell aggregate is about 4% slower;
+other 2D timing gains vary substantially by process. These are shared-host
+before/after diagnostics, without a new CubicalRipser run. A fuller local-pairing
+scheme would require its own ordering/correctness investigation; this work does
+not establish that every remaining opportunity is minor.
+
+The October 11 investigation retains implicit square boundaries and equal-grade
+singleton cancellation within the existing H1 sweep. It rejects the separate
+primal/dual pre-sort contraction pass: reduced sort work did not consistently
+repay the extra scans. On the same four 3D controls, allocation traffic falls
+26.9-30.0%. The final alternating public-query check finds about an 8% gain on
+noisy top-cell input and roughly unchanged other 3D times; the unchanged large
+2D top-cell route measures about 9% slower. Earlier separate-process public
+measurements include three 3D regressions, while fixed-core internal tests show
+1.10-1.14x gains. Preserve all of these shared-host diagnostics; do not present
+the internal gains as uniform public speedups. All 320 public samples agree,
+9,532 focused live assertions and 448 source guards pass, and 13,440 experimental
+checks include repeated variants. There is no new CubicalRipser timing or final
+closure. A full lower-star table algorithm remains a separate, untested design.
+
+The subsequent October 11 grading/table investigation is complete, with no
+production change. Contiguous grading reduces that stage's cost but gives
+inconsistent larger-query gains. An independently generated relative-boundary
+table prototype, with straight-line neighborhood checks, improves the two
+smooth 48-cubed internal complete-diagram queries from 25.18/35.63 ms to
+18.82/25.99 ms (vertex/top-cell), about 1.34/1.37x as fast. Other fixed controls
+use about 6-20% more time. Table storage adds 6.01 MiB, and large-query
+allocation traffic rises about 41-45%. All 72,451 experimental Julia assertions
+and 640 compilation-free full-diagram timing samples pass; assertion counts
+include repeated variants. These are shared-host internal diagnostics, not
+public-wrapper or competitor measurements. The full table approach is now
+prototyped and checked, but production adoption remains open: establish a
+justified operating regime, account for storage in budgets, preserve metadata
+and endpoint contracts, and verify the canonical public route. Do not infer a
+size threshold from the confounded smooth-large/noisy-small controls or claim
+that this substantial opportunity has been ruled out.
+
+The October 11 packed-table/setup follow-up supersedes the prototype-storage
+assessment above. Retained table storage falls from 6.01 to 1.87 MiB; 3D allocations fall 31-40%
+versus the previous prototype and are 3.5-11.5% below production. Additional
+runtime changes versus the previous prototype are modest and mixed (about 9%
+less to 4% more time). The four crossed-size diagnostics show that smooth 3D
+inputs benefit at both 24 cubed and 48 cubed (1.23-1.48x over production), while
+noisy inputs are roughly unchanged to 8% slower in aggregate. The larger noisy
+vertex case is 5-11% slower across the two passes. A size-only threshold is
+unjustified. Recommend public qualification of the improved 3D candidate while
+retaining the existing 2D route; accept the measured modest adverse cases
+rather than adding an unverified selector. All 200,664 final Julia assertions
+and 480 compilation-free full-diagram samples pass. A corrected test-harness
+identity assertion and its failed first run remain archived. These twelve
+inputs comprise the original eight pilot cases plus four authorized diagnostic
+crosses, not additional scored or reserved C22 cases. No competitor rerun or
+public speedup claim is made; budgets, metadata, endpoint contracts and public
+regressions remain part of integration.
+
+These are shared-machine development diagnostics, not final public results.
+Reprofile the improved complete workflow to assess remaining major feasible
+costs, then finish the bounded suite and confirmation under the existing closure
+rules. Keep fixed fixtures and size endpoints; do not enlarge the study to seek
+wins. Final sizes, reserved evaluation inputs and confirmation remain to be
+frozen; the public C22 results article is still planned.
+
+The implementation sequence is:
+
+1. **Pin and qualify the public routes.** Use an unmodified supported release
+   and record version, source, build flags and threads. Begin with `cripser`'s
+   array API and a release build of its C++ backend. Treat a CLI measurement
+   as a separately declared file-to-answer task, not independent algorithmic
+   evidence. Check the documented [API](https://github.com/shizuo-kaji/CubicalRipser/blob/main/docs/python-api.md)
+   and [V/T conventions](https://github.com/shizuo-kaji/CubicalRipser/blob/main/docs/concepts.md)
+   against the installed version. For any top-degree-only request, qualify the
+   supported `top_dim` shortcut separately; it does not return all lower degrees.
+   The selected release currently fails that qualification, so this route
+   receives no timing comparison.
+2. **Verify inputs and answers before timing.** Independently enumerate tiny
+   cubical boundaries and reduce them over F₂. Check full interval multisets,
+   essential classes, ties, diagonal contacts, axis order, singleton axes,
+   cavities and superlevel conversion. Use finite exactly representable grades;
+   normalize the competitor's essential-death sentinel explicitly. Add a
+   separate representative lane if the pinned release exposes the documented
+   [cycle output](https://github.com/shizuo-kaji/CubicalRipser/blob/main/docs/cycles.md).
+   Validate cell correspondence, cycle equations, persistence and basis
+   completeness. Creator/destroyer locations alone are not cycles; valid
+   representatives need not have identical coefficients. Charge unavoidable
+   additional native outputs and disclose them.
+3. **Run a bounded development pilot, then freeze the suite.** Start with at
+   most 12 timed development requests across the four lanes, using smooth
+   fields, fragmented/noisy arrays and tied binary images. Choose three fixed
+   size levels from feasibility measurements, including seconds-scale larger
+   requests. Reserve about 20% of the final cases before optimization. Fix
+   case counts, seeds, repetition counts, per-request time/RSS caps and a total
+   budget in the charter before confirmation; do not expand sizes to chase a win.
+4. **Measure complete work and close the comparison.** The primary timer runs
+   from an already loaded scalar array through required native conversion,
+   cubical construction and materialized output. Verify fresh mathematical
+   state and zero compilation in accepted Julia samples. Report setup, query,
+   startup, allocation traffic and retained/process memory separately where
+   measured. Reuse PHAT fixtures/oracles where compatible, but take new timings.
+   Diagnose and improve TamerOp where substantial gains are feasible, then
+   freeze, confirm with paired processes, retain losses and resource failures,
+   and publish a distinct CubicalRipser report under the common closure rules.
+
+
+### Official C22 confirmation, 11 October 2026
+
+The official suite is frozen at 48 complete-barcode requests: 2D/3D, vertex/top-cell
+input, noise/binary/smooth fields, three regular sizes and one reserved asymmetric
+input per stratum. CubicalRipser 0.0.37 is built unchanged in Release mode. All
+non-singleton ordinary controls pass; two singleton-axis controls fail and remain
+outside the timed scope. Twelve independent compressed-input controls and twelve
+harness/protocol tests pass. The frozen TamerOp snapshot is unchanged.
+
+Three fresh-process passes and three accepted samples give 864 measured queries.
+The campaign has a four-hour cap, amended before launch from the calibration-based
+estimate of approximately three hours. Common worker RSS is 8 GiB, phase timeout
+180 seconds and worker timeout 30 minutes. The primary boundary is an already
+loaded Float64 array through complete native output, with compiled code and fresh
+mathematical work. Every result retains exact interval multiplicities.
+
+Calibration retains a major binary-volume asymmetry: at 160-cubed, vertex input
+was 112.56 s in TamerOp versus 14.61 s in CubicalRipser; top-cell input was 1.307 s
+in TamerOp while CubicalRipser timed out during warmup. No ratio is claimed for
+that incomplete pair. The 96-cubed adjustment verifies both answers. These larger
+calibrations remain separate evidence; the smaller fixed binary ladder does not
+erase them. All 48 formal requests now verify across 864 accepted samples.
+The fixed-suite geometric-mean ratio is 2.18x, with substantial binary-vertex
+losses retained. See the [public report](benchmarks/cubicalripser.md) for full
+family tables, runtime curves, memory and machine details. This closes the scoped
+comparison; it does not establish that all remaining TamerOp costs are minor.
+Any investigation of the newly exposed binary-vertex cost is separate work.
+
+Local state: `audit/2026-10-11/cubicalripser_official/RUN_STATE.json`,
+`TASK_FREEZE.json`, `CALIBRATION_AND_SIZES.md` and `formal_run/`.
+
+### Public cubical table integration and candidate freeze, 11 October 2026
+
+The 3D relative-table candidate is integrated and frozen for eligible
+nonperiodic F2 barcode requests. The 2D and retained-output routes remain.
+Public paired checks on the fixed twelve controls retain smooth-case benefits:
+48-cubed vertex input is 23.13 -> 18.09 ms (1.28x), top-cell input
+27.07 -> 17.76 ms (1.52x). The largest noisy vertex input is about 12% slower
+(7-16% across passes); that tradeoff is accepted explicitly. All eight 3D
+controls allocate 3.4-11.5% less. No size/smoothness selector was added.
+
+152,336 main focused assertions, the final four-thread/classifier/source checks,
+56 independent public qualification controls and 240 compilation-free paired
+samples pass. The bundled plans retain 1.68 MiB; separate reconstruction takes
+6-7 ms, while normal precompiled queries restore package data without table I/O.
+Exact grades, metadata, budgets and general routes were qualified. These are
+shared-host TamerOp before/after diagnostics, not new CubicalRipser ratios.
+
+Local evidence and the implementation freeze are in
+`audit/2026-10-11/cubical_public_tables/README.md` and `FREEZE.json`.
+The subsequent [official confirmation](#official-c22-confirmation-11-october-2026)
+completed against this frozen snapshot and closes the comparison. These smaller
+before/after measurements remain development evidence.
 
 ### Ripser.py development scope, 2026-10-04
 
@@ -929,8 +1273,7 @@ matched timings; a missing common output remains an explicit scope decision.
 
 Use the [suite charter](#reusable-suite-charter) to fix an affordable set of
 workflows, inputs, size limits, fields, evaluation cases and completion criteria
-for that library. **The QPA suite's 220 cases are not a default for the other
-20 comparisons.** A narrow specialist can justify a much smaller suite. Preserve
+for that library. **The QPA suite's 220 cases are not a default for other comparisons.** A narrow specialist can justify a much smaller suite. Preserve
 TamerOp's intended APIs and finite-encoding purpose when choosing the overlap.
 
 For each study, record its status, checked versions/date, charter, credited
@@ -1129,3 +1472,37 @@ The local archive is `audit/2026-10-05/ripser_final_v1/`. Public data live under
 `docs/benchmarks/ripser_v1/`; a portable computational reproduction bundle is
 still a separate release task. Future feature additions do not reopen this
 version: use a new scoped study when the compared request changes.
+
+### Original C++ Ripser companion study, 2026-10-06
+
+The [C++ Ripser report](benchmarks/ripser_cpp.md) is a separate C14 companion
+comparison, alongside the completed [Ripser.py report](benchmarks/ripser.md).
+Its times are labeled shared-machine observations: repetitions do not remove
+systematic contention. The report closes the fixed measurement campaign; it
+does not certify timings on an exclusively reserved machine.
+It uses the same frozen TamerOp candidate and unchanged upstream Ripser
+commit `01add51ff64aaf40889483260cc5c3b7d0f2a1e7`, with supported optimized F2
+and odd-prime builds. It does not transfer Ripser.py speed ratios to C++ Ripser.
+
+The bounded suite has ten larger requests: two circle sizes over F2, two
+planar sizes over F2/F101, two sphere sizes over F3, and two radius-restricted
+sparse sphere sizes over F2. It measures complete H0-through-H1/H2 barcodes
+from shared distance files. Three paired passes and two accepted samples per
+request/tool/pass give 120 accepted samples. Six supported controls agree
+with independent boundary reduction; every timed interval multiset agrees
+exactly after uniquely decoding upstream's printed dyadic grades.
+
+The report also preserves an upstream sparse-cutoff failure discovered before
+confirmation: an above-cutoff sparse edge can still produce an H0 death.
+The measured sparse files are already restricted to their declared radius,
+and the failed control receives no speed ratio. Cocycles, landmarks, weighted
+vertex births and raw-cloud distance construction are outside this study.
+
+The primary timer includes parsing, native construction and complete barcode
+output; C++ CLI launch is included and Julia startup/compilation is separate.
+Each case runs in a fresh Julia process in each pass after normal package
+precompilation, with `--heap-size-hint=4G` and the unchanged 6 GiB guard.
+The report retains two earlier shared-session memory failures separately.
+This differs from the earlier Ripser.py native-input query timer. The public
+report, raw observations, source/build identities and scope are complete at
+this fixed boundary. Do not extend it merely to increase input sizes again.

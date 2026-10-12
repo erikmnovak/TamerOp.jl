@@ -41,10 +41,10 @@ function _matching_browser_app(sessions,tick;fibered=false,style=TamerOp.VisualS
                 selection=summary.selection,records=snapshot.metadata.matching_records,
                 context=snapshot.metadata.context,
                 viewer_count=count(u->u.session===session,values(ext._INSPECTION_UI_HANDLES)),
-                ui=(;closed=ui.closed[],error=ui.error_text[],pick_targets=targets,
+                ui=(;rebuilds=ui.rebuild_count[],updates=ui.update_count[],closed=ui.closed[],error=ui.error_text[],pick_targets=targets,
                     mouseposition=M.events(ui.figure[].scene).mouseposition[],figure_size=(width,height)))))
         end
-        B.DOM.div(B.jsrender(client,viewer),B.DOM.pre(telemetry;
+        B.DOM.div(viewer,B.DOM.pre(telemetry;
             var"data-testid"="julia-session-state",style="display:none"))
     end
 end

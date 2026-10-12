@@ -59,6 +59,22 @@ their hashes alone. Input mutation is supported between calls, not during a
 running computation. Use `PointCloud(coords; copy=true)` when the dataset
 should own coordinates independently of the supplied matrix.
 
+## Selected ranks and the complete invariant
+
+If the question concerns one structure map, use `rank_map(M, a, b)` on a
+finite module. The vertices must be comparable in its poset. This avoids
+requesting ranks for every other pair; an anchored rank view similarly fixes
+one end of the map.
+
+`rank_invariant(M)` explicitly requests the complete invariant. It visits
+comparable pairs and stores positive ranks; `store_zeros=true` also retains
+zero ranks on comparable pairs. The traversal shares composition work for
+maps with the same source and reuses that workspace for the next source.
+It has no unconditional square rank-output buffer. The returned dictionary
+can still be quadratic on a chain, because the requested answer has that many
+pairs. Parallel work chunks own their scratch and merge their retained entries
+after computation. Category caches and the input module have their own costs.
+
 ## Encoding metadata
 
 `compile_encoding(P, pi)` attaches a classifier to its poset. It does not

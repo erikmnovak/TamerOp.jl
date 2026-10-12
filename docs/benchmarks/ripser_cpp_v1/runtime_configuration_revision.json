@@ -1,0 +1,79 @@
+{
+  "reason": "Align Julia garbage collection with the independently monitored resource budget",
+  "initial_failure": "Julia memory limit during second planar_1152_f2 timed request",
+  "original_worker_limit_bytes": 6442450944,
+  "final_worker_limit_bytes": 6442450944,
+  "heap_hint": "4G",
+  "unchanged_cases": true,
+  "unchanged_mathematical_source": true,
+  "initial_observations_in_final_summary": false,
+  "probe": {
+    "success": true,
+    "flags": [
+      "--heap-size-hint=4G"
+    ],
+    "samples": [
+      {
+        "kind": "sample",
+        "id": "planar_1152_f2",
+        "accepted": false,
+        "seconds": 46.873406045,
+        "construction_seconds": 0.122215187,
+        "query_seconds": 46.200162731,
+        "compile_seconds": 7.540443155,
+        "recompile_seconds": 0.0,
+        "allocation_bytes": 10721511088,
+        "gc_seconds": 1.142870501,
+        "retained_result_bytes": 31192,
+        "reset_verified": true,
+        "backend": "implicit_rips_cohomology",
+        "peak_rss_bytes": 4790792192,
+        "warmup": true,
+        "verified": true
+      },
+      {
+        "kind": "sample",
+        "id": "planar_1152_f2",
+        "accepted": true,
+        "seconds": 37.464061556,
+        "construction_seconds": 0.113552104,
+        "query_seconds": 37.346626039,
+        "compile_seconds": 0.0,
+        "recompile_seconds": 0.0,
+        "allocation_bytes": 10329998880,
+        "gc_seconds": 0.927435588,
+        "retained_result_bytes": 31192,
+        "reset_verified": true,
+        "backend": "implicit_rips_cohomology",
+        "peak_rss_bytes": 5223022592,
+        "warmup": false,
+        "verified": true
+      },
+      {
+        "kind": "sample",
+        "id": "planar_1152_f2",
+        "accepted": true,
+        "seconds": 44.166695604,
+        "construction_seconds": 0.120227052,
+        "query_seconds": 44.041186367,
+        "compile_seconds": 0.0,
+        "recompile_seconds": 0.0,
+        "allocation_bytes": 10329998880,
+        "gc_seconds": 1.00729171,
+        "retained_result_bytes": 31192,
+        "reset_verified": true,
+        "backend": "implicit_rips_cohomology",
+        "peak_rss_bytes": 5223022592,
+        "warmup": false,
+        "verified": true
+      }
+    ]
+  },
+  "reference": "https://docs.julialang.org/en/v1/manual/memory-management/#Memory-Hints",
+  "revision3": {
+    "reason": "Both initial shared-session attempts exceeded 6 GiB. An isolated planar1152 F2 probe with a 4 GiB heap hint completed below 5 GiB. Preserve both attempts and restart all unchanged cases in independent case processes with the same heap hint and guard. No source changes or case exclusions.",
+    "process_policy": "Three passes, one fresh Julia process per case per pass (30 workers), discarded full-case warmup then two fresh computations; C++ remains fresh per invocation. Normal package precompilation completed before final launch.",
+    "precompile_log": "precompile.log",
+    "excluded_observations": "shared_heap_hint_observations.json"
+  }
+}

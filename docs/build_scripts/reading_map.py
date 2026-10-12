@@ -67,7 +67,8 @@ def _validate_path(path: str) -> None:
 
 
 def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
-                       page: Path, docs: Path, repo_url: str) -> str:
+                       page: Path, docs: Path, repo_url: str, *,
+                       _diagram_only: bool = False, _marker_id: str = "reading-map-arrow") -> str:
     """Return raw HTML; validate the directed acyclic graph and link destinations.
 
     Sources are relative to ``docs``. Published sources link to their staged
@@ -116,7 +117,7 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
         if _text(node, "kind") not in ("Tutorial", "Explanation", "Guide", "Notebook"):
             raise ValueError(f"Unknown reading map kind: {node['kind']}")
         display = node.get("display", "card")
-        if display not in ("card", "support", "reference"):
+        if display not in ("card", "support", "reference", "focused"):
             raise ValueError(f"Unknown reading map display: {display}")
         if "entry" in node and not isinstance(node["entry"], bool):
             raise ValueError("Reading map entry must be boolean")
@@ -124,7 +125,7 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
             _text(node, "entry_label")
             if not node.get("entry") or display != "card":
                 raise ValueError("An entry label requires an entry card")
-        if display != "reference":
+        if display not in ("reference", "focused"):
             x, y = (_number(node, key) for key in ("x", "y"))
             w, h = (node_width, node_height) if display == "card" else (
                 _number(node, "width", positive=True), _number(node, "height", positive=True))
@@ -140,6 +141,13 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
         links[identity] = destination(node)
 
     edges = config.get("edges", [])
+    views = config.get("views", [])
+    view_ids = [_identifier(view) for view in views]
+    if len(view_ids) != len(set(view_ids)):
+        raise ValueError("Duplicate focused reading map view")
+    for edge in edges:
+        if "view" in edge and edge["view"] not in view_ids:
+            raise ValueError("Unknown focused reading map view")
     outgoing, incoming, pairs = {key: [] for key in by_id}, dict.fromkeys(by_id, 0), set()
     for edge in edges:
         source, target = _text(edge, "source"), _text(edge, "target")
@@ -147,7 +155,7 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
             raise ValueError(f"Unknown reading map edge endpoint: {source} -> {target}")
         if source == target or (source, target) in pairs:
             raise ValueError(f"Duplicate or self reading map edge: {source} -> {target}")
-        if any(by_id[key].get("display", "card") != "card" for key in (source, target)):
+        if any(by_id[key].get("display", "card") != "card" for key in (source, target)) and "view" not in edge:
             raise ValueError("Draw reading arrows between lesson cards only")
         _validate_path(_text(edge, "path"))
         if edge.get("kind", "continuation") not in ("continuation", "optional"):
@@ -212,17 +220,18 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
         for node in support_nodes:
             fragments.append(f'<p>{escape(node["label"])}: <a href="{escape(links[node["id"]][0])}">{escape(node["title"])}</a></p>')
         fragments.append('</div>')
-    if any(edge.get("kind") == "optional" for edge in edges):
+    drawn_edges = [edge for edge in edges if "view" not in edge]
+    if any(edge.get("kind") == "optional" for edge in drawn_edges):
         fragments.append('<div class="reading-map-legend"><span>Solid line: continue</span><span>Dashed line: optional detour</span></div>')
     fragments.extend([
         '<div class="reading-map-scroll" tabindex="0" aria-label="Reading paths. Scroll horizontally to see the whole map, or use the linked outline below.">',
         f'<div class="reading-map-canvas" style="width:{width:g}px;height:{height:g}px">',
         f'<svg class="reading-map-lines" viewBox="0 0 {width:g} {height:g}" width="{width:g}" height="{height:g}" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">',
-        '<defs><marker id="reading-map-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/></marker></defs>',
+        f'<defs><marker id="{_marker_id}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor"/></marker></defs>',
     ])
-    for edge in edges:
+    for edge in drawn_edges:
         kind = ' reading-map-optional' if edge.get("kind") == "optional" else ''
-        fragments.append(f'<path class="reading-map-edge{kind}" d="{escape(edge["path"])}" fill="none" marker-end="url(#reading-map-arrow)" data-source="{escape(edge["source"])}" data-target="{escape(edge["target"])}"/>')
+        fragments.append(f'<path class="reading-map-edge{kind}" d="{escape(edge["path"])}" fill="none" marker-end="url(#{_marker_id})" data-source="{escape(edge["source"])}" data-target="{escape(edge["target"])}"/>')
         if edge.get("kind") == "optional":
             fragments.append(f'<text class="reading-map-edge-label" x="{edge["label_x"]:g}" y="{edge["label_y"]:g}" text-anchor="middle">{escape(edge["label"])}</text>')
     fragments.append('</svg>')
@@ -230,7 +239,7 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
         identity = node["id"]
         url, location = links[identity]
         display = node.get("display", "card")
-        if display == "reference":
+        if display in ("reference", "focused"):
             continue
         if display == "support":
             fragments.append(f'<aside class="reading-map-support" style="left:{node["x"]:g}px;top:{node["y"]:g}px;width:{node["width"]:g}px;height:{node["height"]:g}px"><span>{escape(node["label"])}</span><a href="{escape(url)}" data-node="{identity}">{escape(node["title"])}</a></aside>')
@@ -244,7 +253,41 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
             + eyebrow +
             f'<strong>{escape(node["title"])}</strong>'
             f'<span class="reading-map-question">{escape(node["question"])}</span></a>')
-    fragments.extend(['</div></div>', '<details class="reading-map-outline"><summary>Read the map as a linked outline</summary><ul>'])
+    fragments.append('</div></div>')
+    if _diagram_only:
+        return "\n".join(fragments)
+    # Focused diagrams reuse canonical nodes/edges; only positions are local.
+    # The common outline below remains the single complete textual route map.
+    focused_ids = set()
+    for view in views:
+        identity = _identifier(view)
+        placements = view.get("placements", [])
+        chosen = [item["id"] for item in placements]
+        if not chosen or len(chosen) != len(set(chosen)) or any(key not in by_id for key in chosen):
+            raise ValueError("Focused view needs distinct known node identities")
+        focused_ids.update(chosen)
+        local_nodes = []
+        for placement in placements:
+            if set(placement) != {"id", "x", "y"}:
+                raise ValueError("Focused placements contain only id, x and y")
+            node = {key: value for key, value in by_id[placement["id"]].items()
+                    if key not in ("next", "alternate", "entry_label")}
+            if node.get("display") in ("support", "reference"):
+                raise ValueError("Focused views contain lesson cards, not supporting references")
+            node.update(placement, display="card", entry=False)
+            local_nodes.append(node)
+        local_edges = [{key: value for key, value in edge.items() if key != "view"}
+                       for edge in edges if edge.get("view") == identity]
+        local = dict(width=view["width"], height=view["height"],
+                     node_width=node_width, node_height=node_height,
+                     nodes=local_nodes, edges=local_edges)
+        fragments.append(f'<section class="reading-map-focused" aria-labelledby="{identity}"><h2 id="{identity}">{escape(_text(view,"title"))}</h2><p>{escape(_text(view,"description"))}</p>')
+        fragments.append(render_reading_map(local, pages, stage, page, docs, repo_url,
+                         _diagram_only=True, _marker_id="reading-map-arrow-" + identity))
+        fragments.append('</section>')
+    if any(node.get("display") == "focused" and node["id"] not in focused_ids for node in nodes):
+        raise ValueError("Every focused lesson needs a focused diagram")
+    fragments.append('<details class="reading-map-outline"><summary>Read the map as a linked outline</summary><ul>')
     for node in nodes:
         identity = node["id"]
         url, location = links[identity]
@@ -268,6 +311,8 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
             role = node["label"]
         elif node.get("display") == "reference":
             role = "Supporting reference"
+        elif node.get("display") == "focused":
+            role = "Further mathematical question"
         if role:
             role = f'<strong>{escape(role)}.</strong> '
         fragments.append(
@@ -281,7 +326,7 @@ def render_reading_map(config: dict, pages: dict[Path, Path], stage: Path,
     if groups:
         fragments.append('<h2 id="more-questions">More questions to pursue</h2>')
         fragments.append('<div class="reading-map-groups">')
-    group_ids = {"more-questions"}
+    group_ids = {"more-questions", *view_ids}
     for group in groups:
         identity = _identifier(group)
         if identity in group_ids:

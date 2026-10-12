@@ -62,7 +62,7 @@ using ..InvariantCore: SliceSpec, RankQueryCache,
                        _eye,
                        FloatBarcode, IndexBarcode, PackedBarcodeGrid, PackedIndexBarcode, PackedFloatBarcode,
                        RANK_INVARIANT_MEMO_THRESHOLD, RECTANGLE_LOC_LINEAR_CACHE_THRESHOLD,
-                       _use_array_memo, _new_array_memo, _grid_cache_index,
+                       _use_array_memo, _new_array_memo, _RankRowMemo, _grid_cache_index,
                        _memo_index, _memo_get, _memo_set!, _map_leq_cached,
                        _rank_cache_get!, _resolve_rank_query_cache,
                        _rank_query_point_tuple, _rank_query_locate!
@@ -147,6 +147,7 @@ include("invariants/basics.jl")
 include("invariants/summary_types.jl")
 include("invariants/generalized_rank.jl")
 include("invariants/gril.jl")
+include("invariants/boundary_zigzag.jl")
 include("invariants/module_stats.jl")
 include("invariants/geometry_stats.jl")
 include("invariants/algebraic_support.jl")

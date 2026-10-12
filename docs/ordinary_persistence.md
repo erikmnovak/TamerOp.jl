@@ -99,10 +99,26 @@ without converting any birth or finite death. Use `finite_intervals` and
 
 ## Cubical inputs and periodicity
 
-`cubical_persistence(values; input=:top_cells)` interprets a two-dimensional
-array as grades on squares. A face receives the minimum value of its incident
-squares for sublevels, or their maximum for superlevels. This gives the union
-of closed squares selected at each parameter.
+`cubical_persistence(values; input=:top_cells)` interprets an array as grades
+on its highest-dimensional cells: intervals in 1D, squares in 2D, voxels in
+3D, and cubes in any higher positive dimension. A face receives the minimum
+value of its incident top cells for sublevels, or their maximum for superlevels.
+This gives the union of closed top cells selected at each parameter; voxel
+values are not reinterpreted as vertex values.
+
+For example, a low-valued shell encloses a cavity until its central voxel
+enters. Its two-dimensional homology has the interval `[0, 2)`:
+
+```julia
+volume = fill(0, 3, 3, 3)
+volume[2, 2, 2] = 2
+D = OP.cubical_persistence(volume)
+OP.finite_intervals(D; dim=2)  # [(0, 2)]
+```
+
+Grades keep their original scalar type, including rational and high-precision
+values. Superlevel computations compare in descending order without negating
+input values, so unsigned values and the smallest signed integer are supported.
 
 With `input=:vertices`, entries grade vertices. Each cell receives the maximum
 of its vertices for sublevels (the lower star), or their minimum for superlevels
@@ -128,13 +144,79 @@ OP.check_torus_persistence(torus; throw=true)
 a torus. It returns a report by default; `throw=true` rejects failures. Use
 `check_h1=false` or `check_h2=false` only when explicitly checking fewer degrees.
 
+Large volumes contain many more cells than input entries. A nonperiodic
+`n₁ × ⋯ × n_d` top-cell array has `∏(2nᵢ + 1)` cells; a periodic axis changes
+its factor to `2nᵢ`. Set a construction budget when exploring larger inputs:
+
+```julia
+options = OP.ConstructionOptions(budget=OP.ConstructionBudget(
+    max_simplices=1_000_000, max_edges=400_000,
+    memory_budget_bytes=512 * 1024^2))
+D = OP.cubical_persistence(volume; construction=options)
+```
+
+For cubical input, `max_simplices` counts **all cells**, and `max_edges` counts
+one-dimensional cells even when their periodic boundaries cancel. Counts and
+index overflow are checked before topology enumeration when a budget is supplied.
+Both vertex and top-cell memory checks estimate the sparse construction:
+topology, cell indices, grades, incident-face entries and assembly workspace.
+Vertex input also allows for channel conversion and grade-axis extraction;
+it does not charge for hypothetical dense boundary matrices. Periodic faces
+count before cancellation, giving a conservative allowance across the cubical
+construction routes.
+These estimates are not caps on process RSS, persistence reduction, or opt-in
+geometry and representative storage. Those can need additional memory.
+Cubical sparsification and collapse options are rejected. The same
+`construction` option applies to direct and typed vertex input. The separate
+`estimate_ingestion` dense-algebra diagnostic still reports potential dense
+linear-algebra costs for later encoding work; its strict warning mode can reject
+that separate risk.
+
+Use `OP.filtered_complex(volume; construction=options)` to inspect the same
+filtered cells without computing homology. Add `source=true` and, separately,
+`representatives=true` or `cocycles=true` to `cubical_persistence` when later
+questions need chains tied to original cells. Source identities retain the
+cell origin and varying coordinate axes, including periodic seams. In one
+dimension the geometry is drawn on a line in the plane; higher-dimensional
+geometry keeps its coordinates for an explicit projection. See the
+[source-cell guide](tutorials/source_cells.ipynb) for the retained-chain workflow.
+
 The equivalent typed vertex workflow is
 `persistence_diagram(ImageNd(values), CubicalFiltration(periodic=true))`.
-It preserves construction budgets and an explicitly supplied ingestion cache.
-Both vertex entrypoints build cubical topology through the public ingestion
-builder using order ranks, then restore original grades exactly. Thus the
-builder's floating grade storage never rounds the actual vertex values; upper
-stars also avoid negating integers at the limits of their range.
+Both vertex entrypoints preserve the original grades: a cell receives an
+exact maximum or minimum of its corners. Internal ordering indices never
+replace or round the reported endpoints. Upper stars also avoid negating
+integers at the limits of their range.
+
+For an ordinary barcode over F₂ on a nonperiodic 1D, 2D or 3D array, TamerOp
+works directly with the rectangular grid. Neighboring cells follow from their
+positions, so their boundary matrices need not be built. Connected components
+are tracked by merging neighboring regions. In 2D the holes can also be found
+by following the complementary regions; in 3D this determines cavities, leaving
+square boundaries to determine the remaining degree-one bars. Cell grades and
+endpoints remain exact. `OP.provenance(D).backend` reports `:f2_cubical_grid`.
+
+In 3D, small neighborhoods often contain features that appear and disappear at
+the same grade. Precomputed local boundary plans remove this work before the
+remaining square boundaries are reduced. The plans retain the boundary
+combinations needed to preserve interactions with neighboring regions. This
+route reports `OP.provenance(D).local_reduction == :relative_tables`. It orders
+the original values exactly, uses integer indices internally, and recovers each
+reported endpoint from the original array. Equal endpoints are still omitted.
+The plans belong to the package; each image gets fresh ranks, connectivity,
+and reduction state.
+
+Periodic inputs, other coefficient fields, higher-dimensional arrays, and
+requests for cycles, cocycles or retained source geometry use the general
+complex-based route. That route preserves the existing oriented boundaries and
+source identities, and typed vertex requests can reuse topology through their
+supplied ingestion cache. Arbitrary supplied chain complexes still receive full
+boundary and filtration validation. The grid route establishes the cubical
+boundary identity by construction and retains input and budget checks. Its
+construction allowance remains conservative; actual storage can be smaller
+than the general sparse-complex estimate. Fixed package tables are separate
+from that per-input allowance, which is not a process-memory or reduction-memory
+limit.
 
 ## Rips: edges, holes and filling simplices
 
@@ -554,7 +636,11 @@ to positions within that chain dimension; IDs are the labels supplied by the
 complex. IDs can repeat in different dimensions and do not establish pixel,
 point-cloud, or other source geometry. For cubical inputs these records refer
 to the constructed cubical complex. Drawing its cells on the original image
-requires an additional geometric correspondence.
+requires an additional geometric correspondence. Request `source=true` together
+with representative retention to preserve it; `selected.source_cycle` and
+`selected.source_bounding_chain` then carry verified source records. The
+[source-cell guide](tutorials/source_cells.ipynb) develops their overlays and
+[reference](src/reference/source_representatives.md) gives scale and map contracts.
 
 The returned cycle is a noncanonical choice made by the field-specific reduction: changing
 the ordering of tied cells can change it. There is no shortest-cycle or preferred
@@ -677,9 +763,10 @@ edge_values.cochain.coefficients
 
 Landmark or nearest-neighbor selection still means we are studying the selected
 complex. It does not produce cocycles on discarded points or edges. Cocycle
-retention requires `collapse=:none`: returning to the original complex after
-an edge collapse needs a verified cochain lifting map, which this interface
-does not provide.
+retention with collapse requires `source=true`: the explicit source route
+retains and verifies the retraction needed to pull a cocycle back. Without
+that opt-in, use `collapse=:none`. The resulting source complex retains the
+same landmark/neighbor selection as the computation.
 
 Retention is optional because representative supports can be large. The default
 barcode route keeps its existing reductions and stores no public cocycles.
@@ -786,7 +873,9 @@ The versioned owned format preserves all degrees, exact endpoint values and
 types, coefficient field, filtration order, provenance and any retained cycles,
 death fillings and cocycles. Available landmark selections and oriented source
 vertex records survive too. Saving does not compute missing representatives or
-include an unretained source complex or its geometry. Reloaded cocycles support
+include an unretained source complex or its geometry. When `source=true` was
+requested, schema version 2 also preserves and verifies those complexes and
+source maps. Reloaded cocycles support
 the same scale-specific queries as before saving.
 
 The default profile is compact; `profile=:debug` requests indented JSON.
@@ -797,6 +886,17 @@ equations still requires the source complex. Supported metadata includes scalar,
 array, tuple and dictionary data, built-in source type labels and landmark
 selections. Unsupported custom objects are rejected before writing; they are
 not converted silently to strings. No executable source is evaluated on loading.
+
+## Relative to a subcomplex
+
+For a filtered pair Aₜ ⊆ Kₜ, use `filtered_pair(K, cells)` followed by
+`persistence_diagram(pair)`. The result describes H(Kₜ,Aₜ). Selected cells
+can inherit K's grades or enter A later; the latter can kill a relative
+class. The [boundary recipe](recipes/relative_pair.md) computes an interval
+and its connecting map. See the [pair reference](src/reference/persistence_variants.md)
+for cell indexing, coefficient fields, scale-specific quotient bases and
+induced maps.
+
 
 ## Results and figures
 

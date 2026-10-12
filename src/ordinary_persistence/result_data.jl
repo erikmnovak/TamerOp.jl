@@ -20,7 +20,7 @@ function persistence_diagram_data(d::PersistenceDiagram{T}) where {T}
     cocycles = d.retained_cocycles
     cocdata(r) = (birth=r.birth,death=r.death,cochain=_diagram_chain_data(r.cochain),vertices=deepcopy(r.vertices))
     return (grade_type=T,finite=deepcopy(d.finite_by_dim),essential=deepcopy(d.essential_by_dim),
-        field=d.field,order=d.order,meta=deepcopy(d.meta),
+        field=d.field,order=d.order,meta=deepcopy(d.meta),source=_source_correspondence_data(d.retained_source),
         representatives=reps === nothing ? nothing :
             (finite=[[repdata(r) for r in rows] for rows in reps.finite],essential=[[repdata(r) for r in rows] for rows in reps.essential]),
         cocycles=cocycles === nothing ? nothing : (indexing=cocycles.indexing,
@@ -47,7 +47,7 @@ filtration support; without the source differentials it does not independently
 re-prove cycle/cocycle equations. Source geometry is never inferred from IDs.
 """
 function persistence_diagram_from_data(data)
-    _diagram_data_keys(data,(:grade_type,:finite,:essential,:field,:order,:meta,:representatives,:cocycles))
+    _diagram_data_keys(data,(:grade_type,:finite,:essential,:field,:order,:meta,:representatives,:cocycles,:source))
     T = data.grade_type
     T isa Type && T <: Real && isconcretetype(T) || throw(ArgumentError("grade_type must be a concrete real type"))
     data.finite isa AbstractVector && all(rows -> rows isa AbstractVector &&
@@ -87,7 +87,8 @@ function persistence_diagram_from_data(data)
         _PersistenceCocycles{T}([_PersistenceCocycle{T}[restore_coc(r) for r in rows] for rows in data.cocycles.finite],
             [_PersistenceCocycle{T}[restore_coc(r) for r in rows] for rows in data.cocycles.essential],data.cocycles.indexing)
     end
-    diag = PersistenceDiagram(finite,essential,_normalize_field(data.field),_normalize_order(data.order),deepcopy(data.meta),reps,coc)
+    diag = PersistenceDiagram(finite,essential,_normalize_field(data.field),_normalize_order(data.order),deepcopy(data.meta),reps,coc,
+        _source_correspondence_from_data(data.source,data.field))
     check_persistence_diagram(diag;throw=true)
     return diag
 end

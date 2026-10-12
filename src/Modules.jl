@@ -1212,6 +1212,87 @@ function _check_coefficient_functoriality(M::PModule)
 end
 
 """
+    Modules.check_module_functoriality(M; throw=false)
+
+Check the stored module and independence of every cover-path composite. This
+strengthens `check_module`, which checks storage and matrix shapes only. Exact
+fields use exact equality; `RealField` uses its declared multiplication-scaled
+tolerances. A fresh composition cache keeps the check independent of any maps
+previously queried on the input object.
+"""
+function check_module_functoriality(M::PModule;throw::Bool=false)
+    structural=check_module(M)
+    issues=copy(structural.issues)
+    if isempty(issues)
+        try
+            fresh=PModule{coeff_type(M.field)}(M.Q,copy(M.dims),M.edge_maps;field=M.field)
+            _check_coefficient_functoriality(fresh)
+        catch err
+            err isa InterruptException && rethrow()
+            push!(issues,replace(sprint(showerror,err),"change_field: "=>""))
+        end
+    end
+    report=(;kind=:pmodule_functoriality,valid=isempty(issues),vertices=nvertices(M.Q),
+        edge_count=length(M.edge_maps),field=M.field,issues)
+    throw && !report.valid && _modules_validation_error("check_module_functoriality",issues)
+    return report
+end
+
+"""
+    module_path_witness(M)
+
+Return `nothing` when all cover paths agree, or the first conflicting pair of
+paths and their actual composite matrices. The record contains `source`,
+`target`, `first_path`, `second_path`, `first_composite`, `second_composite`
+and `field`. Structural errors throw before multiplication. Exact fields use
+exact equality; RealField uses the multiplication-scaled tolerance of
+`check_module_functoriality`. No cached composite on M is read or changed.
+
+The dynamic program retains one path per reachable vertex for each source;
+it checks arbitrary merge shapes without enumerating exponentially many paths.
+This diagnostic is intended for small authored diagrams, not a hot map query.
+"""
+function module_path_witness(M::PModule)
+    check_module(M;throw=true)
+    all(all(isfinite,A) for (_,A) in M.edge_maps) || throw(ArgumentError("Cover matrices must have finite coefficients."))
+    n=nvertices(M.Q)
+    edges=sort!(collect(FiniteFringe.cover_edges(M.Q)))
+    successors=[Int[] for _ in 1:n]
+    incoming=zeros(Int,n)
+    for (u,v) in edges; push!(successors[u],v);incoming[v]+=1;end
+    order=findall(iszero,incoming)
+    for u in order, v in successors[u]
+        incoming[v]-=1
+        incoming[v]==0 && push!(order,v)
+    end
+    length(order)==n || throw(ArgumentError("The base order contains a cycle."))
+    for source in order
+        paths=Dict(source=>[source])
+        composites=Dict{Int,Any}(source=>eye(M.field,M.dims[source]))
+        previous=Dict{Int,Int}()
+        for u in order
+            haskey(paths,u) || continue
+            for v in successors[u]
+                edge=M.edge_maps[u,v]
+                if haskey(paths,v)
+                    p=previous[v]
+                    if !_coefficient_products_equal(M.field,M.edge_maps[p,v],composites[p],edge,composites[u])
+                        return (;source,target=v,first_path=copy(paths[v]),second_path=[paths[u];v],
+                            first_composite=copy(composites[v]),
+                            second_composite=Matrix(edge)*composites[u],field=M.field)
+                    end
+                else
+                    paths[v]=[paths[u];v];previous[v]=u
+                    composites[v]=Matrix(edge)*composites[u]
+                    all(isfinite,composites[v]) || throw(ArgumentError("A cover-path product has nonfinite coefficients."))
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+"""
     change_field(M, field)
 
 Coerce the stored structure matrices into `field` and verify path independence

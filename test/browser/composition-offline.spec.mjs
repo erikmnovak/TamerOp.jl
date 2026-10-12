@@ -1,0 +1,27 @@
+import {test,expect} from '@playwright/test';
+import fs from 'node:fs/promises';
+import {checkOfflineChartScroll} from './helpers.mjs';
+test('A102 exported HTML reopens offline and keeps annotations aligned while scrolling',async({page,context},info)=>{
+  const fixture=process.env.TAMEROP_COMPOSITION_HTML;
+  expect(fixture, 'Generate TAMEROP_COMPOSITION_HTML before running the offline lane').toBeTruthy();
+  const html=await fs.readFile(fixture,'utf8');const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await context.setOffline(true);await page.setContent(html);
+  await expect(page.locator('svg')).toBeVisible();
+  await expect(page.locator('body')).toContainText('Checked representative correspondence');
+  expect(await page.locator('script').count()).toBe(0);
+  const graphic=page.locator('svg'),panel=page.getByRole('region',{name:'Composed figure',exact:true});
+  const wide=await graphic.boundingBox();const viewBox=await graphic.getAttribute('viewBox');
+  const naturalWidth=await graphic.evaluate(el=>el.width.baseVal.value);
+  expect(wide.width).toBeCloseTo(naturalWidth,1);
+  await page.screenshot({path:info.outputPath('offline-wide.png'),fullPage:true});
+  await page.setViewportSize({width:480,height:850});
+  const narrow=await graphic.boundingBox();
+  expect([narrow.width,narrow.height]).toEqual([wide.width,wide.height]);
+  expect(await graphic.getAttribute('viewBox')).toBe(viewBox);
+  await checkOfflineChartScroll(page,panel,graphic);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+  await page.screenshot({path:info.outputPath('offline-narrow.png'),fullPage:true});
+  await page.reload();await page.setContent(html);await expect(graphic).toBeVisible();
+  await checkOfflineChartScroll(page,panel,graphic);
+  expect(errors).toEqual([]);
+});

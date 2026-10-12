@@ -1,11 +1,8 @@
 # Build the teaching site
 
-The canonical notebooks are the lessons [the ring](tutorials/ring.ipynb) and
-[inspecting spaces and maps](tutorials/inspect_encoding.ipynb), the library
-guides [From inputs to computed objects](tutorials/inputs_to_objects.ipynb) and
-[Choosing and inspecting resolutions](tutorials/resolutions.ipynb), and the
-recipe [Explain a distance through its matching](tutorials/distance_witness.ipynb).
-One execution of each produces a website page with static figures and a
+[The publication manifest](publication.toml) selects the canonical notebooks
+for the website's lessons, library guides and recipes. One execution of each
+produces a website page with static figures and a
 downloadable executed notebook containing those same results. Edit the notebook,
 not its generated Markdown. Existing mathematical chapters remain in their current
 tracked locations and are copied into the build according to
@@ -23,14 +20,12 @@ Run these commands from the repository root with Julia 1.12 and Python 3.11
 or newer. The isolated documentation environment uses the current checkout of
 TamerOp. It does not add plotting or website dependencies to the core package.
 
-Reader-facing setup starts with `Pkg.add("TamerOp")` from General. A website
-build against the checkout does not establish compatibility with the registered
-release: check the registry's source tree when changing installation examples.
-Keep the README's first computation usable with that release. If a downloadable
-lesson needs newer APIs, explain its separate development environment in the
-[installation page](src/start/install.md); do not quietly make source tracking
-the default for ordinary users. Revisit that distinction when a new release
-includes those APIs.
+The [installation page](src/start/install.md) and README install the latest
+version of TamerOp with
+`Pkg.add(url="https://github.com/erikmnovak/TamerOp.jl", rev="main")`.
+Build and publish the documentation with the matching library code, so its
+examples describe the package that readers install. Notebook execution and
+downloads record that source revision.
 
 ```sh
 python -m venv docs/.venv
@@ -42,6 +37,16 @@ On Windows, use `docs\.venv\Scripts\python.exe` and set the environment
 variable using your shell's syntax. `docs/Project.toml` pins the direct Julia
 tool versions; the resolved local `Manifest.toml` is retained in the generated
 downloads. The Python direct dependencies are pinned in `requirements.txt`.
+
+## Visualization changes
+
+Use the [visualization support matrix](visualization_support.md) and
+[acceptance commands](testing.md#visualization-acceptance-contracts) when a page
+introduces a new display or interaction. A36/A37 are standing contracts. A figure
+must retain its mathematical coordinates; a promised live control needs native
+and actual frontend evidence. Keep unsupported paths, available but unqualified
+notebook integrations, and tested standalone applications distinct. Place
+coverage and validation records in contributor material rather than lessons.
 
 ## Build and review
 
@@ -309,6 +314,25 @@ there is no second copy of the example. It saves PNGs under
 Run it after changing those examples, then review both figures and the page.
 Live browser controls remain a separate frontend check.
 
+The [saved-inspection guide](tutorials/live_inspection.ipynb) owns the complete
+finite-encoding example and its ordinary-persistence variation. Check its
+assertions, record its four teaching figures, and retain the actual JSON/HTML
+files alongside a local gallery with:
+
+```sh
+julia --startup-file=no --threads=1 --project=docs docs/build_scripts/check_live_inspection.jl --record --recipe --gallery=docs/.build/live-inspection-preview
+```
+
+The checker executes the canonical notebook and the focused
+[reopen-session recipe](recipes/reopen_session.md); it does not maintain a second
+copy of their examples. Use `--main-path` without `--record` to check only the
+required finite-encoding route. Keep API contracts in
+[the saved-session reference](src/reference/visual_sessions.md) and mechanisms
+in the [session](implementation/inspection_sessions.md) and
+[serialization](implementation/serialization.md) implementation articles.
+The focused check complements the normal publication build and rendered-page
+review; review the retained HTML files separately with networking disabled.
+
 ## Maintain the reading map
 
 The reader-facing [map page](src/reading_map.md) contains its introduction.
@@ -383,7 +407,12 @@ map has been scrolled sideways; the linked outline also works without scripts.
    prose explains the same choice, including repository destinations. Ask the
    newcomer questions in the writing guide; passing link, cycle, and bounding-box
    checks does not establish that the map communicates the intended choices.
-6. As the expanded route model is implemented, check complete published-lesson
+6. Focused diagrams use `[[views]]` in `reading_map.toml`: keep titles,
+   questions and sources on canonical `[[nodes]]`, put only node IDs and
+   positions in `placements`, and assign drawn edges with `view = "ID"`.
+   Use `display = "focused"` for lessons outside the overview. The renderer
+   checks cycles across all views and includes all nodes in one linked outline.
+   Broader migration still needs complete published-lesson
    coverage against the article catalog, unique identities across views, and
    agreement of diagram links, accessible outline and local neighborhoods.
    Keep the knowledge relation separate from suggested reading edges and the
@@ -430,6 +459,8 @@ website folding only.
 [QPA](benchmarks/qpa.md) for finite-module algebra,
 [PHAT](benchmarks/phat.md) for ordinary barcodes on supplied boundary data, and
 [Ripser.py](benchmarks/ripser.md) for Rips barcodes, cocycles and landmark workflows.
+The separate [C++ Ripser report](benchmarks/ripser_cpp.md) compares larger
+barcode-only requests against the original upstream executable.
 Each report has its own scope,
 versions, machine record, timing tables, figures and compact downloadable data.
 Keep these accounts separate from the mathematical learning path.
@@ -592,3 +623,140 @@ multiplicities and equations, and retains actual text/PNG outputs. An optional
 `--gallery=PATH` exports PNG/SVG pairs from those same figure cells for review.
 Article source, execution, site routing and public deployment remain distinct;
 add a route only with the corresponding publication review.
+
+
+## Maintain the signed-observable guide
+
+`tutorials/slices_diagrams.ipynb` is the canonical source for the planned
+slices/diagrams usage article (`guide_slices_diagrams`). Its cross-module example
+connects chain intervals, signed rank queries, Hilbert atoms and declared
+interval-family ranks. Run `docs/build_scripts/check_signed_views.jl --record`
+with the documentation environment to execute its cells and retain figure
+outputs; `--gallery=PATH` also derives PNG/SVG review artifacts. Live WGL usage
+is a Markdown continuation, so site execution remains static and reproducible.
+Precise contracts belong to `src/reference/visualization.md`; B44 explains
+contribution preparation, while B41 retains inversion and B46 live lifecycle
+ownership. The mathematical signed-summaries lesson stays planned until its
+map node and accessible outline are authored together.
+
+## Maintain the complexes and spectral-pages guide
+
+`tutorials/complexes.ipynb` is the canonical `guide_complexes` article under Using
+TamerOp. It follows selected vectors, induced maps and a cone connecting map,
+then a filtered bicomplex through successive pages and the associated graded
+limit. Static figures and the executed download derive from this source through
+`publication.toml`; live controls are optional. Execute the guide with
+`docs/build_scripts/check_complexes.jl --record`, adding `--gallery=PATH` for
+PNG/SVG inspection. Its website route remains `guides/complexes.md`.
+
+Link source geometry to the source-cell guide, precise contracts to
+`src/reference/visualization.md`, theory to the planned homology lessons, and
+algorithms to B30. Verification evidence belongs in testing and development
+records. This is a library guide, not another mathematical reading-map node.
+
+## Maintain the source-cell guide
+
+`tutorials/source_cells.ipynb` is the canonical `guide_representatives` article
+under Using TamerOp. Publish its static outputs and executed download through
+`publication.toml`; checked cycles, fillings, cocycles and bounded optimization
+continue the same story, followed by H0 source memberships and slice-specific
+merge histories. Keep top-cell and vertex-valued image conventions distinct.
+The guide explores actual source geometry; method contracts belong to the
+visualization reference, while the ring remains a mathematical lesson. Do not
+add another mathematical-map node for this library guide. Regenerate its figures
+from the notebook and check empty/filled states, signed boundaries, periodic
+identifications, display omissions and 3D skeleton interpretation. For component
+views, check membership before and at a merge, explicit post-death descendants,
+simultaneous events and the declared slice.
+
+Execute this guide with `docs/build_scripts/check_source_cells.jl --record`;
+`--gallery=PATH` derives PNG/SVG review artifacts from the same cells. B29's
+`implementation/source_representatives.md` explains verification and cost, while
+`src/reference/source_representatives.md` owns the map/chain and query contracts.
+
+The canonical refinement/transport guide is
+`tutorials/compare_encodings.ipynb`, published at `guides/compare_encodings.md`.
+Execute its actual cells with `docs/build_scripts/check_compare_encodings.jl`
+(`--record` retains outputs; `--gallery=PATH` derives PNG/SVG previews).
+Its reference and B15 account share the same topic through the article catalog;
+planned mathematical transport lessons remain separate reading-map nodes.
+
+## Maintain the figure-composition guide
+
+`tutorials/compose_figures.ipynb` owns the practical workflow for combining
+scalar fields, signed glyphs, selected source cycles and explanatory annotations.
+Its `guide_visualize_share` inventory identity belongs to Using TamerOp and stays
+outside the mathematical reading map. The bounded `compose_figure` recipe links
+this guide for interpretation; the visualization reference and B44 account own
+contracts and mechanism respectively. A fixed HTML figure is distinct from a
+saved interactive session, whose scope remains with the session guide.
+
+Execute its canonical cells and review their actual default output:
+
+```sh
+julia --project=docs docs/build_scripts/check_compose_figures.jl --record
+julia --project=docs docs/build_scripts/check_compose_figures.jl --main-path
+```
+
+`--gallery=PATH` exports the same figures as PNG/SVG and creates a local review
+page. Verify named endpoints after reordering, resizing and axis changes;
+shared scalar ranges must retain quantity labels and authored explanations
+must remain distinct from checked representative correspondences. Review HTML
+with Julia unavailable, including a narrow viewport and its textual annotation
+list. Test evidence belongs in testing records, not in guide prose.
+
+
+### Comparison guide
+
+`tutorials/comparisons.ipynb` is the canonical A94 library guide, published as
+`guides/comparisons.md` in Using TamerOp. It is outside the mathematical reading
+map. Contracts live in the visualization reference; B44 owns preparation and
+reuse. The executor retains actual outputs and can derive a local gallery:
+
+```sh
+julia --project=docs docs/build_scripts/check_comparisons.jl --record
+julia --project=docs docs/build_scripts/check_comparisons.jl --main-path
+```
+
+Check equal dimensions/different characteristic-dependent ranks, basis changes,
+unknown versus zero queries, grid refinement, declared rounding, degree and
+ordinary-endpoint differences, tolerance sensitivity, and grayscale labels.
+`test/browser/comparison.spec.mjs` covers pointer selection and linked lifecycle.
+
+### Check the finite-input construction guide
+
+`docs/tutorials/presentations.ipynb` is the canonical finite module/editor
+guide. `check_presentations.jl` executes its actual cells, records figures and
+copies the saved draft and generated Julia construction into a local gallery:
+
+```sh
+julia --project=docs docs/build_scripts/check_presentations.jl --record --recipe --gallery=audit/2026-10-09/visualization_a99
+julia --project=docs docs/build_scripts/check_presentations.jl --main-path
+```
+
+The full guide must produce fourteen code outputs and five figures; the main
+path has ten code cells and three figures. Check the recorded PNGs and SVGs,
+the generated `diamond.jl`, and saved `diamond.html`. Run the browser editor
+scenarios separately: executing notebook cells does not qualify a live
+notebook frontend. Publication uses `guide_presentations` and `build_module`,
+with shared session/module references and B46, without another math-map node.
+
+
+## Generalized-rank guide checks
+
+`docs/tutorials/generalized_rank_queries.ipynb` is the canonical region-query
+guide. Its fork, signed star, repeated boundary path and continuous quadrant
+examples share one progression from finite spaces and maps to exact summaries.
+The mathematics article remains a separate catalog plan. The guide, task recipe,
+API contracts and B54/B46 accounts link across the generalized-rank topic;
+only mathematical lessons belong in the reading map.
+
+```sh
+julia --project=docs docs/build_scripts/check_generalized_rank.jl --record --recipe --gallery=audit/2026-10-10/visualization_a54
+julia --project=docs docs/build_scripts/check_generalized_rank.jl --main-path
+```
+
+Review all captured figures, then export through `publication.toml`. This uses
+`guide_generalized_rank`, `query_region_invariant` and `B54` as canonical catalog
+identities. Live WGL instructions require Julia; recorded figures and browser
+server acceptance do not establish IJulia, Pluto or VS Code frontend support.

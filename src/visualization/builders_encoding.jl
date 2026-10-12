@@ -168,6 +168,44 @@ selected active stalks, and an optional invertible graded basis change satisfyin
 A*S=T*B. Degree 0/1 selects generators/relations (dually cogenerators/corelations).
 Their represented constructions are cokernel/kernel, not the fringe image.
 See `docs/src/reference/visualization.md` and the executable resolution guide.
+
+Signed observables support `kind=:signed_cancellation`: a rank pair query is
+`query=(p=(x,y),q=(x,y))`, cumulative atoms use `query=(x,y)` with an explicit
+`observable`, and interval summaries use `query=(vertices=[...],)`. Optional
+`direct` checks the original observable independently. `term` selects an input
+ID and `max_terms` limits drawing only. Rectangle `smoothing=(epsilon_x,epsilon_y)` shifts the
+upper endpoint, with inclusive grid versus half-open physical boundaries kept
+explicit; `:signed_diagonals` and `:signed_prominence` offer linked alternate
+views. A named background must share axes and units. See the signed-observable
+section of `docs/src/reference/visualization.md` for all endpoint and cost
+contracts, and `inspection_session` for live selection and query reuse.
+# Refinement and transport
+
+    visual_spec(result; sources=nothing, joint=nothing, comparison=nothing,
+                direction=:left_to_right, vertex=nothing, pair=nothing,
+                point=nothing, side=:base, label=nothing, view=:overview,
+                box=nothing, max_vertices=200, max_pairs=2500, matrix_limit=(12,12))
+
+Inspect `EncodingMap`, `JointEncodingResult`, `CommonRefinementTranslationResult`
+or finite `ModuleTranslationResult` objects. Link actual finite posets,
+projection labels and supported parameter fibers. `sources=(left,right)` supplies
+original modules/encodings when the result does not retain them. Preparation
+checks actual cover maps and may materialize those encodings. `joint` certifies
+realized pairs only on its supplied finite source; no continuous completeness
+claim is inferred. `comparison` supplies a morphism between the two restrictions
+on the common base; endpoints, all cover equations and component ranks are checked.
+Use `view=:square, pair=(p,q)` for its four matrices and both composite routes.
+An invalid naturality equation is retained visibly. Wrong endpoints are rejected.
+
+A side label selects all common preimages. A point requires both retained planar
+classifiers. Missing labels and incomparable pairs are not replaced by zero maps.
+The graph budget refuses oversized layouts; the pair budget omits only the
+Cartesian background. Numerical equations/ranks use the declared field policy.
+No Kan extension, missing comparison or derived computation is invoked by a view.
+Even a verified natural isomorphism concerns the declared finite category, not
+encoding-independent Ext/Tor. `inspection_session(result; ...)` reuses preparation
+for transactional linked selection; keep supplied objects read-only while open.
+
 """
 function visual_spec(obj; kind::Symbol=:auto, cache=:auto, kwargs...)
     haskey(kwargs, :backend) && throw(ArgumentError("backend belongs to visualize/render, not visual_spec"))
@@ -438,6 +476,7 @@ function available_visuals(enc::CompiledEncoding)
 end
 
 function _visual_spec(res::EncodingResult, kind::Symbol; kwargs...)
+    kind === :generalized_rank && return _generalized_rank_spec(res; kwargs...)
     kind === :rank_section && return _rank_section_spec(res; kwargs...)
     kind in (:hasse, :module_inspector) && return _module_visual_spec(res, kind; kwargs...)
     kind === :presentation_inspector && return _presentation_visual_spec(res; kwargs...)
@@ -445,8 +484,8 @@ function _visual_spec(res::EncodingResult, kind::Symbol; kwargs...)
 end
 
 available_visuals(res::EncodingResult) = Results.encoding_presentation(res) === nothing ?
-    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :rank_section) :
-    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :presentation_inspector, :rank_section)
+    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :rank_section, :generalized_rank) :
+    (available_visuals(encoding_map(res))..., :hasse, :module_inspector, :presentation_inspector, :rank_section, :generalized_rank)
 
 function _poset_coordinates_2d(P::ProductOfChainsPoset{2})
     pts = Vector{NTuple{2,Float64}}(undef, nvertices(P))
@@ -484,7 +523,7 @@ _poset_coordinates_2d(P::AbstractPoset) = nothing
 _has_poset_coordinates_2d(::AbstractPoset) = false
 _has_poset_coordinates_2d(::Union{ProductOfChainsPoset{2},GridPoset{2},ProductPoset}) = true
 
-available_visuals(pi::EncodingMap) = if !_has_poset_coordinates_2d(target_poset(pi))
+_coordinate_map_visuals(pi::EncodingMap) = if !_has_poset_coordinates_2d(target_poset(pi))
     ()
 elseif !_has_poset_coordinates_2d(source_poset(pi))
     (:regions, :region_labels)
@@ -492,7 +531,7 @@ else
     (:regions, :region_labels, :pushforward_overlay)
 end
 
-function _visual_spec(pi::EncodingMap, kind::Symbol; kwargs...)
+function _coordinate_map_spec(pi::EncodingMap, kind::Symbol; kwargs...)
     _ = kwargs
     tgt_pts = _poset_coordinates_2d(target_poset(pi))
     tgt_pts === nothing && throw(ArgumentError("Visualization v1 needs a 2D-embeddable target poset for EncodingMap visuals."))
@@ -543,42 +582,4 @@ function _visual_spec(pi::EncodingMap, kind::Symbol; kwargs...)
                                  legend=_default_legend(visible=true, entries=(; source=:royalblue, target=:crimson, map=:gray50)))
     end
     throw(ArgumentError("Unsupported EncodingMap visualization kind $(kind)."))
-end
-
-available_visuals(res::CommonRefinementTranslationResult) = _has_poset_coordinates_2d(common_poset(res)) ? (:common_refinement,) : ()
-
-function _visual_spec(res::CommonRefinementTranslationResult, kind::Symbol; kwargs...)
-    _ = kwargs
-    kind === :common_refinement || throw(ArgumentError("Unsupported kind $(kind) for CommonRefinementTranslationResult."))
-    P = common_poset(res)
-    pts = _poset_coordinates_2d(P)
-    pts === nothing && throw(ArgumentError("common_refinement visualization requires a 2D-embeddable common poset."))
-    proj = projection_maps(res)
-    left_map = region_map(proj.left)
-    right_map = region_map(proj.right)
-    labels = [string("(", left_map[i], ",", right_map[i], ")") for i in eachindex(left_map)]
-    bbox = _bbox_from_points(pts)
-    return VisualizationSpec(:common_refinement;
-                             title="Common refinement",
-                             subtitle="common regions labeled by left/right projection indices",
-                             layers=AbstractVisualizationLayer[
-                                 PointLayer(pts, :purple3, 0.95, 12.0),
-                                 _text_layer_from_labels(pts, labels; color=:black, textsize=9.0),
-                             ],
-                             axes=_default_axes_2d(xlabel="common x", ylabel="common y",
-                                                   xlimits=bbox === nothing ? nothing : bbox[1],
-                                                   ylimits=bbox === nothing ? nothing : bbox[2],
-                                                   aspect=:equal),
-                             metadata=(; object=:common_refinement, ncommon=nvertices(P), left_target=nvertices(target_poset(proj.left)), right_target=nvertices(target_poset(proj.right))))
-end
-
-available_visuals(res::ModuleTranslationResult) = begin
-    map = translation_map(res)
-    map isa EncodingMap && _has_poset_coordinates_2d(source_poset(map)) && _has_poset_coordinates_2d(target_poset(map)) ?
-        (:pushforward_overlay,) : ()
-end
-
-function _visual_spec(res::ModuleTranslationResult, kind::Symbol; kwargs...)
-    kind === :pushforward_overlay || throw(ArgumentError("Unsupported kind $(kind) for ModuleTranslationResult."))
-    return _visual_spec(translation_map(res), :pushforward_overlay; kwargs...)
 end

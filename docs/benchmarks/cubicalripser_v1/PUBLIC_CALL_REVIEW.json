@@ -1,0 +1,11 @@
+{
+  "public_python": {
+    "utils.py": "40609ea378f5b41b0604c0218f013126f0309c7b2af1edba9ed2b907565ba48e",
+    "__init__.py": "3337e3bc231be21e30ac839d7e56775fcdc657149e0a4e4dc183c5602809eca1"
+  },
+  "cpp": {
+    "src/cubicalripser_pybind.h": "8f3ee5cd4675a45ed5a3c2feab0c57e534fd7019ca5d2404bcc16332313ea4eb",
+    "src/persistence.cpp": "b414c6c322bce0f4536539c39baa92a3e0b42557361ba286e327f23024638b83"
+  },
+  "review": "compute_ph forwards the supplied Float64 F-contiguous array; computePH constructs call-local Config and unique_ptr<DenseCubicalGrids>; compute_persistence creates local pair, union-find, column and ComputePairs state. Full native output buffer is allocated per call. The supported API accepts C/F arrays and uses its Fortran fast path without a forced C-order copy. n_threads=1. location is documented in source as ignored; six coordinate columns remain required native extra output. No previous mathematical results are passed. Python output deletion happens before next query; Julia warmup/result variables are cleared and GC runs before every measurement. Input-independent frozen TamerOp local tables remain package data."
+}

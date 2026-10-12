@@ -1352,12 +1352,12 @@ function _visual_spec(result::ProjectedDistancesResult, kind::Symbol; kwargs...)
                              metadata=(; nprojections=length(dists), projection_indices=Tuple(projection_indices(result))))
 end
 
-available_visuals(::RectSignedBarcode{2}) = (:rectangles, :density_image)
-available_visuals(::PointSignedMeasure{2}) = (:signed_atoms,)
+available_visuals(::RectSignedBarcode{2}) = (:rectangles, :density_image, :signed_cancellation, :signed_diagonals, :signed_prominence)
+available_visuals(::PointSignedMeasure{2}) = (:signed_atoms, :signed_cancellation)
 function available_visuals(out::SignedMeasureDecomposition)
     kinds = Symbol[]
-    has_rectangles(out) && append!(kinds, available_visuals(rectangles(out)))
-    has_euler_signed_measure(out) && append!(kinds, available_visuals(euler_signed_measure(out)))
+    has_rectangles(out) && append!(kinds, filter(k -> k in (:rectangles,:density_image), available_visuals(rectangles(out))))
+    has_euler_signed_measure(out) && append!(kinds, filter(==(:signed_atoms), available_visuals(euler_signed_measure(out))))
     has_mpp_image(out) && append!(kinds, available_visuals(mpp_image(out)))
     return Tuple(kinds)
 end
@@ -1390,6 +1390,7 @@ function _rect_density(sb::RectSignedBarcode{2})
 end
 
 function _visual_spec(sb::RectSignedBarcode{2}, kind::Symbol; kwargs...)
+    kind in (:signed_cancellation,:signed_diagonals,:signed_prominence) && return _signed_spec(sb,kind;kwargs...)
     _ = kwargs
     if kind === :rectangles
         rects, labels, colors = _rect_geometry(sb)
@@ -1429,6 +1430,7 @@ function _visual_spec(sb::RectSignedBarcode{2}, kind::Symbol; kwargs...)
 end
 
 function _visual_spec(pm::PointSignedMeasure{2}, kind::Symbol; kwargs...)
+    kind === :signed_cancellation && return _signed_spec(pm,kind;kwargs...)
     kind === :signed_atoms || throw(ArgumentError("PointSignedMeasure supports kind=:signed_atoms only."))
     _ = kwargs
     pts = NTuple{2,Float64}[(float(p[1]), float(p[2])) for p in points(pm)]

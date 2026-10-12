@@ -59,11 +59,9 @@ connection for the initial installation. Julia 1.12 is the version currently
 used by the package's tests. You do not need to clone this repository or install
 its mathematical dependencies individually.
 
-TamerOp is registered in [Julia's General registry](https://github.com/JuliaRegistries/General/tree/master/T/TamerOp).
-Install it by name with `Pkg.add("TamerOp")`. The website follows development
-on `main`; its [installation guide](https://tamerop.com/start/install.html)
-distinguishes the registered package from the environment needed for newer
-notebook features.
+The instructions below install the latest version of TamerOp. The
+[installation guide](https://tamerop.com/start/install.html) also shows how to
+open and run the website's downloadable notebooks.
 
 - [Why finite encodings?](#mathematical-background)
 - [Install TamerOp](#install-tamerop)
@@ -166,12 +164,12 @@ workdir = joinpath(homedir(), "tamerop-work")
 mkpath(workdir)
 cd(workdir)
 Pkg.activate(workdir)
-Pkg.add("TamerOp")
+Pkg.add(url="https://github.com/erikmnovak/TamerOp.jl", rev="main")
 ```
 
-`Pkg` is Julia's package manager. It resolves a compatible registered
-TamerOp release through General, downloads the package and its required
-dependencies and records them in this folder's `Project.toml` and `Manifest.toml`.
+`Pkg` is Julia's package manager. It downloads the latest version of TamerOp
+and its required dependencies, then records them in this folder's
+`Project.toml` and `Manifest.toml`.
 Keep those two files. You normally do not need to edit them yourself.
 
 The first installation may take several minutes while Julia downloads binary
@@ -190,7 +188,7 @@ If you already know which environment you want, the installation itself is just:
 
 ```julia
 import Pkg
-Pkg.add("TamerOp")
+Pkg.add(url="https://github.com/erikmnovak/TamerOp.jl", rev="main")
 ```
 
 ### 3. Load the library
@@ -215,8 +213,8 @@ retain the module when moving to several parameters.
 The [ring lesson](https://tamerop.com/tutorials/ring.html) develops this example
 with filtration snapshots, a barcode, a persistence diagram and a prediction
 exercise. Read its saved figures in the browser or download the executed
-notebook from the lesson. The computation below works with the registered
-package; the installation guide gives the setup for the full notebook.
+notebook from the lesson. The installation guide explains how to add the
+plotting and notebook packages to your environment.
 
 Run this in **Julia**, after installing the package:
 
@@ -408,29 +406,15 @@ Pkg.status()
 Pkg.update("TamerOp")
 ```
 
-For a registry installation, `Pkg.update` selects registered versions allowed
-by your environment's compatibility constraints and may update dependencies.
-Restart Julia before importing the updated package. Save your environment
-files before changing an analysis that must remain reproducible.
+`Pkg.update` obtains the latest version of TamerOp and may update its
+dependencies. Restart Julia before importing the updated package. Save your
+environment files before changing an analysis that must remain reproducible.
 
 Keep your analysis code, input data, `Project.toml` and `Manifest.toml` together.
 The manifest records the resolved dependency versions and the installed source
-revision. On another machine, activate that folder and run `Pkg.instantiate()`.
-This applies to registered releases as well as deliberate source checkouts. See
+revision. On another machine, activate that folder and run `Pkg.instantiate()`
+to recover those recorded dependencies. See
 [Julia's package-management guide](https://pkgdocs.julialang.org/v1/managing-packages/).
-
-If this environment previously installed TamerOp from a GitHub URL or a local
-development checkout, return it to registry-managed releases with:
-
-```julia
-Pkg.free("TamerOp")
-Pkg.update("TamerOp")
-```
-
-Use a separate environment when deliberately working with development code.
-`Pkg.add(name="TamerOp", rev="main")` follows the repository's development
-branch; updates then follow that branch rather than registered releases.
-An actual commit identifier in `rev` selects a fixed source revision.
 
 ## Troubleshooting
 
@@ -438,7 +422,6 @@ An actual commit identifier in `rev` selects a fixed source revision.
 | --- | --- |
 | `julia` is not recognized in your terminal | Open the Julia application, or finish the PATH setup described by the official installer. Restart the terminal after installing. |
 | `Package TamerOp not found in current path` | Activate the environment where you installed TamerOp. Inspect `Base.active_project()` and `Pkg.status()`. |
-| `TamerOp` cannot be found by `Pkg.add("TamerOp")` | Check the capitalization and run `Pkg.Registry.update()`, then retry. If General is absent from `Pkg.Registry.status()`, add it with `Pkg.Registry.add("General")`. |
 | A Julia-version compatibility error | Check `VERSION`. This package requires Julia 1.12 or a compatible newer 1.x version. |
 | `UndefVarError: OP not defined` | Run `import TamerOp as OP` in this session or at the start of the script. |
 | A plotting backend is unavailable | Install the requested renderer in the active environment, then import it in this session. |
@@ -516,6 +499,20 @@ Ripser.py. Larger planar computations also favor TamerOp, while requests
 with few landmarks and small control cases give mixed results. The report
 separates development from reserved evaluation cases and
 includes all timings, paired-pass ranges and verification details.
+
+The separate [original C++ Ripser report](https://tamerop.com/benchmarks/ripser_cpp.html)
+compares ten larger barcode requests from supplied distances. These
+observations on a shared machine favor TamerOp on circles and C++ Ripser on sparse
+spheres, with closer results on dense planar inputs. Both reports retain
+their own inputs, timing boundaries, and results.
+
+The [CubicalRipser report](https://tamerop.com/benchmarks/cubicalripser.html)
+compares complete F₂ barcodes on 48 large image and volume requests. TamerOp is
+2.18 times as fast in the aggregate for this fixed set of requests. Noisy and
+smooth 3D volumes, and binary arrays grading the highest dimensional cells,
+favor TamerOp. Binary volumes grading vertices favor CubicalRipser. The report
+retains the individual measurements and runtime curves, with the checks used
+to compare barcodes, machine details and limitations of the larger calibration.
 
 For measuring or improving performance, use the [benchmarking manual](https://tamerop.com/contributing/benchmarking.html).
 It separates compilation from uncached computation and reuse, explains fair
@@ -658,11 +655,9 @@ See the [function-Delaunay paper](https://arxiv.org/abs/2310.15902),
 
 ## Releases and citation
 
-[General's version record](https://github.com/JuliaRegistries/General/blob/master/T/TamerOp/Versions.toml)
-identifies registered releases. [The changelog](CHANGELOG.md) describes changes;
-unreleased changes on `main` are separate from a registered package version.
-The [maintainer release guide](https://tamerop.com/contributing/releasing.html) explains how each new candidate
-is checked, registered and verified from a clean user environment.
+[The changelog](CHANGELOG.md) describes changes to the library. The
+[maintainer release guide](https://tamerop.com/contributing/releasing.html)
+explains how new releases are prepared and checked.
 
 If TamerOp contributes to your research, cite **Erik Novak, TamerOp.jl:
 Toolkit for Algebraic Module Encodings over R^n and Other Posets**, with the
@@ -680,7 +675,7 @@ Pkg.status("TamerOp")
 
 Keep that environment's `Project.toml` and `Manifest.toml` with your analysis.
 The manifest records the selected package and dependency versions, including
-source revisions for development installations. A citation credits the software; those environment files
+source revisions. A citation credits the software; those environment files
 help someone reproduce the computation.
 
 ## Developing TamerOp

@@ -38,8 +38,12 @@ Keyword arguments:
 - `opts.threads`: when `true` and Julia has more than one thread, parallelize
   over the outer vertex index `a`. Set `opts=InvariantOptions(threads=false)`
   for serial execution; the default follows Julia's available thread count.
-  `CoverCache` is thread-safe and each work chunk owns its map memo and writes
-  disjoint integer output entries.
+  `CoverCache` is thread-safe and each work chunk owns its map memo and output.
+
+Traversal visits comparable pairs only. Scratch for map composition is linear
+in the number of vertices per work chunk; stored rank entries can still be
+quadratic when the requested invariant itself has that many entries. For a few
+selected pairs, use `rank_map` instead of constructing the full invariant.
 """
 function rank_invariant(
     M::PModule{K},
@@ -52,52 +56,38 @@ function rank_invariant(
     build_cache!(Q; cover=true, updown=true)
     cc = _get_cover_cache(Q)
     n = nvertices(Q)
-    use_array_memo = _use_array_memo(n)
-
     if threads && Threads.nthreads() > 1
-        vals = fill(-1, n * n)
-        _foreach_workchunk(n; threads=true) do vertices, _
+        chunks = Vector{Vector{Pair{Tuple{Int,Int},Int}}}(undef, min(n, Threads.nthreads()))
+        _foreach_workchunk(n; threads=true) do vertices, slot
+            local memo = _RankRowMemo(K, n)
+            local entries = Pair{Tuple{Int,Int},Int}[]
             local r
-            local memo = use_array_memo ? _new_array_memo(K, n) : Dict{Tuple{Int,Int},AbstractMatrix{K}}()
             for a in vertices, b in upset_indices(Q, a)
                 r = rank_map(M, a, b; cache=cc, memo=memo)
                 if store_zeros || r > 0
-                    vals[_memo_index(n, a, b)] = r
+                    push!(entries, (a, b) => r)
                 end
             end
+            chunks[slot] = entries
         end
         ranks = Dict{Tuple{Int,Int},Int}()
-        sizehint!(ranks, count(>=(0), vals))
-        @inbounds for idx in eachindex(vals)
-            vals[idx] < 0 && continue
-            a = div(idx - 1, n) + 1
-            b = mod1(idx, n)
-            ranks[(a, b)] = vals[idx]
+        sizehint!(ranks, sum(length, chunks; init=0))
+        for entries in chunks, (pair, r) in entries
+            ranks[pair] = r
         end
         return RankInvariantResult(Q, ranks, store_zeros)
     end
 
-    vals = zeros(Int, n * n)
-    filled = falses(n * n)
-
-    memo = use_array_memo ? _new_array_memo(K, n) : Dict{Tuple{Int, Int}, AbstractMatrix{K}}()
+    ranks = Dict{Tuple{Int,Int},Int}()
+    sizehint!(ranks, n)
+    memo = _RankRowMemo(K, n)
     for a in 1:nvertices(Q)
         for b in upset_indices(Q, a)
             r = rank_map(M, a, b; cache = cc, memo = memo)
             if store_zeros || r > 0
-                idx = _memo_index(n, a, b)
-                vals[idx] = r
-                filled[idx] = true
+                ranks[(a, b)] = r
             end
         end
-    end
-    ranks = Dict{Tuple{Int, Int}, Int}()
-    sizehint!(ranks, count(filled))
-    @inbounds for idx in eachindex(filled)
-        filled[idx] || continue
-        a = Int(div(idx - 1, n)) + 1
-        b = ((idx - 1) % n) + 1
-        ranks[(a, b)] = vals[idx]
     end
     return RankInvariantResult(Q, ranks, store_zeros)
 end

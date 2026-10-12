@@ -24,7 +24,7 @@ type because they need an owner without being forced into a prose genre.
 
 | Field | Meaning |
 | :--- | :--- |
-| `id` | Stable article identity. Descriptive names are usual; B01–B72 preserve the implementation-account identities, and C01–C21 preserve the comparison identities. Renaming a title or moving its source does not change this ID. |
+| `id` | Stable article identity. Descriptive names are usual; B01–B72 preserve the implementation-account identities, and C01–C22 preserve the comparison identities. Renaming a title or moving its source does not change this ID. |
 | `title` | Existing heading or working title. A planned title can change as its reader question becomes sharper. |
 | `type` | Primary editorial purpose: `lesson`, `library_guide`, `recipe`, `api_reference`, `implementation_account`, `benchmark_report`, or `contributor_guide`. `resource` covers supporting indexes and records. |
 | `topics` | Controlled subject IDs from the catalog's `[topics]` table. The first is the home cluster; further values are cross-topic membership. These are associations, not prerequisites. |
@@ -68,6 +68,7 @@ answer more specialized questions:
 | [Publication manifest](publication.toml) | Canonical-source-to-site routes, notebook execution, and generated page/download relationships. `existing` in the catalog does not mean published. |
 | [Navigation display](navigation.toml) | Collection labels, grouping and display order. It refers to catalog types and topics; it does not duplicate article sources or decide learning continuations. |
 | [API coverage](api_coverage.toml) | Binding and family coverage, reference targets, examples, method review, and reference-writing backlog. An article record for a target does not mean its methods are documented. |
+| [Visualization support](visualization_support.md) | Display-family and frontend contracts, native/browser evidence, and required acceptance owners. A rendered tutorial does not qualify a live frontend. |
 | [API inventory guide](api_inventory.md) and generated runtime inventory | What bindings actually exist and how their identity and intended public exposure are reconciled. The generated symbol list is not an authored article. |
 | [Learning-path brief](learning_path.md) | Worked mathematical examples, page-level teaching requirements, figure expectations, and acceptance evidence for the first route. |
 | [Comparison-suite guide](benchmark_suites.md) | Experimental charters, comparison semantics, study scope and closure. A planned report supplies no measured result. |
@@ -241,3 +242,11 @@ for item in catalog["articles"]:
         print(f"  {item['question']}")
 PY
 ```
+
+
+The scalar-field continuation uses the existing `guide_features` and `B43`
+identities. The features notebook owns the exploration of sampled landscapes
+and coordinate sections; the feature-transform account owns line parameters,
+windows and interpolation bounds. B44/B46 retain drawing and live selection.
+Future feature-table and batching material extends these accounts, and the
+comparison guide links to the coordinate-field workflow instead of duplicating it.

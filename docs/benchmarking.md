@@ -50,8 +50,10 @@ package. Preserve losses and coverage gaps: they identify what to improve next.
 | Begin a study | [Study brief and completion checks](#study-brief-and-completion-checks) |
 
 Completed comparisons are collected in [Benchmark results](benchmarks/index.md),
-including [QPA](benchmarks/qpa.md), [PHAT](benchmarks/phat.md) and
-[Ripser.py](benchmarks/ripser.md). Those pages present the measured
+including [QPA](benchmarks/qpa.md), [PHAT](benchmarks/phat.md),
+[Ripser.py](benchmarks/ripser.md), and a separate
+[original C++ Ripser comparison](benchmarks/ripser_cpp.md), together with
+[CubicalRipser](benchmarks/cubicalripser.md) for large images and volumes. Those pages present the measured
 outcomes; this manual explains how to obtain and interpret them. Public
 results and figures do not by themselves constitute a runnable reproduction
 bundle.

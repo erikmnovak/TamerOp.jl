@@ -66,6 +66,13 @@ struct PolygonLayer <: AbstractVisualizationLayer
     linewidth::Float64
 end
 
+"""Filled cyclic planar polygons in three-dimensional source coordinates."""
+struct Polygon3Layer <: AbstractVisualizationLayer
+    polygons::Vector{Vector{NTuple{3,Float64}}}
+    color::Union{Symbol,_VisualRole}
+    alpha::Float64
+end
+
 struct SegmentLayer <: AbstractVisualizationLayer
     segments::Vector{NTuple{4,Float64}}
     color::Union{Symbol,_VisualRole}

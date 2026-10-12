@@ -24,6 +24,9 @@ function _render_interval_inspector(spec; display::Symbol=:inline, figure=nothin
     selected_bar, selected_bar_point, selected_point =
         M.Observable(M.Point2d[]), M.Observable(M.Point2d[]), M.Observable(M.Point2d[])
     navigation_content = M.Observable{Any}(B.DOM.div())
+    source_content = M.Observable{Any}(B.DOM.div())
+    source_figure = Ref{Any}(nothing)
+    source_key = Ref{Any}(nothing)
     snapshot = VIZ.inspection_snapshot(session)
     payload = snapshot.metadata.interval_payload
     readout = M.Observable{Any}(_inspection_dom_readout(snapshot;style))
@@ -164,6 +167,10 @@ function _render_interval_inspector(spec; display::Symbol=:inline, figure=nothin
             browser_client[] = nothing
         end
         navigation_content[] = B.DOM.p("Inspector closed.")
+        source_content[] = B.DOM.div()
+        source_figure[]===nothing || empty!(source_figure[])
+        source_figure[]=nothing
+        source_key[]=nothing
         foreach(delete!,navigation_blocks)
         empty!(navigation_blocks)
         figure === nothing && empty!(fig)
@@ -211,6 +218,20 @@ function _render_interval_inspector(spec; display::Symbol=:inline, figure=nothin
                  "\n$(length(members)) original members; " * (selection.member === nothing ? "choose one before requesting a cycle." : "member $(selection.member) selected.")))
             status_text[] = text
             readout[] = _inspection_dom_readout(current_snapshot;style)
+            selected_rep=get(current_snapshot.metadata,:selected_representative,nothing)
+            if source_key[] !== selected_rep
+                source_figure[]===nothing || empty!(source_figure[])
+                source_figure[]=nothing
+                source_content[]=B.DOM.div()
+                source_key[]=selected_rep
+                if length(current_snapshot.panels)>3
+                    source_spec=VIZ.VisualizationSpec(:source_overlays;title="Retained source representatives",
+                        panels=current_snapshot.panels[4:end],metadata=(;panel_columns=2))
+                    source_figure[]=_HANDLERS.render(source_spec;style,size=(1100,500))
+                    source_content[]=source_figure[]
+                end
+            end
+            hover_text[]=""
         finally
             updating[] = false
         end
@@ -272,12 +293,14 @@ function _render_interval_inspector(spec; display::Symbol=:inline, figure=nothin
         B.DOM.p("Live Julia session required. Click either chart to select an interval group. Repeated clicks cycle coincident points. The selector includes every group, including groups outside the window."),
         row(label("Selected interval group",interval),label("Original member number",member),apply_member),
         row(label("Show retained representative",representative),reset_button,close_button),
-        B.DOM.p("Duplicate intervals describe several independent classes. Choose an original member before requesting its retained cycle. Cycles are reduction choices; no source geometry or correspondence between different lines is implied."),
+        B.DOM.p("Duplicate intervals describe several independent classes. Choose an original member before requesting its retained cycle. Cycles are reduction choices. Verified retained source data enable cycle-at-birth and filling-at-death panels. Selection does not identify classes between different lines."),
         B.DOM.p(error_text;id="$dom_id-error",role="alert",style="color:$error_css;white-space:pre-line"),
         B.DOM.p(status_text;id="$dom_id-status",role="status",style="white-space:pre-line"),
         B.DOM.p(hover_text;id="$dom_id-hover",role="status",style="white-space:pre-line"),
         B.DOM.div(navigation_content;style="max-width:100%;overflow:auto",tabindex="0",
             var"aria-label"="Linked barcode and persistence diagram"),
+        B.DOM.div(source_content;id="$dom_id-source-overlays",style="max-width:100%;overflow:auto",tabindex="0",
+            var"aria-label"="Source cycle and death filling"),
         B.DOM.div(readout;id="$dom_id-readout");id=dom_id,
         style="box-sizing:border-box;font-family:'$(style.font)',sans-serif;font-size:$(style.fontsize)px;line-height:1.45;color:$foreground_css;background:$background_css;padding:$(style.padding)px;width:100%;max-width:$(figure_size[1]+2*style.padding)px;min-width:0;overflow-wrap:anywhere")
     app = B.App(;title="TamerOp interval inspector") do browser_session
@@ -290,6 +313,7 @@ function _render_interval_inspector(spec; display::Symbol=:inline, figure=nothin
             end
             if browser_client[] === nothing
                 browser_client[] = browser_session
+                _inspection_keyboard_navigation!(browser_session, dom)
                 push!(observers,M.on(browser_session.on_close) do isclosed
                     isclosed && dispose()
                     return nothing
@@ -304,6 +328,6 @@ function _render_interval_inspector(spec; display::Symbol=:inline, figure=nothin
     _INSPECTION_UI_HANDLES[app] = (;session,figure=fig,controls,callbacks,axes,chart_data,
         selected_bar,selected_bar_point,selected_point,rebuild_count,dispose,closed,disabled,
         member_disabled,representative_disabled,observers,session_token,browser_client,
-        navigation_content,readout,error_text,status_text,hover_text,dom_id,style,figure_size)
+        navigation_content,source_content,source_figure,readout,error_text,status_text,hover_text,dom_id,style,figure_size)
     return app
 end

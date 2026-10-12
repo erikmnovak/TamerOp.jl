@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { state, control, openInspector, selected, fullyClosed, pick, capture, checkNarrowLayout } from './helpers.mjs';
+import { state, control, openInspector, selected, fullyClosed, pick, capture, checkNarrowLayout, checkKeyboardControls } from './helpers.mjs';
 
 const baseURL = `http://127.0.0.1:${process.env.TAMEROP_BROWSER_SLICE_PORT || 8849}`;
 
@@ -142,6 +142,12 @@ test('previous manual A37 checks: exact spaces, maps, presentation bases, hover 
   active = (await state(page)).presentation.stalks[0];
   expect(active.basis).toEqual({ size: [1, 0], rows: [[]] });
   await expect(control(page, 'readout')).toContainText('Empty matrix (1 x 0)');
+  // Selection rebuilt the presentation support figure. New canvases must keep
+  // both forward and reverse keyboard escape without changing the calculation.
+  const beforeNavigation = await state(page);
+  await checkKeyboardControls(page);
+  expect((await state(page)).selection).toEqual(beforeNavigation.selection);
+  expect(work((await state(page)).summary)).toEqual(work(beforeNavigation.summary));
   await capture(page, testInfo, 'manual-active-zero-image-basis');
 
   const activeQuery = query((await state(page)).selection);
@@ -233,6 +239,9 @@ test('previous manual A37 checks: exact spaces, maps, presentation bases, hover 
 });
 
 test('previous manual A40/A41 checks: closed-square slices, singleton and empty restrictions, drafts and integration', async ({ page, context }, testInfo) => {
+  // This case traverses many rebuilt figures. Leave room for cold compilation
+  // and software rendering; individual readout assertions keep their deadlines.
+  test.setTimeout(900_000);
   const errors = [];
   const url = `${baseURL}/squares-slices`;
   await openInspector(page, url, errors);

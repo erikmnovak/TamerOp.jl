@@ -12,6 +12,22 @@ function _dispose_inspection_ui!(app; close_session::Bool=true)
     return nothing
 end
 
+# WGL canvases consume every keydown by default, including Tab. Keep native
+# focus navigation through and out of plots; all other plot keys reach Makie.
+# Delegation on the viewer root also covers figures rebuilt after selection.
+function _inspection_keyboard_navigation!(client, dom)
+    WGLMakie.Bonito.onload(client, dom, WGLMakie.Bonito.js"""
+        function(element) {
+            element.addEventListener("keydown", function(event) {
+                if (event.key === "Tab" && event.target.tagName === "CANVAS") {
+                    event.stopPropagation();
+                }
+            }, true);
+        }
+    """)
+    return nothing
+end
+
 function _inspection_css_color(style, color)
     rgba = WGLMakie.Makie.to_color(VIZ._visual_color(style, color))
     r, g, b = rgba.r, rgba.g, rgba.b
@@ -49,7 +65,7 @@ function _inspection_dom_readout(snapshot; style=VIZ.VisualStyle())
     heading_style = "font-family:'$(style.font)',sans-serif;font-size:$(1.125 * style.fontsize)px;margin:0 0 $(style.gap/2)px;overflow-wrap:anywhere"
     for panel in VIZ.visual_panels(snapshot)
         panel.kind in (:hasse, :regions, :region_labels, :query_overlay, :presentation_support, :rank_section_plane, :rank_section_hasse,
-            :slice_barcode, :slice_diagram, :barcode, :persistence_diagram) && continue
+            :slice_barcode, :slice_diagram, :barcode, :persistence_diagram, :source_chain_geometry) && continue
         content = Any[B.DOM.h3(panel.title; style=heading_style),
                       B.DOM.p(panel.subtitle; style="white-space:pre-line")]
         for layer in VIZ.visual_layers(panel)
@@ -656,6 +672,7 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
             end
             if browser_client[] === nothing
                 browser_client[] = browser_session
+                _inspection_keyboard_navigation!(browser_session, dom)
                 push!(observers, M.on(browser_session.on_close) do isclosed
                     isclosed && dispose()
                     return nothing

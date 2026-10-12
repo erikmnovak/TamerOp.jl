@@ -687,14 +687,14 @@ module SpectralSequences
 
     function ChainComplexes.dr_target(TSS::TorSpectralSequence, r::Int, ab::Tuple{Int, Int})
         a, b = ab
-        A, B = ChainComplexes.dr_target(TSS.ss, r, (-a, -b))
-        return (-A, -B)
+        target = ChainComplexes.dr_target(TSS.ss, r, (-a, -b))
+        return target === nothing ? nothing : (-target[1], -target[2])
     end
 
     function ChainComplexes.dr_source(TSS::TorSpectralSequence, r::Int, ab::Tuple{Int, Int})
         a, b = ab
-        A, B = ChainComplexes.dr_source(TSS.ss, r, (-a, -b))
-        return (-A, -B)
+        source = ChainComplexes.dr_source(TSS.ss, r, (-a, -b))
+        return source === nothing ? nothing : (-source[1], -source[2])
     end
 
     ChainComplexes.convergence_report(TSS::TorSpectralSequence) = ChainComplexes.convergence_report(TSS.ss)

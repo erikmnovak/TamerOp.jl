@@ -2489,4 +2489,6 @@ function mp_landscape(
     return MPLandscape(kk, tg, vals, W, copy(plan.dirs), copy(plan.offs))
 end
 
+include("ambient_landscapes.jl")
+
 end # module MultiparameterImages

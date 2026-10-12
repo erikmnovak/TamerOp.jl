@@ -36,9 +36,13 @@ UX can stay stable even when no Makie backend is installed.
 module Visualization
 
 using Statistics
+using Base64, SHA, JSON3
+import ..Serialization
+import ..Featurizers
 using SparseArrays
 
 import ..ChainComplexes: describe, cohomology_dims, dimensions
+import ..ChainComplexes
 import ..FiniteFringe
 import ..Modules
 import ..AbelianCategories
@@ -47,6 +51,8 @@ import ..ModuleComplexes
 import ..Results
 import ..CoreModules
 import ..FieldLinAlg
+import ..Invariants
+import ..SignedMeasures
 import ..InvariantCore
 import ..IndicatorResolutions
 import ..IndicatorTypes
@@ -62,6 +68,7 @@ using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, GridEncodingMa
 using ..Encoding: EncodingMap, source_poset, target_poset, region_map
 using ..Results: EncodingResult, CohomologyDimsResult, ModuleTranslationResult, InvariantResult,
                  invariant_value, translation_map, translation_kind, source_result
+import ..ChangeOfPosets
 using ..ChangeOfPosets: CommonRefinementTranslationResult, common_poset, projection_maps
 using ..FlangeZn: Flange, active_flats, active_injectives, flats, injectives
 using ..FieldLinAlg: rank_restricted
@@ -87,7 +94,7 @@ using ..SignedMeasures: Rect, RectSignedBarcode, PointSignedMeasure, SignedMeasu
                         components, component_names, has_rectangles,
                         has_euler_signed_measure, has_mpp_image,
                         euler_signed_measure, mpp_image
-using ..MultiparameterImages: MPPLineSpec, MPPDecomposition, MPPImage, MPLandscape,
+using ..MultiparameterImages: MPPLineSpec, MPPDecomposition, MPPImage, MPLandscape, AmbientLandscapeGrid,
                               line_direction, line_basepoint, line_offset, line_omega,
                               line_specs, summand_segments, nsummands, nlines, bounding_box,
                               summand_weights, image_xgrid, image_ygrid, image_values,
@@ -102,20 +109,53 @@ include("visualization/rendering.jl")
 include("visualization/region_geometry.jl")
 include("visualization/builders_encoding.jl")
 include("visualization/builders_invariants.jl")
+include("visualization/builders_signed.jl")
 include("visualization/hasse_layout.jl")
 include("visualization/builders_modules.jl")
 include("visualization/builders_presentations.jl")
 include("visualization/builders_morphisms.jl")
 include("visualization/builders_morphism_comparisons.jl")
+include("visualization/builders_transport.jl")
 include("visualization/builders_resolutions.jl")
+include("visualization/builders_spectral.jl")
 include("visualization/builders_rank_sections.jl")
+include("visualization/builders_propagation.jl")
 include("visualization/builders_slices.jl")
+include("visualization/source_previews.jl")
 include("visualization/builders_ingestion.jl")
+include("visualization/builders_complexes.jl")
+include("visualization/builders_source_chains.jl")
+include("visualization/builders_chains.jl")
+include("visualization/builders_geometric.jl")
+include("visualization/builders_derived.jl")
+include("visualization/builders_components.jl")
 include("visualization/inspection_slices.jl")
 include("visualization/inspection_session.jl")
 include("visualization/inspection_intervals.jl")
 include("visualization/builders_matchings.jl")
 include("visualization/inspection_matchings.jl")
+include("visualization/inspection_signed.jl")
+include("visualization/inspection_spectral.jl")
+include("visualization/inspection_complexes.jl")
+include("visualization/inspection_chains.jl")
+include("visualization/inspection_components.jl")
+include("visualization/inspection_transport.jl")
+include("visualization/builders_generalized_rank.jl")
+include("visualization/inspection_generalized_rank.jl")
+include("visualization/builders_fields.jl")
+include("visualization/inspection_fields.jl")
 include("visualization/inspection_rendering.jl")
+include("visualization/composition.jl")
+include("visualization/builders_comparisons.jl")
+include("visualization/inspection_comparisons.jl")
+include("visualization/builders_collections.jl")
+include("visualization/inspection_collections.jl")
+include("visualization/builders_ensembles.jl")
+include("visualization/inspection_ensembles.jl")
+include("visualization/module_editor.jl")
+include("visualization/session_composition.jl")
+include("visualization/session_html.jl")
+include("visualization/saved_sessions.jl")
+include("visualization/editor_export.jl")
 
 end # module Visualization

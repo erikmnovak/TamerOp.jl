@@ -1,5 +1,171 @@
 using Test
 
+@testset "A80 stratified box modules and exact witnesses" begin
+    # Direct sum of a rectangle, two perpendicular faces and a point. The
+    # coefficients deliberately vanish in different characteristics.
+    lows = [[0,0], [1,0], [0,1], [1,1]]
+    highs = [[2,2], [1,2], [2,1], [1,1]]
+    ups = PLB.BoxUpset.(lows)
+    downs = PLB.BoxDownset.(highs)
+    points = vec([(QQ(x),QQ(y)) for x in -1:3, y in -1:3])
+    with_fields(FIELDS_FULL) do field
+        K = CM.coeff_type(field)
+        scalars = CM.coerce.(Ref(field), [1,2,3,5])
+        phi = Matrix(Diagonal(scalars))
+        active(x) = [k for k in 1:4 if !iszero(scalars[k]) &&
+            all(lows[k][j] <= x[j] <= highs[k][j] for j in 1:2)]
+        expected(x,y) = K[CM.coerce(field,s == t) for s in active(y), t in active(x)]
+        same(A,B) = field isa CM.RealField ? isapprox(A,B;atol=1e-12,rtol=1e-12) : A == B
+        function identifications(H,pi)
+            Dict(x => begin
+                stalk = IR.presentation_stalk(H;vertex=EC.locate(pi,x),basis=true)
+                rows = IR.active_rows(stalk)
+                E = IR.image_basis(stalk)
+                S = E[Int[findfirst(==(k),rows) for k in active(x)],:]
+                @test size(S) == (length(active(x)),length(active(x)))
+                # These diagonal-summand fibers have a scaled/permuted diagonal
+                # basis, even when numerical pivoting reorders columns.
+                @test all(count(!iszero,row) == 1 for row in eachrow(S))
+                @test all(count(!iszero,col) == 1 for col in eachcol(S))
+                S
+            end for x in points)
+        end
+        # The general polyhedral route independently enumerates feasible cells.
+        general = TO.encode(ups, downs, phi, TO.EncodingOptions(backend=:pl,field=field))
+        GM = RES.encoding_module(general)
+        gp = RES.encoding_map(general)
+        GI = identifications(RES.encoding_presentation(general),gp)
+        for kind in (:signature,:dense)
+            enc = TO.encode(ups, downs, phi, TO.EncodingOptions(field=field,poset_kind=kind))
+            @test enc.backend == :pl_backend
+            pi = RES.encoding_map(enc)
+            _,H,_ = PLB.encode_fringe_boxes(ups,downs,phi,TO.EncodingOptions(field=field,poset_kind=kind))
+            @test H.fiber_dims[] === nothing
+            @test PLB.check_box_encoding_map(pi).valid
+            @test PLB.cell_shape(pi) == [5,5]
+            @test PLB.critical_coordinates(pi) == ([0.0,1.0,1.0,2.0],[0.0,1.0,1.0,2.0])
+            @test all(EC.locate(pi,x) == r for (r,x) in enumerate(EC.representatives(pi)))
+            # Querying a selected fringe fiber before materializing the module
+            # must retain the point and face dimensions.
+            for x in points
+                r = EC.locate(pi,x)
+                @test r > 0
+                @test FF.fiber_dimension(H,r) == length(active(x))
+                @test PLB.region_signature(pi,r) ==
+                    (y=[all(lows[k][j] <= x[j] for j in 1:2) for k in 1:4],
+                     z=[!all(x[j] <= highs[k][j] for j in 1:2) for k in 1:4])
+            end
+            M = RES.encoding_module(enc)
+            MI = identifications(RES.encoding_presentation(enc),pi)
+            for x in points, y in points
+                all(x .<= y) || continue
+                a,b = EC.locate(pi,x),EC.locate(pi,y)
+                ga,gb = EC.locate(gp,x),EC.locate(gp,y)
+                @test same(MI[y] * Matrix(MD.map_leq(M,a,b)), expected(x,y) * MI[x])
+                @test same(GI[y] * Matrix(MD.map_leq(GM,ga,gb)), expected(x,y) * GI[x])
+            end
+            batch = hcat(collect.(points)...)
+            for mode in (:fast,:verified), threaded in (false,true)
+                labels = zeros(Int,length(points))
+                EC.locate_many!(labels,pi,batch;mode=mode,threaded=threaded)
+                @test labels == [EC.locate(pi,x) for x in points]
+            end
+            mktemp() do path,io
+                close(io)
+                SER.save_encoding_json(path,enc)
+                restored = SER.load_encoding_json(path)
+                rp = RES.encoding_map(restored)
+                RM = RES.encoding_module(restored)
+                RI = identifications(RES.encoding_presentation(restored),rp)
+                @test EC.representatives(rp) == EC.representatives(pi)
+                @test PLB.check_box_encoding_map(rp).valid
+                for x in points, y in points
+                    all(x .<= y) || continue
+                    @test same(RI[y] * Matrix(MD.map_leq(RM,EC.locate(rp,x),EC.locate(rp,y))), expected(x,y) * RI[x])
+                end
+            end
+        end
+    end
+    # Adjacent Float64 endpoints have no floating-point interior witness.
+    for a in (1.0, 2.0^54, -1.0e308)
+        b = nextfloat(a)
+        _,_,pi = PLB.encode_fringe_boxes([PLB.BoxUpset([a]),PLB.BoxUpset([b])],
+            [PLB.BoxDownset([a]),PLB.BoxDownset([b])], Matrix{QQ}(I,2,2))
+        mid = (QQ(a)+QQ(b))/2
+        rid = EC.locate(pi,(mid,))
+        @test a < only(PLB.region_representative(pi,rid)) < b
+        @test PLB.check_box_encoding_map(pi).valid
+        @test all(EC.locate(pi,x) == r for (r,x) in enumerate(EC.representatives(pi)))
+    end
+    # Empty generator families must survive the zero-word signature codec.
+    for (ups,downs) in ((PLB.BoxUpset[],[PLB.BoxDownset([0])]),
+                        ([PLB.BoxUpset([0])],PLB.BoxDownset[]))
+        P,H,pi = PLB.encode_fringe_boxes(ups,downs,zeros(QQ,length(downs),length(ups)))
+        mktemp() do path,io
+            close(io)
+            SER.save_encoding_json(path,P,H,pi)
+            _,rp = SER.load_encoding_json(path;output=:fringe_with_pi)
+            @test EC.representatives(rp) == EC.representatives(pi)
+            @test PLB.check_box_encoding_map(rp).valid
+        end
+    end
+end
+
+@testset "A80 zero-volume geometry and cell budgets" begin
+    box = ([-1.0,-1.0],[3.0,3.0])
+    for (upper,volume,boundary,bbox,radius) in
+        (([0,0],0.0,0.0,([0.0,0.0],[0.0,0.0]),0.0),
+         ([0,2],0.0,2.0,([0.0,0.0],[0.0,2.0]),1.0),
+         ([2,2],4.0,8.0,([0.0,0.0],[2.0,2.0]),sqrt(2.0)))
+        P,H,pi = PLB.encode_fringe_boxes([PLB.BoxUpset([0,0])],[PLB.BoxDownset(upper)])
+        r = EC.locate(pi,(0,0))
+        @test PLB.region_bbox(pi,r;box=box) == bbox
+        @test PLB.region_volume(pi,r;box=box) == volume
+        @test PLB.region_weights(pi;box=box)[r] == volume
+        @test PLB.region_boundary_measure(pi,r;box=box) == boundary
+        pieces = PLB.region_boundary_measure_breakdown(pi,r;box=box)
+        @test sum(p.measure for p in pieces;init=0.0) == boundary
+        @test isapprox(PLB.region_circumradius(pi,r;box=box), radius)
+        # The mean projection length of a planar segment is 2L/pi, even
+        # though its geometric boundary measure is only L.
+        expected_width = upper == [0,0] ? 0.0 : upper == [0,2] ? 4 / Float64(Base.MathConstants.pi) : 8 / Float64(Base.MathConstants.pi)
+        @test isapprox(PLB.region_mean_width(pi,r;box=box,method=:cauchy),expected_width)
+        @test PLB.region_mean_width(pi,r;box=box,directions=[1.0 0.0;0.0 1.0]) == sum(upper)/2
+        @test PLB.region_bbox(pi,r;box=([0.0,0.0],[0.0,0.0])) == ([0.0,0.0],[0.0,0.0])
+        @test PLB.region_bbox(pi,r;box=([2.5,2.5],[3.0,3.0])) === nothing
+        if upper == [0,2]
+            @test PLB.region_chebyshev_ball(pi,r;box=box).radius == 0
+            @test all(p.kind == :stratum && iszero(norm(p.normal)) for p in pieces)
+            adjacency = PLB.region_adjacency(pi;box=box)
+            left,right = EC.locate(pi,(-1,1)),EC.locate(pi,(1,1))
+            @test adjacency[minmax(left,r)] == 2
+            @test adjacency[minmax(right,r)] == 2
+            moments = PLB.region_principal_directions(pi,r;box=box)
+            @test isapprox(moments.mean, [0,1])
+            @test isapprox(moments.cov, [0 0; 0 1/3])
+            @test isapprox(moments.evals, [1/3,0])
+        end
+    end
+    # An isolated 1D point has zero length but one boundary point, not two.
+    _,_,point = PLB.encode_fringe_boxes([PLB.BoxUpset([0])],[PLB.BoxDownset([0])])
+    @test PLB.region_boundary_measure(point,EC.locate(point,(0,));box=([-1.0],[1.0])) == 1
+    # A face in R^3 has zero volume and its area is its ambient boundary measure.
+    _,_,face = PLB.encode_fringe_boxes([PLB.BoxUpset([0,0,0])],[PLB.BoxDownset([0,2,3])])
+    r = EC.locate(face,(0,1,1))
+    box3 = (fill(-1.0,3),fill(4.0,3))
+    @test PLB.region_bbox(face,r;box=box3) == ([0.,0.,0.],[0.,2.,3.])
+    @test PLB.region_volume(face,r;box=box3) == 0
+    @test PLB.region_boundary_measure(face,r;box=box3) == 6
+    for n in 1:3
+        ups,downs = [PLB.BoxUpset(zeros(n))],[PLB.BoxDownset(zeros(n))]
+        @test TO.Workflow.supports_pl_backend(ups,downs;opts=TO.EncodingOptions(max_regions=3^n))
+        @test !TO.Workflow.supports_pl_backend(ups,downs;opts=TO.EncodingOptions(max_regions=3^n-1))
+        @test_throws ErrorException PLB.encode_fringe_boxes(ups,downs,TO.EncodingOptions(max_regions=3^n-1))
+        _,_,pi = PLB.encode_fringe_boxes(ups,downs,TO.EncodingOptions(max_regions=3^n))
+        @test length(pi.cell_to_region) == 3^n
+    end
+end
+
 # Included from test/runtests.jl; uses shared aliases (TO, PLP, PLB, FF, QQ, ...).
 
 @testset "A79 cached PL batches retain a consistent bucket snapshot" begin

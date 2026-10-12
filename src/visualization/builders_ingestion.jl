@@ -81,20 +81,6 @@ function _axes_from_matrix_3d(A::AbstractMatrix{<:Real}; labels=("x1", "x2", "x3
                             aspect=:data)
 end
 
-function _collect_point_labels(labels, n::Int)
-    labels === nothing && return String[]
-    out = String[]
-    if labels isa AbstractVector
-        length(labels) == n || throw(ArgumentError("labels length must equal the number of plotted points."))
-        sizehint!(out, n)
-        for lbl in labels
-            push!(out, string(lbl))
-        end
-        return out
-    end
-    throw(ArgumentError("labels must be an AbstractVector or nothing."))
-end
-
 function _density_heatmap(points::AbstractMatrix{<:Real}; nbins::Int=24)
     size(points, 2) == 2 || throw(ArgumentError("density overlay requires 2-dimensional points."))
     size(points, 1) == 0 && return HeatmapLayer([0.0, 1.0], [0.0, 1.0], zeros(2, 2), :magma, 0.65, "point density")
@@ -124,40 +110,6 @@ end
         s += delta * delta
     end
     return s
-end
-
-function _knn_edges(A::AbstractMatrix{<:Real}, k::Int)
-    n = size(A, 1)
-    0 < k < n || throw(ArgumentError("k must satisfy 0 < k < npoints."))
-    seen = Set{Tuple{Int,Int}}()
-    edges = Tuple{Int,Int}[]
-    @inbounds for i in 1:n
-        dists = Tuple{Float64,Int}[]
-        sizehint!(dists, n - 1)
-        for j in 1:n
-            i == j && continue
-            push!(dists, (_dist2(A, i, j), j))
-        end
-        sort!(dists, by=first)
-        for (_, j) in dists[1:min(k, length(dists))]
-            e = i < j ? (i, j) : (j, i)
-            if !(e in seen)
-                push!(seen, e)
-                push!(edges, e)
-            end
-        end
-    end
-    return edges
-end
-
-function _radius_edges(A::AbstractMatrix{<:Real}, radius::Real)
-    n = size(A, 1)
-    r2 = float(radius)^2
-    edges = Tuple{Int,Int}[]
-    @inbounds for i in 1:(n - 1), j in (i + 1):n
-        _dist2(A, i, j) <= r2 && push!(edges, (i, j))
-    end
-    return edges
 end
 
 function _segments_from_edges_2d(points::AbstractMatrix{<:Real}, edges)
@@ -194,29 +146,11 @@ function _graph_layout_2d(data::DataTypes.GraphData; dims=nothing)
     return P, chosen, :embedded
 end
 
-function _graph_layout_3d(data::DataTypes.GraphData; dims=nothing)
-    coords = DataTypes.coord_matrix(data)
-    if coords === nothing
-        n = DataTypes.nvertices(data)
-        pts = Matrix{Float64}(undef, n, 3)
-        @inbounds for i in 1:n
-            theta = 2 * pi * (i - 1) / max(n, 1)
-            pts[i, 1] = cos(theta)
-            pts[i, 2] = sin(theta)
-            pts[i, 3] = 0.25 * sin(2 * theta)
-        end
-        return pts, [1, 2, 3], :circular
-    end
-    P, chosen = _project_coords(coords, 3; dims=dims)
-    return P, chosen, :embedded
-end
-
-function _weighted_edge_layers_2d(points::AbstractMatrix{<:Real}, edges, weights::AbstractVector{<:Real})
+function _weighted_edge_layers_2d(points::AbstractMatrix{<:Real}, edges, weights::AbstractVector{<:Real}; weight_range=nothing)
     layers = AbstractVisualizationLayer[]
     legend_entries = NamedTuple[]
     isempty(edges) && return layers, legend_entries
-    wmin = minimum(Float64.(weights))
-    wmax = maximum(Float64.(weights))
+    wmin,wmax = weight_range===nothing ? extrema(Float64.(weights)) : Float64.(weight_range)
     span = max(wmax - wmin, 1e-9)
     palette = (:steelblue3, :darkorange2, :crimson)
     bins = [NTuple{4,Float64}[] for _ in 1:3]
@@ -235,12 +169,11 @@ function _weighted_edge_layers_2d(points::AbstractMatrix{<:Real}, edges, weights
     return layers, legend_entries
 end
 
-function _weighted_edge_layers_3d(points::AbstractMatrix{<:Real}, edges, weights::AbstractVector{<:Real})
+function _weighted_edge_layers_3d(points::AbstractMatrix{<:Real}, edges, weights::AbstractVector{<:Real}; weight_range=nothing)
     layers = AbstractVisualizationLayer[]
     legend_entries = NamedTuple[]
     isempty(edges) && return layers, legend_entries
-    wmin = minimum(Float64.(weights))
-    wmax = maximum(Float64.(weights))
+    wmin,wmax = weight_range===nothing ? extrema(Float64.(weights)) : Float64.(weight_range)
     span = max(wmax - wmin, 1e-9)
     palette = (:steelblue3, :darkorange2, :crimson)
     bins = [NTuple{6,Float64}[] for _ in 1:3]
@@ -347,29 +280,33 @@ end
 function _codensity_snapshot_panel_spec(coords::AbstractMatrix{<:Real},
                                         vals::AbstractVector{<:Real},
                                         cutoff::Real,
-                                        radius::Real)
+                                        radius::Real;max_points=5000)
     cutoff64 = float(cutoff)
     radius64 = float(radius)
     keep = Float64.(vals) .<= cutoff64
-    retained = coords[keep, :]
-    retained_vals = Float64.(vals[keep])
+    ids=_source_ids(size(coords,1),max_points)
+    selected=filter(i->keep[i],ids)
+    retained = coords[selected, :]
+    retained_vals = Float64.(vals[selected])
     layers = AbstractVisualizationLayer[
-        _point_layer_from_matrix(coords; color=:gray88, alpha=0.95, markersize=5.0),
+        _point_layer_from_matrix(coords[ids,:]; color=:gray88, alpha=0.95, markersize=5.0),
         _point_layer_from_matrix(retained; color=retained_vals, alpha=0.18,
                                  markersize=2.0 * radius64, colormap=:viridis, markerspace=:data),
         _point_layer_from_matrix(retained; color=retained_vals, alpha=0.95, markersize=8.0, colormap=:viridis),
     ]
     return VisualizationSpec(:codensity_radius_snapshot;
                              title="c <= $(round(cutoff64; digits=3)), r = $(round(radius64; digits=2))",
-                             subtitle="$(count(identity, keep)) retained points",
+                             subtitle="$(length(selected))/$(count(identity, keep)) retained points displayed",
                              layers=layers,
                              axes=_axes_from_matrix_2d(coords),
-                             metadata=(; cutoff=cutoff64, radius=radius64, nretained=count(identity, keep)))
+                             metadata=(; cutoff=cutoff64, radius=radius64, nretained=count(identity, keep),
+                                 point_ids=ids,retained_ids=selected,displayed_retained=length(selected),
+                                 total_points=size(coords,1),displayed_points=length(ids)))
 end
 
 function _visual_spec(res::DataIngestion.PointCodensityResult, kind::Symbol;
                       radii::AbstractVector{<:Real}=[0.07, 0.16, 0.30],
-                      codensity_levels=:quantiles,
+                      codensity_levels=:quantiles,max_points=5000,_preview_cache=nothing,
                       kwargs...)
     vals = DataIngestion.codensity_values(res)
     data = DataIngestion.source_data(res)
@@ -385,7 +322,7 @@ function _visual_spec(res::DataIngestion.PointCodensityResult, kind::Symbol;
         panels = VisualizationSpec[]
         sizehint!(panels, length(cutoffs) * length(radii))
         for cutoff in reverse(cutoffs), radius in radii
-            push!(panels, _codensity_snapshot_panel_spec(coords, vals, cutoff, radius))
+            push!(panels, _codensity_snapshot_panel_spec(coords, vals, cutoff, radius;max_points))
         end
         return VisualizationSpec(:codensity_radius_snapshots;
                                  title="Codensity/radius snapshots",
@@ -396,6 +333,9 @@ function _visual_spec(res::DataIngestion.PointCodensityResult, kind::Symbol;
                                      dtm_mass=DataIngestion.codensity_mass(res),
                                      neighbor_count=DataIngestion.neighbor_count(res),
                                      nlevels=length(cutoffs),
+                                     total_points=size(coords,1),displayed_points=min(size(coords,1),max_points),
+                                     point_ids=_source_ids(size(coords,1),max_points),
+                                     construction=:codensity_ball_preview,
                                      nradii=length(radii),
                                      codensity_levels=Tuple(cutoffs),
                                      radii=Tuple(Float64.(radii)),
@@ -403,7 +343,7 @@ function _visual_spec(res::DataIngestion.PointCodensityResult, kind::Symbol;
                                      figure_size=(980, 760),
                                  ))
     end
-    base = _visual_spec(data, kind; color_values=Float64.(vals), kwargs...)
+    base = _visual_spec(data, kind; color_values=Float64.(vals),max_points,_preview_cache,kwargs...)
     return VisualizationSpec(base.kind;
                              title=base.title,
                              subtitle=base.subtitle,
@@ -422,81 +362,46 @@ function _visual_spec(res::DataIngestion.PointCodensityResult, kind::Symbol;
 end
 
 function _visual_spec(pc::DataTypes.PointCloud, kind::Symbol; dims=nothing, labels=nothing,
-                      color_values=nothing, density::Bool=false, k::Int=6,
-                      radius::Union{Nothing,Real}=nothing, kwargs...)
-    _ = kwargs
-    A = DataTypes.point_matrix(pc)
-    if kind === :points_3d
-        P, chosen = _project_coords(A, 3; dims=dims)
-        pts = NTuple{3,Float64}[(P[i, 1], P[i, 2], P[i, 3]) for i in 1:size(P, 1)]
-        ax = _axes_from_matrix_3d(P; labels=Tuple("x$(d)" for d in chosen))
-        layers = AbstractVisualizationLayer[Point3Layer(pts,
-                                                        color_values === nothing ? :dodgerblue3 : Float64.(color_values),
-                                                        0.85, 10.0,
-                                                        :viridis)]
-        metadata = (; object=:point_cloud,
-                    projected_dims=Tuple(chosen),
-                    ambient_dim=DataTypes.ambient_dim(pc),
-                    figure_size=(760, 620))
-        return VisualizationSpec(:points_3d;
-                                 title="Point cloud preview",
-                                 subtitle="3D point-cloud view",
-                                 layers=layers,
-                                 axes=ax,
-                                 legend=_default_legend(visible=false, title="layers",
-                                                        entries=[(; label="points", color=:dodgerblue3, style=:marker)]),
-                                 metadata=metadata,
-                                 interaction=_default_interaction())
-    elseif kind === :points_2d || kind === :point_density || kind === :knn_graph || kind === :radius_graph
-        P, chosen = _project_coords(A, 2; dims=dims)
-        ax = _axes_from_matrix_2d(P; labels=Tuple("x$(d)" for d in chosen))
-        layers = AbstractVisualizationLayer[]
-        legend_entries = NamedTuple[]
-        show_density = density || kind === :point_density
-        show_density && push!(layers, _density_heatmap(P))
-        if kind === :knn_graph
-            edges = size(A, 1) <= 1 ? Tuple{Int,Int}[] : _knn_edges(A, min(k, size(A, 1) - 1))
-            push!(layers, SegmentLayer(_segments_from_edges_2d(P, edges), :gray35, 0.62, 1.3))
-            push!(legend_entries, (; label="kNN edges", color=:gray55, style=:line))
-        elseif kind === :radius_graph
-            rr = radius === nothing ? (size(A, 1) <= 1 ? 0.0 :
-                 sqrt(maximum(_dist2(A, 1, j) for j in 2:size(A, 1))) / 2) : float(radius)
-            edges = size(A, 1) <= 1 ? Tuple{Int,Int}[] : _radius_edges(A, rr)
-            push!(layers, SegmentLayer(_segments_from_edges_2d(P, edges), :gray35, 0.62, 1.3))
-            push!(legend_entries, (; label="radius edges", color=:gray55, style=:line))
-        end
-        push!(layers, PointLayer(NTuple{2,Float64}[(P[i, 1], P[i, 2]) for i in 1:size(P, 1)],
-                                 color_values === nothing ? :dodgerblue3 : Float64.(color_values),
-                                 0.82, kind === :points_2d || kind === :point_density ? 9.5 : 7.5,
-                                 :viridis))
-        push!(legend_entries, (; label="points", color=:dodgerblue3, style=:marker))
-        labvec = _collect_point_labels(labels, size(P, 1))
-        isempty(labvec) || push!(layers, TextLayer(labvec,
-                                                   [(P[i, 1] + 0.02, P[i, 2] + 0.02) for i in 1:size(P, 1)],
-                                                   :black, 9.0))
-        metadata = (; object=:point_cloud,
-                    projected_dims=Tuple(chosen),
-                    ambient_dim=DataTypes.ambient_dim(pc),
-                    npoints=DataTypes.npoints(pc),
-                    overlay_density=show_density,
-                    legend_position=kind === :knn_graph || kind === :radius_graph ? :right : :none,
-                    figure_size=kind === :point_density ? (760, 520) :
-                                kind === :points_2d ? (720, 520) : (780, 560))
-        return VisualizationSpec(kind;
-                                 title="Point cloud preview",
-                                 subtitle=kind === :point_density ? "point-density overlay" :
-                                          kind === :knn_graph ? "point cloud with kNN preview graph" :
-                                          kind === :radius_graph ? "point cloud with radius preview graph" :
-                                          "2D point-cloud view",
-                                 layers=layers,
-                                 axes=ax,
-                                 legend=_default_legend(visible=kind === :knn_graph || kind === :radius_graph,
-                                                        title="layers",
-                                                        entries=legend_entries),
-                                 metadata=metadata,
-                                 interaction=_default_interaction(labels=!isempty(labvec)))
+        color_values=nothing,density::Bool=false,k::Int=6,radius=nothing,
+        max_points=5000,max_edges=10000,max_labels=50,nn_backend=:auto,
+        max_distance_pairs=10_000_000,max_graph_edges=1_000_000,_preview_cache=nothing)
+    A=DataTypes.point_matrix(pc);n=size(A,1);target=kind===:points_3d ? 3 : 2
+    P,chosen,geometry_reused=_source_projection(A,target;dims,cache=_preview_cache)
+    ids=_source_ids(n,max_points);layers=AbstractVisualizationLayer[]
+    rounded=_source_rounding(A,chosen)
+    edges=NTuple{2,Int}[];eids=Int[];eligible=0;graph_reused=false;graph_backend=:none
+    parameter=nothing
+    graph_requested=kind in (:knn_graph,:radius_graph)
+    if graph_requested
+        parameter=kind===:knn_graph ? min(k,max(n-1,0)) : radius===nothing ?
+            (n<=1 ? 0.0 : sqrt(maximum(_dist2(A,1,j) for j in 2:n))/2) : Float64(radius)
+        # Automatic preview construction is exact in the supplied floating
+        # metric. Ingestion's explicit approximate backend is never selected.
+        backend=nn_backend===:auto ? (DataIngestion._have_pointcloud_nn_backend() ? :nearestneighbors : :bruteforce) : nn_backend
+        graph=DataIngestion._prepared_point_graph(A,kind===:knn_graph ? :knn : :radius,parameter;
+            backend,cache=_preview_cache,max_distance_pairs,max_graph_edges)
+        edges=graph.edges;graph_reused=graph.reused;graph_backend=graph.backend
+        eids,eligible=_source_edge_ids(edges,n,ids,max_edges;trusted=true)
+        push!(layers,SegmentLayer(_segments_from_edges_2d(P,view(edges,eids)),:gray35,0.62,1.3))
     end
-    throw(ArgumentError("Unsupported PointCloud visualization kind $(kind)."))
+    show_density=kind!==:points_3d && (density || kind===:point_density)
+    show_density && push!(layers,_density_heatmap(P))
+    _source_points!(layers,P,ids;colors=color_values,markersize=target==3 ? 10.0 : 9.0,alpha=target==3 ? 0.85 : 0.9)
+    lids=target==2 ? _source_labels!(layers,P,labels,ids,max_labels) : Int[]
+    counts=_source_counts(n,length(edges),ids,eids,lids;eligible)
+    provenance=graph_requested ? :reconstructed_metric_preview : :supplied_points
+    axes=target==3 ? _axes_from_matrix_3d(P;labels=Tuple("x$d" for d in chosen)) :
+        _axes_from_matrix_2d(P;labels=Tuple("x$d" for d in chosen))
+    return VisualizationSpec(kind;title="Point cloud preview",
+        subtitle=(graph_requested ? "Reconstructed $(kind===:knn_graph ? "kNN" : "radius") graph; " : "")*_source_caption(counts)*(rounded ? "; Float64 coordinates rounded" : ""),
+        layers,axes,
+        legend=_default_legend(visible=graph_requested,title="preview",
+            entries=graph_requested ? [(;label="metric preview edges",color=:gray55,style=:line)] : NamedTuple[]),
+        metadata=(;object=:point_cloud,projected_dims=Tuple(chosen),ambient_dim=size(A,2),npoints=n,
+            overlay_density=show_density,density_population=show_density ? :all_source_points : :none,
+            construction=provenance,graph_backend,graph_parameter=parameter,graph_reused,geometry_reused,
+            drawing_rounding=rounded,source_edges=edges[eids],counts...,figure_size=(780,560)),
+        interaction=_default_interaction(labels=!isempty(lids)))
 end
 
 function available_visuals(data::DataTypes.GraphData)
@@ -509,104 +414,85 @@ function available_visuals(data::DataTypes.GraphData)
     return (:graph, weighted...)
 end
 
-function _visual_spec(data::DataTypes.GraphData, kind::Symbol; dims=nothing, labels=nothing, kwargs...)
-    _ = kwargs
-    if kind === :graph_3d
-        pts, chosen, layout = _graph_layout_3d(data; dims=dims)
-        edges = collect(DataTypes.edge_list(data))
-        layers = AbstractVisualizationLayer[Segment3Layer(_segments_from_edges_3d(pts, edges), :gray55, 0.55, 1.2)]
-        w = DataTypes.edge_weights(data)
-        legend_entries = [(; label="edges", color=:gray55, style=:line)]
-        if w !== nothing
-            weight_layers, extra_entries = _weighted_edge_layers_3d(pts, edges, w)
-            layers = isempty(weight_layers) ? AbstractVisualizationLayer[] : AbstractVisualizationLayer[weight_layers...]
-            legend_entries = isempty(extra_entries) ? legend_entries : extra_entries
-        else
-            layers = AbstractVisualizationLayer[layers...]
-        end
-        push!(layers, Point3Layer([tuple(pts[i, 1], pts[i, 2], pts[i, 3]) for i in 1:size(pts, 1)], :black, 0.9, 9.0))
-        return VisualizationSpec(:graph_3d;
-                                 title="Graph preview",
-                                 subtitle="3D graph view ($(layout))",
-                                 layers=layers,
-                                 axes=_axes_from_matrix_3d(pts; labels=Tuple("x$(d)" for d in chosen)),
-                                 legend=_default_legend(visible=true, title="edges", entries=legend_entries),
-                                 metadata=(; object=:graph_data, projected_dims=Tuple(chosen), layout))
-    elseif kind === :graph || kind === :weighted_graph
-        pts, chosen, layout = _graph_layout_2d(data; dims=dims)
-        edges = collect(DataTypes.edge_list(data))
-        layers = AbstractVisualizationLayer[]
-        legend_entries = NamedTuple[]
-        weights = DataTypes.edge_weights(data)
-        if kind === :weighted_graph && weights !== nothing
-            edge_layers, legend_entries = _weighted_edge_layers_2d(pts, edges, weights)
-            append!(layers, edge_layers)
-        else
-            push!(layers, SegmentLayer(_segments_from_edges_2d(pts, edges), :gray55, 0.55, 1.2))
-            push!(legend_entries, (; label="edges", color=:gray55, style=:line))
-        end
-        push!(layers, PointLayer([tuple(pts[i, 1], pts[i, 2]) for i in 1:size(pts, 1)], :black, 0.9, 9.0))
-        push!(legend_entries, (; label="vertices", color=:black, style=:marker))
-        labvec = _collect_point_labels(labels, size(pts, 1))
-        isempty(labvec) || push!(layers, TextLayer(labvec,
-                                                   [(pts[i, 1] + 0.02, pts[i, 2] + 0.02) for i in 1:size(pts, 1)],
-                                                   :black, 9.0))
-        return VisualizationSpec(kind;
-                                 title="Graph preview",
-                                 subtitle=kind === :weighted_graph && weights !== nothing ? "weighted-edge view" : "node-edge view",
-                                 layers=layers,
-                                 axes=_axes_from_matrix_2d(pts; labels=Tuple("x$(d)" for d in chosen)),
-                                 legend=_default_legend(visible=true, title="layers", entries=legend_entries),
-                                 metadata=(; object=:graph_data, projected_dims=Tuple(chosen), layout, nvertices=DataTypes.nvertices(data), nedges=DataTypes.nedges(data)),
-                                 interaction=_default_interaction(labels=!isempty(labvec)))
+function _visual_spec(data::DataTypes.GraphData,kind::Symbol;dims=nothing,labels=nothing,
+        max_points=5000,max_edges=10000,max_labels=50,_preview_cache=nothing)
+    n=DataTypes.nvertices(data);target=kind===:graph_3d ? 3 : 2
+    coords=DataTypes.coord_matrix(data)
+    P,chosen,reused=coords===nothing ? (_graph_layout_2d(data)[1:2]...,false) :
+        _source_projection(coords,target;dims,cache=_preview_cache)
+    layout=coords===nothing ? :circular : :embedded
+    rounded=coords===nothing ? false : _source_rounding(coords,chosen)
+    ids=_source_ids(n,max_points);edges=DataTypes.edge_list(data)
+    eids,eligible=_source_edge_ids(edges,n,ids,max_edges)
+    drawn=edges[eids];w=DataTypes.edge_weights(data)
+    w===nothing || all(isfinite,w) || throw(ArgumentError("Graph weights must be finite."))
+    layers=AbstractVisualizationLayer[];entries=NamedTuple[]
+    weighted=(kind===:weighted_graph || kind===:graph_3d) && w!==nothing
+    if weighted
+        ls,entries=target==3 ? _weighted_edge_layers_3d(P,drawn,w[eids];weight_range=isempty(w) ? nothing : extrema(w)) :
+            _weighted_edge_layers_2d(P,drawn,w[eids];weight_range=isempty(w) ? nothing : extrema(w))
+        append!(layers,ls)
+    else
+        push!(layers,target==3 ? Segment3Layer(_segments_from_edges_3d(P,drawn),:gray55,0.55,1.2) :
+            SegmentLayer(_segments_from_edges_2d(P,drawn),:gray55,0.55,1.2))
+        push!(entries,(;label="supplied edges",color=:gray55,style=:line))
     end
-    throw(ArgumentError("Unsupported GraphData visualization kind $(kind)."))
+    _source_points!(layers,P,ids;basecolor=:black)
+    target==2 && push!(entries,(;label="vertices",color=:black,style=:marker))
+    lids=target==2 ? _source_labels!(layers,P,labels,ids,max_labels) : Int[]
+    counts=_source_counts(n,length(edges),ids,eids,lids;eligible)
+    axes=target==3 ? _axes_from_matrix_3d(P;labels=Tuple("x$d" for d in chosen)) :
+        _axes_from_matrix_2d(P;labels=Tuple("x$d" for d in chosen))
+    return VisualizationSpec(kind;title="Graph preview",subtitle="Supplied graph ($layout); "*_source_caption(counts)*(rounded ? "; Float64 coordinates rounded" : ""),
+        layers,axes,legend=_default_legend(visible=true,title="edges",entries=entries),
+        metadata=(;object=:graph_data,projected_dims=Tuple(chosen),layout,nvertices=n,nedges=length(edges),
+            construction=:supplied_graph,drawing_rounding=rounded,geometry_reused=reused,source_edges=drawn,
+            weight_range=w===nothing || isempty(w) ? nothing : extrema(w),counts...),
+        interaction=_default_interaction(labels=!isempty(lids)))
 end
 
 available_visuals(::DataTypes.EmbeddedPlanarGraph2D) = (:embedded_planar_graph,)
 
-function _visual_spec(data::DataTypes.EmbeddedPlanarGraph2D, kind::Symbol; labels=nothing, kwargs...)
-    _ = kwargs
-    kind === :embedded_planar_graph || throw(ArgumentError("Unsupported EmbeddedPlanarGraph2D visualization kind $(kind)."))
-    positions = DataTypes.vertex_positions(data)
-    pts = Matrix{Float64}(undef, length(positions), 2)
-    for (i, vertex) in enumerate(positions)
-        pts[i, 1] = float(vertex[1])
-        pts[i, 2] = float(vertex[2])
-    end
-    poly = DataTypes.polylines(data)
-    layers = AbstractVisualizationLayer[]
-    if poly === nothing
-        push!(layers, SegmentLayer(_segments_from_edges_2d(pts, collect(DataTypes.edge_list(data))), :gray40, 0.7, 1.3))
+function _append_visual_request_issues!(issues::Vector{String},data::DataTypes.EmbeddedPlanarGraph2D,kind::Symbol;kwargs...)
+    p=(;kwargs...)
+    _source_budget_check(; (k=>v for (k,v) in pairs(p) if k in _SOURCE_BUDGET_KEYS)...)
+    limit=get(p,:max_path_points,100_000)
+    limit isa Int && limit>=0 || push!(issues,"max_path_points must be a nonnegative Int.")
+    labels=get(p,:labels,nothing)
+    labels===nothing || (labels isa AbstractVector && length(labels)==DataTypes.nvertices(data)) || push!(issues,"labels must contain one value per source vertex.")
+    return issues
+end
+
+function _visual_spec(data::DataTypes.EmbeddedPlanarGraph2D,kind::Symbol;labels=nothing,
+        max_points=5000,max_edges=10000,max_labels=50,max_path_points=100_000,_preview_cache=nothing)
+    positions=DataTypes.vertex_positions(data);n=length(positions)
+    coords=[positions[i][j] for i in 1:n,j in 1:2]
+    P,_,reused=_source_projection(coords,2;cache=_preview_cache)
+    rounded=_source_rounding(coords,(1,2))
+    ids=_source_ids(n,max_points);edges=DataTypes.edge_list(data)
+    eids,eligible=_source_edge_ids(edges,n,ids,max_edges)
+    poly=DataTypes.polylines(data);layers=AbstractVisualizationLayer[]
+    if poly===nothing
+        push!(layers,SegmentLayer(_segments_from_edges_2d(P,edges[eids]),:gray40,0.7,1.3))
     else
-        paths = Vector{Vector{NTuple{2,Float64}}}()
-        for line in poly
-            push!(paths, [tuple(float(p[1]), float(p[2])) for p in line])
-        end
-        push!(layers, PolylineLayer(paths, :gray40, 0.8, 1.6, false))
+        length(poly)==length(edges) || throw(ArgumentError("Polylines must correspond to source edges in order."))
+        sum(i->length(poly[i]),eids;init=0)<=max_path_points ||
+            throw(ArgumentError("Selected polylines exceed max_path_points; increase it explicitly or display fewer edges."))
+        paths=[[Tuple(Float64.(p)) for p in poly[i]] for i in eids]
+        all(p->all(isfinite,p),Iterators.flatten(paths)) || throw(ArgumentError("Polyline coordinates must be finite."))
+        push!(layers,PolylineLayer(paths,:gray40,0.8,1.6,false))
     end
-    push!(layers, PointLayer([tuple(pts[i, 1], pts[i, 2]) for i in 1:size(pts, 1)], :black, 0.9, 8.5))
-    labvec = _collect_point_labels(labels, size(pts, 1))
-    isempty(labvec) || push!(layers, TextLayer(labvec, [(pts[i, 1] + 0.02, pts[i, 2] + 0.02) for i in 1:size(pts, 1)], :black, 9.0))
-    bbox = DataTypes.bounding_box(data)
-    axes = if bbox === nothing
-        _axes_from_matrix_2d(pts; labels=("x", "y"))
-    else
-        _default_axes_2d(xlabel="x", ylabel="y",
-                         xlimits=_pad_limits_1d((bbox[1], bbox[3])),
-                         ylimits=_pad_limits_1d((bbox[2], bbox[4])),
-                         aspect=:equal)
-    end
-    return VisualizationSpec(:embedded_planar_graph;
-                             title="Embedded planar graph",
-                             subtitle="planar graph view",
-                             layers=layers,
-                             axes=axes,
-                             legend=_default_legend(visible=true, title="layers",
-                                                    entries=[(; label="edges", color=:gray40, style=:line),
-                                                             (; label="vertices", color=:black, style=:marker)]),
-                             metadata=(; object=:embedded_planar_graph_2d, nvertices=DataTypes.nvertices(data), nedges=DataTypes.nedges(data)),
-                             interaction=_default_interaction(labels=!isempty(labvec)))
+    _source_points!(layers,P,ids;basecolor=:black,markersize=8.5)
+    lids=_source_labels!(layers,P,labels,ids,max_labels)
+    counts=_source_counts(n,length(edges),ids,eids,lids;eligible)
+    bbox=DataTypes.bounding_box(data)
+    axes=bbox===nothing ? _axes_from_matrix_2d(P;labels=("x","y")) :
+        _default_axes_2d(xlabel="x",ylabel="y",xlimits=_pad_limits_1d((bbox[1],bbox[3])),
+            ylimits=_pad_limits_1d((bbox[2],bbox[4])),aspect=:equal)
+    return VisualizationSpec(kind;title="Embedded planar graph",subtitle="Supplied geometry; "*_source_caption(counts)*(rounded ? "; Float64 coordinates rounded" : ""),
+        layers,axes,metadata=(;object=:embedded_planar_graph_2d,nvertices=n,nedges=length(edges),
+            construction=:supplied_graph,drawing_rounding=rounded,geometry_reused=reused,source_edges=edges[eids],counts...),
+        interaction=_default_interaction(labels=!isempty(lids)))
 end
 
 function available_visuals(img::DataTypes.ImageNd{T,N}) where {T,N}

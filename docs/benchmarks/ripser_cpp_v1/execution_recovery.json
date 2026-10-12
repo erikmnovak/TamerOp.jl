@@ -1,0 +1,22 @@
+{
+  "reason": "Launcher terminated with exit 143 during fourth case; no reported mathematical failure or resource-limit error.",
+  "completed_cases_preserved": [
+    "circle_1280_f2",
+    "circle_1408_f2",
+    "planar_1024_f2"
+  ],
+  "partial_case_excluded": "planar_1152_f2 warmup; original partial pass retained in runs/interrupted_per_case_p1",
+  "recovery": "One bounded case per invocation; explicit verified checkpoints; no timing, input, output, source or resource-policy change.",
+  "previous_harness_hashes": {
+    "study.py": "1b195e83935bedcb67f0e0d2bac24edeb907241e9a3f1dd61c7d72747e16424f",
+    "test_study.py": "078ed6457e16d623a41d533718d6112d9fb31263c85e5e19b6378f9c9f4eec7e",
+    "README.md": "eb928c65353671c5604a2da3ecb8a4ece11d35b539e82d082921fb55459f90e4",
+    "worker.jl": "2e46c7b24a45bdd23dae1c84e1a6dc03500af07bfc8c24629be683706c1803f2"
+  },
+  "current_harness_hashes": {
+    "study.py": "332d12b7964b78102816f392d4c97231c349685a5509fc0435fce002df204521",
+    "test_study.py": "078ed6457e16d623a41d533718d6112d9fb31263c85e5e19b6378f9c9f4eec7e",
+    "README.md": "eb928c65353671c5604a2da3ecb8a4ece11d35b539e82d082921fb55459f90e4",
+    "worker.jl": "2e46c7b24a45bdd23dae1c84e1a6dc03500af07bfc8c24629be683706c1803f2"
+  }
+}

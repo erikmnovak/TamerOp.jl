@@ -7,18 +7,12 @@ Julia 1.x release; follow the
 if needed. The blocks labelled `julia` below belong at the Julia prompt,
 while terminal commands are labelled `sh`.
 
-We will first install the registered TamerOp package and check it with the
-ring example. The notebook setup then adds the plotting and notebook packages
-and selects the development version used by the website. Julia's package
-manager obtains TamerOp and its dependencies from
-[General](https://github.com/JuliaRegistries/General/tree/master/T/TamerOp),
-its package registry, so you can install by name without cloning the repository.
-
 ## Create an environment
 
 A Julia environment records the packages used by your work, allowing you to
-reopen it later with the same versions. Create one in a folder of your choice;
-this example uses `tamerop-work` under your home directory:
+reopen it later with the same versions. Create one in a folder of your choice
+and install the latest version of TamerOp. This example uses `tamerop-work`
+under your home directory:
 
 ```julia
 import Pkg
@@ -26,14 +20,14 @@ workdir = joinpath(homedir(), "tamerop-work")
 mkpath(workdir)
 cd(workdir)
 Pkg.activate(workdir)
-Pkg.add("TamerOp")
+Pkg.add(url="https://github.com/erikmnovak/TamerOp.jl", rev="main")
 ```
 
-`Pkg` selects a compatible registered release and records the environment in
-`Project.toml` and `Manifest.toml`. Keep those files with your work. Installation
-can take several minutes while Julia downloads dependencies and precompiles
-code for later use. Once it finishes, later sessions can load the package
-without repeating `Pkg.add`.
+`Pkg`, Julia's package manager, downloads TamerOp and its dependencies and
+records them in `Project.toml` and `Manifest.toml`. Keep those files with your
+work. Installation can take several minutes while Julia downloads dependencies
+and precompiles code for later use. Once it finishes, later sessions can load
+the package without repeating `Pkg.add`.
 
 Check the installation with a small computation:
 
@@ -51,78 +45,57 @@ develops the interpretation with figures.
 
 Download the [executed ring notebook](../downloads/ring.ipynb), the
 [square inspection notebook](../downloads/inspect_encoding.ipynb), or the
-[guide from inputs to computed objects](../downloads/inputs_to_objects.ipynb). Each already contains
-its static figures, which you can read without running the code.
+[guide from inputs to computed objects](../downloads/inputs_to_objects.ipynb).
+Each already contains its static figures, which you can read without running
+the code. Save the notebook in your `tamerop-work` folder.
 
-To rerun these website notebooks, use the development version: the registered
-0.1.0 release does not include their `VisualStyle` and module-inspector APIs.
-Keep that choice in a separate lesson environment, leaving the registered
-package in your work environment:
+Add the plotting and notebook packages to that environment:
 
 ```julia
 import Pkg
-lessondir = joinpath(homedir(), "tamerop-lessons")
-mkpath(lessondir)
-cd(lessondir)
-Pkg.activate(lessondir)
-Pkg.add(name="TamerOp", rev="main")
+workdir = joinpath(homedir(), "tamerop-work")
+Pkg.activate(workdir)
 Pkg.add(["CairoMakie", "IJulia"])
-```
-
-The lesson environment now follows the repository's development branch, so
-later updates will obtain changes from `main`. If TamerOp was already loaded,
-restart Julia before activating this environment and starting Jupyter:
-
-```julia
-import Pkg
-lessondir = joinpath(homedir(), "tamerop-lessons")
-Pkg.activate(lessondir)
 import IJulia
-IJulia.notebook(dir=lessondir)
+IJulia.notebook(dir=workdir)
 ```
 
-Save the downloaded notebook in `tamerop-lessons`. IJulia connects Julia to the
-Jupyter notebook interface and can offer to install Jupyter if it is missing.
-In the browser, open the notebook, select a Julia kernel (the Julia process
-that runs its code), and run the cells from the top. The first package load
-and figure may take longer while Julia compiles them.
+IJulia connects Julia to the Jupyter notebook interface and can offer to
+install Jupyter if it is missing. In the browser, open the notebook, select a
+Julia kernel (the Julia process that runs its code), and run the cells from
+the top. The first package load and figure may take longer while Julia
+compiles them.
 
 CairoMakie draws the static figures used in the main lesson. The square
 lesson has an optional section explaining how to add WGLMakie and inspect
 the example in a live Julia session. You can follow the main computation
 and read its saved figures with the packages installed above.
 
-If the kernel cannot find a package, activate your lesson folder in a cell before
-the lesson's imports:
+If the kernel cannot find a package, activate your work folder in a cell
+before the lesson's imports:
 
 ```julia
 import Pkg
-Pkg.activate("/absolute/path/to/tamerop-lessons")
+Pkg.activate("/absolute/path/to/tamerop-work")
 ```
 
 Use your actual folder path. Keep `Project.toml` and `Manifest.toml` with the
 notebook so you can reopen the environment. From a terminal in that folder,
 `julia --project=.` also starts Julia with those packages selected.
 
-## Update or return to a registered release
+## Update your installation
 
-With the intended environment active, `Pkg.status("TamerOp")` shows which
-version or source branch it uses. `Pkg.update("TamerOp")` updates registered
-packages to compatible releases; an environment tracking `main` instead follows
-that branch. Restart Julia before loading updated code.
-
-If an existing environment tracks a GitHub URL or development checkout and
-you want to return it to registered releases, run:
+With your work environment active, `Pkg.status("TamerOp")` shows the installed
+source revision. To obtain the latest version, run:
 
 ```julia
 import Pkg
-Pkg.free("TamerOp")
 Pkg.update("TamerOp")
 ```
 
-If name-only installation cannot find TamerOp, check the capitalization and run
-`Pkg.Registry.update()` before retrying. If General is missing from
-`Pkg.Registry.status()`, add it with `Pkg.Registry.add("General")`.
+Restart Julia before loading the updated code. For an analysis you need to
+reproduce, keep its environment files and use `Pkg.instantiate()` to recover
+the recorded dependencies instead of updating them.
 
 ## Read before running
 

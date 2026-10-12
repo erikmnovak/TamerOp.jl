@@ -1,0 +1,997 @@
+{
+  "cases": [
+    {
+      "id": "2d_V_noise_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/4096_4096_noise_20261020.u16.gz",
+      "raw_sha256": "af5cc48c5a71d7e0eca83fc572a5fcc70c92bf96ae2d912f36b5ede934a25ae7",
+      "compressed_sha256": "3be94bc6444770049b6482a7cad2aaf87b72e162033b1e718cb9c77a04650a3e",
+      "encoded_bytes": 33554432,
+      "compressed_bytes": 9512271,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_noise_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5120_5120_noise_20261021.u16.gz",
+      "raw_sha256": "d15d1ae3270f4d68dccc90ee900b6393454bb9acb6ca1a4af7759eecf22bf5f3",
+      "compressed_sha256": "3a2885358d0b83b44c723b4eb4fecd1758a61ba22151b921e31132f06687e6bf",
+      "encoded_bytes": 52428800,
+      "compressed_bytes": 14864628,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_noise_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/6144_6144_noise_20261022.u16.gz",
+      "raw_sha256": "882136a06f03d28b803169716a1335be723905582f98b2a954bc0f994fd86f94",
+      "compressed_sha256": "409dde30cb505de42d85c97b400a4ec53399944cc33da84881f19477e937afc5",
+      "encoded_bytes": 75497472,
+      "compressed_bytes": 21405148,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_noise_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true,
+      "input": "large_inputs/5127_5109_noise_20261117.u16.gz",
+      "raw_sha256": "ff7c7151b6465b94083d691d887e2fe0a117fb72599e873fd7b1c586c4441b7f",
+      "compressed_sha256": "bbcd79b5252b7de8b87aeb5765d8521b622e83a43c0c760b8e5caed615d820a8",
+      "encoded_bytes": 52387686,
+      "compressed_bytes": 14852019,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_noise_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/4096_4096_noise_20261020.u16.gz",
+      "raw_sha256": "af5cc48c5a71d7e0eca83fc572a5fcc70c92bf96ae2d912f36b5ede934a25ae7",
+      "compressed_sha256": "3be94bc6444770049b6482a7cad2aaf87b72e162033b1e718cb9c77a04650a3e",
+      "encoded_bytes": 33554432,
+      "compressed_bytes": 9512271,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_noise_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5120_5120_noise_20261021.u16.gz",
+      "raw_sha256": "d15d1ae3270f4d68dccc90ee900b6393454bb9acb6ca1a4af7759eecf22bf5f3",
+      "compressed_sha256": "3a2885358d0b83b44c723b4eb4fecd1758a61ba22151b921e31132f06687e6bf",
+      "encoded_bytes": 52428800,
+      "compressed_bytes": 14864628,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_noise_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/6144_6144_noise_20261022.u16.gz",
+      "raw_sha256": "882136a06f03d28b803169716a1335be723905582f98b2a954bc0f994fd86f94",
+      "compressed_sha256": "409dde30cb505de42d85c97b400a4ec53399944cc33da84881f19477e937afc5",
+      "encoded_bytes": 75497472,
+      "compressed_bytes": 21405148,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_noise_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true,
+      "input": "large_inputs/5127_5109_noise_20261117.u16.gz",
+      "raw_sha256": "ff7c7151b6465b94083d691d887e2fe0a117fb72599e873fd7b1c586c4441b7f",
+      "compressed_sha256": "bbcd79b5252b7de8b87aeb5765d8521b622e83a43c0c760b8e5caed615d820a8",
+      "encoded_bytes": 52387686,
+      "compressed_bytes": 14852019,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_binary_size1",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5120_5120_binary_20261020.u16.gz",
+      "raw_sha256": "1945e9a0bdf79f95972507501e31554d187dc80d96543d0649e9c8b06d1b1121",
+      "compressed_sha256": "f65eef14db9395a1cab7f4058ef47111dbd382c32f79d3f5df58805f4b3b71e7",
+      "encoded_bytes": 52428800,
+      "compressed_bytes": 7928500,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_binary_size2",
+      "shape": [
+        5632,
+        5632
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5632_5632_binary_20261021.u16.gz",
+      "raw_sha256": "79a5bc1f98965b975f32e4113404c184ebb3ae90e6ba7319ed2cea9e845663b2",
+      "compressed_sha256": "9860fafdb3968e55ec39e087a852e81ad6a3583615d7fc0246f81d1c2b7fce6a",
+      "encoded_bytes": 63438848,
+      "compressed_bytes": 9592829,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_binary_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/6144_6144_binary_20261022.u16.gz",
+      "raw_sha256": "93c6b47a60d7f2a3d58af31c3d9175ace7c14bffdf59670071a566bb7580e320",
+      "compressed_sha256": "459ea1f87ed8df6115a57a97a6cdb694d6a25d7cb9ac555f03d2b198f113b782",
+      "encoded_bytes": 75497472,
+      "compressed_bytes": 11414917,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_binary_reserved",
+      "shape": [
+        5639,
+        5621
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/5639_5621_binary_20261117.u16.gz",
+      "raw_sha256": "4f71e58ae8ba09b6d1f0769bcae724c851eda90366b0163f85eb5f6fb8b517d1",
+      "compressed_sha256": "4d994e0358b9a7138b17f529f83106eb3a1eea7553a98c787b48250bb62f126e",
+      "encoded_bytes": 63393638,
+      "compressed_bytes": 9587142,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_binary_size1",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5120_5120_binary_20261020.u16.gz",
+      "raw_sha256": "1945e9a0bdf79f95972507501e31554d187dc80d96543d0649e9c8b06d1b1121",
+      "compressed_sha256": "f65eef14db9395a1cab7f4058ef47111dbd382c32f79d3f5df58805f4b3b71e7",
+      "encoded_bytes": 52428800,
+      "compressed_bytes": 7928500,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_binary_size2",
+      "shape": [
+        5632,
+        5632
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5632_5632_binary_20261021.u16.gz",
+      "raw_sha256": "79a5bc1f98965b975f32e4113404c184ebb3ae90e6ba7319ed2cea9e845663b2",
+      "compressed_sha256": "9860fafdb3968e55ec39e087a852e81ad6a3583615d7fc0246f81d1c2b7fce6a",
+      "encoded_bytes": 63438848,
+      "compressed_bytes": 9592829,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_binary_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/6144_6144_binary_20261022.u16.gz",
+      "raw_sha256": "93c6b47a60d7f2a3d58af31c3d9175ace7c14bffdf59670071a566bb7580e320",
+      "compressed_sha256": "459ea1f87ed8df6115a57a97a6cdb694d6a25d7cb9ac555f03d2b198f113b782",
+      "encoded_bytes": 75497472,
+      "compressed_bytes": 11414917,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_binary_reserved",
+      "shape": [
+        5639,
+        5621
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/5639_5621_binary_20261117.u16.gz",
+      "raw_sha256": "4f71e58ae8ba09b6d1f0769bcae724c851eda90366b0163f85eb5f6fb8b517d1",
+      "compressed_sha256": "4d994e0358b9a7138b17f529f83106eb3a1eea7553a98c787b48250bb62f126e",
+      "encoded_bytes": 63393638,
+      "compressed_bytes": 9587142,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_smooth_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/4096_4096_smooth_20261020.u16.gz",
+      "raw_sha256": "c2b27b2fa6956cb92f898c65e62506c7fc017646430afa983d880078a0481796",
+      "compressed_sha256": "25d69844a809dcab900d7a9b002e819bae1b79cfb7d3b2c9cef33fb9e3add5f2",
+      "encoded_bytes": 33554432,
+      "compressed_bytes": 14946896,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_smooth_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5120_5120_smooth_20261021.u16.gz",
+      "raw_sha256": "55f74871ef9b9666890d86645580627b80c338a6e1aeec1293a9d5529b8fc605",
+      "compressed_sha256": "8b4e2d359216dfebd1cb6cd0640a197672f7466f461b48fad0709783e9e3ccab",
+      "encoded_bytes": 52428800,
+      "compressed_bytes": 23603089,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_smooth_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/6144_6144_smooth_20261022.u16.gz",
+      "raw_sha256": "8f0c594468519bd9de04fd3eb377a863417d8f5cd5380d8e0a121b17fd60680c",
+      "compressed_sha256": "5fe042b16e086aadd1f10563ebf0dfafb37812106c74950b1b2d33ad32742457",
+      "encoded_bytes": 75497472,
+      "compressed_bytes": 38632352,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_V_smooth_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/5127_5109_smooth_20261117.u16.gz",
+      "raw_sha256": "c214c5d086f5a1c47d4345674b6470e46ea3c2300967bbefd1485d5728db5e77",
+      "compressed_sha256": "92bc9d179e172ab712db69486d32865d6527f2c762554589e92b15db19151855",
+      "encoded_bytes": 52387686,
+      "compressed_bytes": 23584495,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_smooth_size1",
+      "shape": [
+        4096,
+        4096
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/4096_4096_smooth_20261020.u16.gz",
+      "raw_sha256": "c2b27b2fa6956cb92f898c65e62506c7fc017646430afa983d880078a0481796",
+      "compressed_sha256": "25d69844a809dcab900d7a9b002e819bae1b79cfb7d3b2c9cef33fb9e3add5f2",
+      "encoded_bytes": 33554432,
+      "compressed_bytes": 14946896,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_smooth_size2",
+      "shape": [
+        5120,
+        5120
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/5120_5120_smooth_20261021.u16.gz",
+      "raw_sha256": "55f74871ef9b9666890d86645580627b80c338a6e1aeec1293a9d5529b8fc605",
+      "compressed_sha256": "8b4e2d359216dfebd1cb6cd0640a197672f7466f461b48fad0709783e9e3ccab",
+      "encoded_bytes": 52428800,
+      "compressed_bytes": 23603089,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_smooth_size3",
+      "shape": [
+        6144,
+        6144
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/6144_6144_smooth_20261022.u16.gz",
+      "raw_sha256": "8f0c594468519bd9de04fd3eb377a863417d8f5cd5380d8e0a121b17fd60680c",
+      "compressed_sha256": "5fe042b16e086aadd1f10563ebf0dfafb37812106c74950b1b2d33ad32742457",
+      "encoded_bytes": 75497472,
+      "compressed_bytes": 38632352,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "2d_T_smooth_reserved",
+      "shape": [
+        5127,
+        5109
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/5127_5109_smooth_20261117.u16.gz",
+      "raw_sha256": "c214c5d086f5a1c47d4345674b6470e46ea3c2300967bbefd1485d5728db5e77",
+      "compressed_sha256": "92bc9d179e172ab712db69486d32865d6527f2c762554589e92b15db19151855",
+      "encoded_bytes": 52387686,
+      "compressed_bytes": 23584495,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_noise_size1",
+      "shape": [
+        144,
+        144,
+        144
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/144_144_144_noise_20261020.u16.gz",
+      "raw_sha256": "6ec2a831bd61fe1cedebfa92fee2912b6be6d75aec58280867faac9f97bb1210",
+      "compressed_sha256": "e689cf825a8ed1d25c46f3ee95f6fc3597cdf75750e88962f54be1f2f0c06cc9",
+      "encoded_bytes": 5971968,
+      "compressed_bytes": 1693427,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_noise_size2",
+      "shape": [
+        160,
+        160,
+        160
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/160_160_160_noise_20261021.u16.gz",
+      "raw_sha256": "55c7af91f575b10fe5aec6dcdee97716ad723b7a182acad2e64fb7f692239674",
+      "compressed_sha256": "e4b0198ee8a4f020a391863137e2427e333d725479869d9d451ed446c96459d1",
+      "encoded_bytes": 8192000,
+      "compressed_bytes": 2323037,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_noise_size3",
+      "shape": [
+        176,
+        176,
+        176
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/176_176_176_noise_20261022.u16.gz",
+      "raw_sha256": "7dab26f69621051745177945507f30805f3c611a2a4789f07f4cb769c64cf038",
+      "compressed_sha256": "b15f2e192ed4a9d57eae40c6e8e205d2e392bac514969e8800b4314944f9e0a5",
+      "encoded_bytes": 10903552,
+      "compressed_bytes": 3091584,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_noise_reserved",
+      "shape": [
+        163,
+        155,
+        167
+      ],
+      "convention": "V",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true,
+      "input": "large_inputs/163_155_167_noise_20261117.u16.gz",
+      "raw_sha256": "b67770d518062dc64722d88e01f5160990f65e7b9a854522880882e5f684ebb9",
+      "compressed_sha256": "3fdbfb80382c1097c83438c6b0760f7f2505040952be8f7b6a93e124ac7fde05",
+      "encoded_bytes": 8438510,
+      "compressed_bytes": 2392601,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_noise_size1",
+      "shape": [
+        144,
+        144,
+        144
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/144_144_144_noise_20261020.u16.gz",
+      "raw_sha256": "6ec2a831bd61fe1cedebfa92fee2912b6be6d75aec58280867faac9f97bb1210",
+      "compressed_sha256": "e689cf825a8ed1d25c46f3ee95f6fc3597cdf75750e88962f54be1f2f0c06cc9",
+      "encoded_bytes": 5971968,
+      "compressed_bytes": 1693427,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_noise_size2",
+      "shape": [
+        160,
+        160,
+        160
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/160_160_160_noise_20261021.u16.gz",
+      "raw_sha256": "55c7af91f575b10fe5aec6dcdee97716ad723b7a182acad2e64fb7f692239674",
+      "compressed_sha256": "e4b0198ee8a4f020a391863137e2427e333d725479869d9d451ed446c96459d1",
+      "encoded_bytes": 8192000,
+      "compressed_bytes": 2323037,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_noise_size3",
+      "shape": [
+        176,
+        176,
+        176
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/176_176_176_noise_20261022.u16.gz",
+      "raw_sha256": "7dab26f69621051745177945507f30805f3c611a2a4789f07f4cb769c64cf038",
+      "compressed_sha256": "b15f2e192ed4a9d57eae40c6e8e205d2e392bac514969e8800b4314944f9e0a5",
+      "encoded_bytes": 10903552,
+      "compressed_bytes": 3091584,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_noise_reserved",
+      "shape": [
+        163,
+        155,
+        167
+      ],
+      "convention": "T",
+      "pattern": "noise",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "sublevel",
+      "reserved": true,
+      "input": "large_inputs/163_155_167_noise_20261117.u16.gz",
+      "raw_sha256": "b67770d518062dc64722d88e01f5160990f65e7b9a854522880882e5f684ebb9",
+      "compressed_sha256": "3fdbfb80382c1097c83438c6b0760f7f2505040952be8f7b6a93e124ac7fde05",
+      "encoded_bytes": 8438510,
+      "compressed_bytes": 2392601,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_binary_size1",
+      "shape": [
+        80,
+        80,
+        80
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/80_80_80_binary_20261020.u16.gz",
+      "raw_sha256": "6aee1430a45a00a7d1dbcd890c67741617d40dc27ff6d0abc520e2d2f198f682",
+      "compressed_sha256": "34207f208d0574204766eca95845da5f9036473d0dceff95eb4b8348153c9ef4",
+      "encoded_bytes": 1024000,
+      "compressed_bytes": 154835,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_binary_size2",
+      "shape": [
+        96,
+        96,
+        96
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/96_96_96_binary_20261021.u16.gz",
+      "raw_sha256": "02307bf786433e03cbb6c77e61fd6d507ce4b829682a85b11b7b7a8e6bd5f804",
+      "compressed_sha256": "198ab3302f90a77a4afbfac896e3e595576f9b3f4ebf5c198104e356390b3d44",
+      "encoded_bytes": 1769472,
+      "compressed_bytes": 267549,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_binary_size3",
+      "shape": [
+        112,
+        112,
+        112
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/112_112_112_binary_20261022.u16.gz",
+      "raw_sha256": "caa51f4cfff4820feb4782faa81a3ed452547c28b48d2337cc33d698e5038961",
+      "compressed_sha256": "8877e8c21b09309dd81bf59c7c5f4a3a55de25a317a1e4c9c53a7d6e974bba23",
+      "encoded_bytes": 2809856,
+      "compressed_bytes": 424678,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_binary_reserved",
+      "shape": [
+        99,
+        91,
+        103
+      ],
+      "convention": "V",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/99_91_103_binary_20261117.u16.gz",
+      "raw_sha256": "42e25ba77cd4a3002809f17f3125e84a0d717a15684b008fea871f3a1e462332",
+      "compressed_sha256": "a85adf9651fc24659104633c68187ef8e43898c364d6d5b6ed8bb114bce2be8a",
+      "encoded_bytes": 1855854,
+      "compressed_bytes": 280617,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_binary_size1",
+      "shape": [
+        80,
+        80,
+        80
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/80_80_80_binary_20261020.u16.gz",
+      "raw_sha256": "6aee1430a45a00a7d1dbcd890c67741617d40dc27ff6d0abc520e2d2f198f682",
+      "compressed_sha256": "34207f208d0574204766eca95845da5f9036473d0dceff95eb4b8348153c9ef4",
+      "encoded_bytes": 1024000,
+      "compressed_bytes": 154835,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_binary_size2",
+      "shape": [
+        96,
+        96,
+        96
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/96_96_96_binary_20261021.u16.gz",
+      "raw_sha256": "02307bf786433e03cbb6c77e61fd6d507ce4b829682a85b11b7b7a8e6bd5f804",
+      "compressed_sha256": "198ab3302f90a77a4afbfac896e3e595576f9b3f4ebf5c198104e356390b3d44",
+      "encoded_bytes": 1769472,
+      "compressed_bytes": 267549,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_binary_size3",
+      "shape": [
+        112,
+        112,
+        112
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/112_112_112_binary_20261022.u16.gz",
+      "raw_sha256": "caa51f4cfff4820feb4782faa81a3ed452547c28b48d2337cc33d698e5038961",
+      "compressed_sha256": "8877e8c21b09309dd81bf59c7c5f4a3a55de25a317a1e4c9c53a7d6e974bba23",
+      "encoded_bytes": 2809856,
+      "compressed_bytes": 424678,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_binary_reserved",
+      "shape": [
+        99,
+        91,
+        103
+      ],
+      "convention": "T",
+      "pattern": "binary",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/99_91_103_binary_20261117.u16.gz",
+      "raw_sha256": "42e25ba77cd4a3002809f17f3125e84a0d717a15684b008fea871f3a1e462332",
+      "compressed_sha256": "a85adf9651fc24659104633c68187ef8e43898c364d6d5b6ed8bb114bce2be8a",
+      "encoded_bytes": 1855854,
+      "compressed_bytes": 280617,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_smooth_size1",
+      "shape": [
+        192,
+        192,
+        192
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/192_192_192_smooth_20261020.u16.gz",
+      "raw_sha256": "f2e6c25e5313f724c7883035ecdbd1de4c9cff5ecc9d707b3dc9fb3878d91404",
+      "compressed_sha256": "9cc31cb9594ddb8578f9798afc9f883672e1389ace7a5185507ad2ca3ee93e3c",
+      "encoded_bytes": 14155776,
+      "compressed_bytes": 3463216,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_smooth_size2",
+      "shape": [
+        224,
+        224,
+        224
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/224_224_224_smooth_20261021.u16.gz",
+      "raw_sha256": "1c7eb0c4fe904f88e7da7dd910ac9b45dd1780c87346454bec207ccbe3399e98",
+      "compressed_sha256": "f6d5b357f70f20489c0046058e41fa73cc5a4ab8157033b4f0aefdb1042a2bf1",
+      "encoded_bytes": 22478848,
+      "compressed_bytes": 5702272,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_smooth_size3",
+      "shape": [
+        256,
+        256,
+        256
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/256_256_256_smooth_20261022.u16.gz",
+      "raw_sha256": "5a504b1a96500efe8f4fe454e4078adcf11245b6d125437f8a082431a5f608db",
+      "compressed_sha256": "3f09dfae582d55241de05078c6a2d66cc5146977c4f1b30bb86692bb6ef8a2e6",
+      "encoded_bytes": 33554432,
+      "compressed_bytes": 8820442,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_V_smooth_reserved",
+      "shape": [
+        227,
+        219,
+        231
+      ],
+      "convention": "V",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/227_219_231_smooth_20261117.u16.gz",
+      "raw_sha256": "b3be63317a7eed3899a3a7aa3a43e0dc7137f766625cbb5023277e1646a41ca4",
+      "compressed_sha256": "54a525387296be9c0a4a5b78a4bddbe67805b1de0fe11618ad9d9d4dcd3e0152",
+      "encoded_bytes": 22967406,
+      "compressed_bytes": 5766402,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_smooth_size1",
+      "shape": [
+        192,
+        192,
+        192
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size1",
+      "seed": 20261020,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/192_192_192_smooth_20261020.u16.gz",
+      "raw_sha256": "f2e6c25e5313f724c7883035ecdbd1de4c9cff5ecc9d707b3dc9fb3878d91404",
+      "compressed_sha256": "9cc31cb9594ddb8578f9798afc9f883672e1389ace7a5185507ad2ca3ee93e3c",
+      "encoded_bytes": 14155776,
+      "compressed_bytes": 3463216,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_smooth_size2",
+      "shape": [
+        224,
+        224,
+        224
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size2",
+      "seed": 20261021,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/224_224_224_smooth_20261021.u16.gz",
+      "raw_sha256": "1c7eb0c4fe904f88e7da7dd910ac9b45dd1780c87346454bec207ccbe3399e98",
+      "compressed_sha256": "f6d5b357f70f20489c0046058e41fa73cc5a4ab8157033b4f0aefdb1042a2bf1",
+      "encoded_bytes": 22478848,
+      "compressed_bytes": 5702272,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_smooth_size3",
+      "shape": [
+        256,
+        256,
+        256
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "size3",
+      "seed": 20261022,
+      "order": "sublevel",
+      "reserved": false,
+      "input": "large_inputs/256_256_256_smooth_20261022.u16.gz",
+      "raw_sha256": "5a504b1a96500efe8f4fe454e4078adcf11245b6d125437f8a082431a5f608db",
+      "compressed_sha256": "3f09dfae582d55241de05078c6a2d66cc5146977c4f1b30bb86692bb6ef8a2e6",
+      "encoded_bytes": 33554432,
+      "compressed_bytes": 8820442,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    },
+    {
+      "id": "3d_T_smooth_reserved",
+      "shape": [
+        227,
+        219,
+        231
+      ],
+      "convention": "T",
+      "pattern": "smooth",
+      "level": "reserved",
+      "seed": 20261117,
+      "order": "superlevel",
+      "reserved": true,
+      "input": "large_inputs/227_219_231_smooth_20261117.u16.gz",
+      "raw_sha256": "b3be63317a7eed3899a3a7aa3a43e0dc7137f766625cbb5023277e1646a41ca4",
+      "compressed_sha256": "54a525387296be9c0a4a5b78a4bddbe67805b1de0fe11618ad9d9d4dcd3e0152",
+      "encoded_bytes": 22967406,
+      "compressed_bytes": 5766402,
+      "generator": "NumPy PCG64 integers UInt16 in 1048576-element blocks; smooth exact coordinate quadratic; little endian column-major; gzip level1 mtime0",
+      "numpy": "2.5.3"
+    }
+  ],
+  "samples": 3,
+  "passes": 3,
+  "limits": {
+    "rss_bytes": 8589934592,
+    "available_bytes": 2147483648,
+    "phase_seconds": 180,
+    "worker_seconds": 1800,
+    "total_seconds": 14400
+  }
+}

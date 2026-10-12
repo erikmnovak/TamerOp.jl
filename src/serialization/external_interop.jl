@@ -518,7 +518,7 @@ function _parse_poset_from_typed(poset_obj::_FinitePosetJSON)
 end
 
 function _parse_poset_from_typed(poset_obj::_ProductOfChainsPosetJSON)
-    P = ProductOfChainsPoset(poset_obj.sizes)
+    P = ProductOfChainsPoset(poset_obj.sizes; orientation=poset_obj.orientation)
     poset_obj.n == nvertices(P) || error("ProductOfChainsPoset.n mismatch.")
     _clear_cover_cache!(P)
     return P
@@ -557,9 +557,9 @@ function _parse_poset_from_typed(poset_obj::_PosetJSON)
     error("Unsupported typed poset payload: $(typeof(poset_obj))")
 end
 
-@inline function _pack_masks_obj(masks::AbstractVector{<:BitVector})
+@inline function _pack_masks_obj(masks::AbstractVector{<:BitVector};
+                                ncols::Int=isempty(masks) ? 0 : length(first(masks)))
     nrows = length(masks)
-    ncols = nrows == 0 ? 0 : length(masks[1])
     nw = max(1, cld(max(ncols, 1), 64))
     words = zeros(UInt64, nrows * nw)
     @inbounds for i in 1:nrows
@@ -1046,7 +1046,7 @@ function _parse_poset_from_obj(poset_obj)
     elseif kind == "ProductOfChainsPoset"
         haskey(poset_obj, "sizes") || error("ProductOfChainsPoset missing required key 'sizes'.")
         sizes = Vector{Int}(poset_obj["sizes"])
-        P = ProductOfChainsPoset(sizes)
+        P = ProductOfChainsPoset(sizes; orientation=Vector{Int}(poset_obj["orientation"]))
         _clear_cover_cache!(P)
         return P
     elseif kind == "GridPoset"
@@ -1111,7 +1111,8 @@ function _poset_obj(P::AbstractPoset; include_leq::Union{Bool,Symbol}=:auto)
     elseif P isa ProductOfChainsPoset
         obj = Dict("kind" => "ProductOfChainsPoset",
                    "n" => nvertices(P),
-                   "sizes" => collect(P.sizes))
+                   "sizes" => collect(P.sizes),
+                   "orientation" => collect(P.orientation))
         if include_leq_resolved
             L = leq_matrix(P)
             obj["leq"] = _pack_bitmatrix_obj(L)

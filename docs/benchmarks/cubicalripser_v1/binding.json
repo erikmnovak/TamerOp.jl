@@ -1,0 +1,27 @@
+{
+  "candidate_manifest": "1e54de027c56398fe7f15ca693e178c662c07414c418d81365483517b5f6b902",
+  "environment": "08345d3b54640435a5bbd65af811bd52f09fbce9e005f54201423c7a2677a191",
+  "manifest_sha256": "0e629b0ca14d61ffc1ad33aa3b21d071de6b1fab09c9e6232d846aaca5ca3027",
+  "harness": {
+    "large_python.py": "93358a13addff9ff964c73aaf37cb298345702fca88cc22ae49b30ef0a959629",
+    "large_analyze.py": "f8d27d84571ffffb06fb0ca07d4011d40cc750409bcff49fc9a50c8f0fe13782",
+    "run.py": "2377d06218510c05533aefc8a9046d4d736cd9b389ea1084124c4d3c68bf9ad2",
+    "large_study.py": "30fa92b3af066ed01d2c34d192c2c38552b16b175d18151185ac609f38c4f8dd",
+    "large_julia.jl": "d397265e14a4c27ef7fcd65acda29bf489c5ad18006f02b298e3394a78781665",
+    "protocol.py": "9650c34a9ab83a844475cb23225895badf815905329bab061bfda415f64383c3",
+    "large_outputs.py": "ec8fd48c3df16e023c2ed6e13d053d75d0504837ca8edfab4cfa9d54c8d21ead"
+  },
+  "host": {
+    "uname": [
+      "Linux",
+      "The-Factotum",
+      "6.8.0-138-generic",
+      "#138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC ",
+      "x86_64"
+    ],
+    "cpu": "13th Gen Intel(R) Core(TM) i7-1365U",
+    "logical_cpus": 12,
+    "meminfo": "MemTotal:       32504412 kB\nMemFree:         6127564 kB\nMemAvailable:   14614452 kB\nBuffers:         1122880 kB\nCached:         11535144 kB\nSwapCached:            8 kB\nActive:         11787972 kB\nInactive:       11831616 kB\nActive(anon):   10354400 kB\nInactive(anon):  5005692 kB\nActive(file):    1433572 kB\nInactive(file):  6825924 kB\nUnevictable:      822716 kB\nMlocked:            2016 kB\nSwapTotal:      16601084 kB\nSwapFree:       16600060 kB\nZswap:                32 kB\nZswapped:             32 kB\nDirty:              1424 kB\nWriteback:            96 kB\nAnonPages:      11784668 kB\nMapped:          2319548 kB\nShmem:           4396784 kB\nKReclaimable:     783316 kB\nSlab:            1081184 kB\nSReclaimable:     783316 kB\nSUnreclaim:       297868 kB\nKernelStack:       39008 kB\nPageTables:       147536 kB\nSecPageTables:         0 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    32853288 kB\nCommitted_AS:   44329532 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      135916 kB\nVmallocChunk:          0 kB\nPercpu:            12576 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:         0 kB\nShmemHugePages:  1376256 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nUnaccepted:            0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:      284864 kB\nDirectMap2M:     4595712 kB\nDirectMap1G:    29360128 kB\n",
+    "user_context": "other heavy computations paused"
+  }
+}

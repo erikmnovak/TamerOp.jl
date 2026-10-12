@@ -28,5 +28,6 @@ include("derived_functors/algebras.jl")
 include("derived_functors/spectral_sequences.jl")
 include("derived_functors/backends.jl")
 include("derived_functors/public_api.jl")
+include("derived_functors/representative_complex.jl")
 
 end

@@ -995,7 +995,7 @@ end # with_fields
 @testset "Data pipeline: poset_from_axes kind=:grid with orientation -1" begin
     axes = (Float64[0.0, 1.0], Float64[0.0, 2.0, 4.0])
     P = DI.poset_from_axes(axes; orientation=(1, -1), kind=:grid)
-    @test P isa FF.FinitePoset
+    @test P isa FF.ProductOfChainsPoset
     @test FF.nvertices(P) == 2 * 3
 end
 
@@ -9618,4 +9618,123 @@ end
     @test_throws ArgumentError DT.GradedComplex([Int[], Int[]], SparseMatrixCSC{Int,Int}[], NTuple{1,Int}[])
     @test_throws ArgumentError DT.GradedComplex([Int[], Int[]], [spzeros(Int, 1, 0)], NTuple{1,Int}[])
     @test_throws ErrorException DT.GradedComplex([[1]], SparseMatrixCSC{Int,Int}[], [(0,)]; cell_dims=[1])
+end
+
+@testset "C22 cubical sparse construction budgets" begin
+    # These sparse image builds used to be rejected as hypothetical 4 GiB and
+    # 11 GiB dense boundary matrices. Their complete complexes fit this budget.
+    for (shape, expected) in (((128,128), [16384,32512,16129]),
+                              ((24,24,24), [13824,39744,38088,12167]))
+        image = DT.ImageNd(fill(3.0, shape))
+        options = OPT.ConstructionOptions(budget=OPT.ConstructionBudget(
+            memory_budget_bytes=64*1024^2, max_simplices=sum(expected), max_edges=expected[2]))
+        G = DI.graded_complex(DI.build_graded_complex(image, DI.CubicalFiltration(construction=options)))
+        @test DT.cell_counts(G) == expected
+        @test all(==((3.0,)), G.grades)
+        @test all(B -> B isa SparseMatrixCSC, G.boundaries)
+        @test [nnz(B) for B in G.boundaries] == [2d*expected[d+1] for d in 1:length(shape)]
+        @test all(d -> iszero(G.boundaries[d-1]*G.boundaries[d]), 2:length(shape))
+        @test Base.summarysize(G) < 64*1024^2
+        for budget in (OPT.ConstructionBudget(memory_budget_bytes=1),
+                       OPT.ConstructionBudget(max_simplices=sum(expected)-1),
+                       OPT.ConstructionBudget(max_edges=expected[2]-1))
+            @test_throws ArgumentError DI.build_graded_complex(image,
+                DI.CubicalFiltration(construction=OPT.ConstructionOptions(;budget)))
+        end
+    end
+    # Preflight rejection cannot populate an explicitly supplied geometry cache.
+    image = DT.ImageNd(reshape([0.0,2.0],1,2,1))
+    channels = [image.data, reshape([3.0,1.0],1,2,1)]
+    periodic = (true,false,true)
+    counts = BigInt[2,5,4,1] # (1+t)(2+t)(1+t)
+    estimate = DI._estimate_cubical_construction_bytes(counts,3,2)
+    @test estimate > DI._estimate_cubical_construction_bytes(counts,3,1)
+    cache = CM.EncodingCache()
+    too_small = OPT.ConstructionOptions(budget=OPT.ConstructionBudget(memory_budget_bytes=Int(estimate)-1))
+    @test_throws ArgumentError DI.build_graded_complex(image,
+        DI.CubicalFiltration(;channels,periodic,construction=too_small);cache)
+    @test isempty(cache.cubical)
+    enough = OPT.ConstructionOptions(budget=OPT.ConstructionBudget(
+        memory_budget_bytes=Int(estimate),max_simplices=12,max_edges=5))
+    filtration = DI.CubicalFiltration(;channels,periodic,construction=enough)
+    first_build = DI.graded_complex(DI.build_graded_complex(image,filtration;cache))
+    again = DI.graded_complex(DI.build_graded_complex(image,filtration;cache))
+    @test DT.cell_counts(first_build) == [2,5,4,1]
+    @test first_build.boundaries == again.boundaries
+    @test first_build.grades == again.grades
+    @test all(d -> iszero(first_build.boundaries[d-1]*first_build.boundaries[d]),2:3)
+    @test Base.summarysize(first_build) < estimate
+    # Uncancelled incidences and cells still count on periodic singleton axes.
+    @test_throws ArgumentError DI.build_graded_complex(image,
+        DI.CubicalFiltration(;channels,periodic,construction=OPT.ConstructionOptions(
+            budget=OPT.ConstructionBudget(max_edges=4)));cache)
+    @test_throws ArgumentError DI.build_graded_complex(image,
+        DI.CubicalFiltration(;channels,periodic,construction=too_small);cache)
+    # Overflow and high dimension reject before any cell-mask enumeration.
+    spec = OPT.FiltrationSpec(kind=:cubical,construction=too_small)
+    @test_throws ArgumentError DI._construction_check_cubical!(
+        (typemax(Int),2),(false,false),1,spec)
+    @test_throws ArgumentError DI._construction_check_cubical!(
+        ntuple(_->1,70),ntuple(_->true,70),1,spec)
+end
+
+@testset "C22 arithmetic cubical topology and cache" begin
+    # An independent product of vertex/edge labels checks all signed faces.
+    # Positive labels are vertices; negative labels are interval/circle edges.
+    # No production indexing, mask combinations or face routine enters this oracle.
+    for shape in ((1,), (4,), (2,3), (1,3,2), (2,3,4), (1,2,1,2), (2,2,2,2), (1,1,1,1,1))
+        N = length(shape)
+        for periods in Iterators.product(ntuple(_ -> (false,true), N)...)
+            periodic = Tuple(periods)
+            s = DI._cubical_structure_nd(shape, periodic)
+            factors = ntuple(a -> vcat(collect(1:shape[a]),
+                -collect(1:(shape[a] - !periodic[a]))), N)
+            product_cells = collect(Iterators.product(factors...))
+            signed = [[ntuple(a -> m[a] == 0 ? o[a] : -o[a], N)
+                       for (o,m) in group] for group in s.cells_by_dim]
+            for d in 0:N
+                expected = Set(c for c in product_cells if count(<(0),c) == d)
+                @test Set(signed[d+1]) == expected
+                @test allunique(signed[d+1])
+            end
+            indices = [Dict(c=>i for (i,c) in enumerate(group)) for group in signed]
+            for d in 1:N
+                rows=Int[];cols=Int[];vals=Int[]
+                for (j,c) in enumerate(signed[d+1]), a in 1:N
+                    c[a] < 0 || continue
+                    low = -c[a];high = low==shape[a] ? 1 : low+1
+                    sign = (-1)^count(i -> c[i]<0, 1:a-1)
+                    for (v,coeff) in ((low,sign),(high,-sign))
+                        face = ntuple(i -> i==a ? v : c[i],N)
+                        push!(rows,indices[d][face]);push!(cols,j);push!(vals,coeff)
+                    end
+                end
+                expected = dropzeros!(sparse(rows,cols,vals,length(signed[d]),length(signed[d+1])))
+                B=s.boundaries[d]
+                @test B == expected
+                @test B.colptr == expected.colptr
+                @test B.rowval == expected.rowval
+                @test B.nzval == expected.nzval
+                d==1 || @test iszero(s.boundaries[d-1]*B)
+            end
+            # The specialized 2D path and general arithmetic path use the same
+            # cell identities and exact integer matrices, including seams.
+            if N==2
+                fast=DI._cubical_structure_2d(shape,periodic)
+                @test s.cells_by_dim == fast.cells_by_dim
+                @test s.boundaries == fast.boundaries
+            end
+            cache=CM.EncodingCache()
+            cached=DI._cubical_structure(shape;periodic,cache)
+            @test cached.cells_by_dim == s.cells_by_dim
+            @test cached.boundaries == s.boundaries
+            @test DI._cubical_structure(shape;periodic,cache) === cached
+        end
+    end
+    # Shared construction may race to compute, but publishes one payload.
+    cache=CM.EncodingCache()
+    tasks=[Threads.@spawn DI._cubical_structure((3,2,4);periodic=(true,false,true),cache) for _ in 1:8]
+    results=fetch.(tasks)
+    @test all(x -> x===first(results),results)
+    @test length(cache.cubical)==1
 end

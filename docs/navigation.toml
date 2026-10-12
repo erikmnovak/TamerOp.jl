@@ -15,7 +15,7 @@ id = "mathematics"
 title = "Mathematics"
 page = "collections/mathematics.html"
 types = ["lesson"]
-order = ["ring", "two_parameters", "persistence_modules", "finite_encodings", "square", "indicator_presentations", "tameness", "practical_tameness", "math_categories"]
+order = ["ring", "two_parameters", "persistence_modules", "finite_encodings", "square", "indicator_presentations", "tameness", "practical_tameness", "decomposition_lesson", "math_categories"]
 
 [[collections]]
 id = "using"
@@ -52,14 +52,14 @@ id = "benchmarks"
 title = "Benchmark results"
 page = "benchmarks/index.html"
 types = ["benchmark_report"]
-order = ["C01", "C18", "C14"]
+order = ["C01", "C18", "C14", "C14_cpp", "C22"]
 
 [[collections]]
 id = "contributing"
 title = "Contributing"
 page = "contributing/index.html"
 types = ["contributor_guide"]
-order = ["contributing", "writing", "testing", "documentation_build", "benchmarking", "benchmark_suites", "benchmark_style", "releasing"]
+order = ["contributing", "writing", "testing", "visualization_support", "documentation_build", "benchmarking", "benchmark_suites", "benchmark_style", "releasing"]
 primary = false
 
 # Supporting records stay attached to their owners, outside article lists.
@@ -81,3 +81,13 @@ owner = "C18"
 id = "ripser_data"
 collection = "benchmarks"
 owner = "C14"
+
+[[resources]]
+id = "ripser_cpp_data"
+collection = "benchmarks"
+owner = "C14_cpp"
+
+[[resources]]
+id = "cubicalripser_data"
+collection = "benchmarks"
+owner = "C22"

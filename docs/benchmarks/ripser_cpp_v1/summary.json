@@ -1,0 +1,400 @@
+[
+  {
+    "id": "circle_1280_f2",
+    "family": "circle",
+    "n": 1280,
+    "prime": 2,
+    "degree": 1,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/circle_1280_f2.txt",
+    "sha256": "1b86d6ede977c5066fc6ad0f145231f1fb7638d3d37441a3ca91a4bbc3bb6f0d",
+    "edges": 818560,
+    "control": false,
+    "tamerop_seconds": 15.5277783445,
+    "tamerop_pass_seconds": [
+      22.596470474500002,
+      15.5277783445,
+      13.442213918
+    ],
+    "tamerop_peak_rss_bytes": 3112583168,
+    "construction_seconds": 0.134559979,
+    "query_seconds": 15.389742306999999,
+    "allocation_bytes": 2216403624.0,
+    "retained_result_bytes": 22616.0,
+    "cpp_seconds": 28.592399303495768,
+    "cpp_pass_seconds": [
+      39.04507555899181,
+      28.592399303495768,
+      25.927187316992786
+    ],
+    "cpp_peak_rss_bytes": 1095581696,
+    "ratio": 1.8308405094254137,
+    "ratio_min": 1.727928067485317,
+    "ratio_max": 1.9287884774899016,
+    "interval_counts": [
+      1280,
+      1
+    ],
+    "intervals": 1281
+  },
+  {
+    "id": "circle_1408_f2",
+    "family": "circle",
+    "n": 1408,
+    "prime": 2,
+    "degree": 1,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/circle_1408_f2.txt",
+    "sha256": "c185afbfe1eccae0e48d44fcf5049cd02e42198aaa932c1f7874ea61abcff8ec",
+    "edges": 990528,
+    "control": false,
+    "tamerop_seconds": 25.5034446835,
+    "tamerop_pass_seconds": [
+      30.7145309585,
+      25.5034446835,
+      21.268982483499997
+    ],
+    "tamerop_peak_rss_bytes": 3835674624,
+    "construction_seconds": 0.1858821605,
+    "query_seconds": 24.808645171000002,
+    "allocation_bytes": 3023595288.0,
+    "retained_result_bytes": 49928.0,
+    "cpp_seconds": 48.76673173400923,
+    "cpp_pass_seconds": [
+      52.2434400830025,
+      48.76673173400923,
+      37.465174610006216
+    ],
+    "cpp_peak_rss_bytes": 2174447616,
+    "ratio": 1.7893607681864636,
+    "ratio_min": 1.7009356305519145,
+    "ratio_max": 1.9121625466366867,
+    "interval_counts": [
+      1408,
+      1
+    ],
+    "intervals": 1409
+  },
+  {
+    "id": "planar_1024_f2",
+    "family": "planar",
+    "n": 1024,
+    "prime": 2,
+    "degree": 2,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/planar_1024_f2.txt",
+    "sha256": "9ec458dd3c3c2e19bc1d0d09985a8077ad8a400b222e81d6d852c06920e86657",
+    "edges": 523776,
+    "control": false,
+    "tamerop_seconds": 31.705009157,
+    "tamerop_pass_seconds": [
+      35.738882333999996,
+      31.705009157,
+      26.844631819
+    ],
+    "tamerop_peak_rss_bytes": 4008030208,
+    "construction_seconds": 0.101863806,
+    "query_seconds": 30.3584555075,
+    "allocation_bytes": 7282327296.0,
+    "retained_result_bytes": 31240.0,
+    "cpp_seconds": 28.65171518799616,
+    "cpp_pass_seconds": [
+      36.387914979502966,
+      28.65171518799616,
+      25.938900029497745
+    ],
+    "cpp_peak_rss_bytes": 24530944,
+    "ratio": 0.9615628666606343,
+    "ratio_min": 0.9036967958632582,
+    "ratio_max": 1.0181604069046535,
+    "interval_counts": [
+      1024,
+      250,
+      1
+    ],
+    "intervals": 1275
+  },
+  {
+    "id": "planar_1152_f2",
+    "family": "planar",
+    "n": 1152,
+    "prime": 2,
+    "degree": 2,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/planar_1152_f2.txt",
+    "sha256": "a06eae1910c1cdafcef3d4b09c094ae9b58af87622308257d24758b01cafdec3",
+    "edges": 662976,
+    "control": false,
+    "tamerop_seconds": 55.432733799999994,
+    "tamerop_pass_seconds": [
+      64.41801233300001,
+      55.432733799999994,
+      33.2791717585
+    ],
+    "tamerop_peak_rss_bytes": 5278388224,
+    "construction_seconds": 0.155583212,
+    "query_seconds": 52.6852168475,
+    "allocation_bytes": 10329999856.0,
+    "retained_result_bytes": 31192.0,
+    "cpp_seconds": 45.73811358950479,
+    "cpp_pass_seconds": [
+      58.54313009500038,
+      45.73811358950479,
+      31.324758147995453
+    ],
+    "cpp_peak_rss_bytes": 31285248,
+    "ratio": 0.8903592243809019,
+    "ratio_min": 0.825110191291067,
+    "ratio_max": 0.9412721679287178,
+    "interval_counts": [
+      1152,
+      277,
+      0
+    ],
+    "intervals": 1429
+  },
+  {
+    "id": "planar_1024_f101",
+    "family": "planar",
+    "n": 1024,
+    "prime": 101,
+    "degree": 2,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/planar_1024_f101.txt",
+    "sha256": "9ec458dd3c3c2e19bc1d0d09985a8077ad8a400b222e81d6d852c06920e86657",
+    "edges": 523776,
+    "control": false,
+    "tamerop_seconds": 38.536136801,
+    "tamerop_pass_seconds": [
+      38.536136801,
+      48.3342009135,
+      23.4688251775
+    ],
+    "tamerop_peak_rss_bytes": 4014342144,
+    "construction_seconds": 0.135314396,
+    "query_seconds": 38.361251794,
+    "allocation_bytes": 7288042288.0,
+    "retained_result_bytes": 31240.0,
+    "cpp_seconds": 37.405095718000666,
+    "cpp_pass_seconds": [
+      37.405095718000666,
+      43.364185565507796,
+      22.676309177499206
+    ],
+    "cpp_peak_rss_bytes": 24539136,
+    "ratio": 0.9440755613228223,
+    "ratio_min": 0.897173941969442,
+    "ratio_max": 0.9706498581100641,
+    "interval_counts": [
+      1024,
+      250,
+      1
+    ],
+    "intervals": 1275
+  },
+  {
+    "id": "planar_1152_f101",
+    "family": "planar",
+    "n": 1152,
+    "prime": 101,
+    "degree": 2,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/planar_1152_f101.txt",
+    "sha256": "a06eae1910c1cdafcef3d4b09c094ae9b58af87622308257d24758b01cafdec3",
+    "edges": 662976,
+    "control": false,
+    "tamerop_seconds": 47.1655887705,
+    "tamerop_pass_seconds": [
+      47.1655887705,
+      58.565899125499996,
+      29.432110921
+    ],
+    "tamerop_peak_rss_bytes": 5286572032,
+    "construction_seconds": 0.14004654049999998,
+    "query_seconds": 47.0211713325,
+    "allocation_bytes": 10347840636.0,
+    "retained_result_bytes": 31192.0,
+    "cpp_seconds": 50.13743210899702,
+    "cpp_pass_seconds": [
+      50.13743210899702,
+      65.86001625100471,
+      28.836939453001833
+    ],
+    "cpp_peak_rss_bytes": 31277056,
+    "ratio": 1.0540968926175598,
+    "ratio_min": 0.9797781589775979,
+    "ratio_max": 1.124545464757132,
+    "interval_counts": [
+      1152,
+      277,
+      0
+    ],
+    "intervals": 1429
+  },
+  {
+    "id": "sphere_448_f3",
+    "family": "sphere",
+    "n": 448,
+    "prime": 3,
+    "degree": 2,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/sphere_448_f3.txt",
+    "sha256": "dd5d7841cca335d5f552c01f6b220816608b0b59d037696302e24679783f38e7",
+    "edges": 100128,
+    "control": false,
+    "tamerop_seconds": 24.912874807,
+    "tamerop_pass_seconds": [
+      24.912874807,
+      33.5861506355,
+      19.851982858
+    ],
+    "tamerop_peak_rss_bytes": 4132261888,
+    "construction_seconds": 0.014754700499999999,
+    "query_seconds": 24.896737756500002,
+    "allocation_bytes": 7124968936.0,
+    "retained_result_bytes": 11496.0,
+    "cpp_seconds": 16.76034438249917,
+    "cpp_pass_seconds": [
+      16.76034438249917,
+      20.423913632999756,
+      13.019987401508843
+    ],
+    "cpp_peak_rss_bytes": 1089007616,
+    "ratio": 0.6449828489335728,
+    "ratio_min": 0.6081052233301194,
+    "ratio_max": 0.6727583433201318,
+    "interval_counts": [
+      448,
+      123,
+      3
+    ],
+    "intervals": 574
+  },
+  {
+    "id": "sphere_512_f3",
+    "family": "sphere",
+    "n": 512,
+    "prime": 3,
+    "degree": 2,
+    "format": "lower-distance",
+    "threshold": null,
+    "input": "inputs/sphere_512_f3.txt",
+    "sha256": "dc08062dcc56479ed98fa2acb2894a0713fb0f671e0a4d78c4cf03e9f2e08825",
+    "edges": 130816,
+    "control": false,
+    "tamerop_seconds": 40.570322946000005,
+    "tamerop_pass_seconds": [
+      40.570322946000005,
+      54.885807592,
+      31.1528446345
+    ],
+    "tamerop_peak_rss_bytes": 5667459072,
+    "construction_seconds": 0.0229698435,
+    "query_seconds": 40.544522533000006,
+    "allocation_bytes": 10366778088.0,
+    "retained_result_bytes": 17896.0,
+    "cpp_seconds": 42.654626340001414,
+    "cpp_pass_seconds": [
+      42.654626340001414,
+      55.9916539390033,
+      34.044623936999415
+    ],
+    "cpp_peak_rss_bytes": 2163482624,
+    "ratio": 1.0543640319818552,
+    "ratio_min": 1.0201481292800452,
+    "ratio_max": 1.0928255296242493,
+    "interval_counts": [
+      512,
+      142,
+      3
+    ],
+    "intervals": 657
+  },
+  {
+    "id": "sparse_sphere_640_f2",
+    "family": "sparse_sphere",
+    "n": 640,
+    "prime": 2,
+    "degree": 2,
+    "format": "sparse",
+    "threshold": 1.5,
+    "input": "inputs/sparse_sphere_640_f2.txt",
+    "sha256": "c9743fb3ca6a2ffe43815fdf845f9b7fd2c11c2f8a0c7833f162273ad90f017f",
+    "edges": 114771,
+    "control": false,
+    "tamerop_seconds": 49.827658596999996,
+    "tamerop_pass_seconds": [
+      49.827658596999996,
+      64.123867851,
+      40.080678174499994
+    ],
+    "tamerop_peak_rss_bytes": 3822772224,
+    "construction_seconds": 0.037362641,
+    "query_seconds": 49.788162521000004,
+    "allocation_bytes": 3281348544.0,
+    "retained_result_bytes": 31264.0,
+    "cpp_seconds": 27.975017355995078,
+    "cpp_pass_seconds": [
+      27.975017355995078,
+      37.503815552998276,
+      22.02901987299265
+    ],
+    "cpp_peak_rss_bytes": 285159424,
+    "ratio": 0.5651172712792605,
+    "ratio_min": 0.5496169445308409,
+    "ratio_max": 0.5848651494345785,
+    "interval_counts": [
+      640,
+      172,
+      4
+    ],
+    "intervals": 816
+  },
+  {
+    "id": "sparse_sphere_704_f2",
+    "family": "sparse_sphere",
+    "n": 704,
+    "prime": 2,
+    "degree": 2,
+    "format": "sparse",
+    "threshold": 1.5,
+    "input": "inputs/sparse_sphere_704_f2.txt",
+    "sha256": "78393cceb48f972180c31602070219023f4f2d36e66dfaab44d6a6f0aa8b616b",
+    "edges": 138956,
+    "control": false,
+    "tamerop_seconds": 69.7202448975,
+    "tamerop_pass_seconds": [
+      69.7202448975,
+      74.50156044100001,
+      45.512092233000004
+    ],
+    "tamerop_peak_rss_bytes": 4341116928,
+    "construction_seconds": 0.051547989,
+    "query_seconds": 67.8327408455,
+    "allocation_bytes": 4061017440.0,
+    "retained_result_bytes": 31264.0,
+    "cpp_seconds": 43.65911726500053,
+    "cpp_pass_seconds": [
+      46.335580287501216,
+      43.65911726500053,
+      27.87851570949715
+    ],
+    "cpp_peak_rss_bytes": 290521088,
+    "ratio": 0.6202061144129433,
+    "ratio_min": 0.5860161452534337,
+    "ratio_max": 0.6645929077791105,
+    "interval_counts": [
+      704,
+      187,
+      4
+    ],
+    "intervals": 895
+  }
+]

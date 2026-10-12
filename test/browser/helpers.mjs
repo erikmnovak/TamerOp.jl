@@ -16,6 +16,66 @@ export async function openInspector(page, url, errors) {
     return canvases.length > 0 && canvases.every(canvas => canvas.wglmakie_screen?.renderer?.info.render.frame > 0);
   }, null, { timeout: 300_000 });
   await expect.poll(async () => (await state(page)).summary.listener_errors).toEqual([]);
+  await checkKeyboardControls(page);
+}
+
+// Every advertised HTML control must have a name and be reachable through
+// actual sequential focus navigation, independently of canvas pointer picking.
+export async function checkKeyboardControls(page) {
+  const controls = page.locator('input[id^="tamerop-"]:visible:enabled, select[id^="tamerop-"]:visible:enabled, button[id^="tamerop-"]:visible:enabled');
+  const count = await controls.count();
+  expect(count).toBeGreaterThan(0);
+  const pending = new Set();
+  for (const element of await controls.all()) {
+    await expect(element).toHaveAccessibleName(/\S/);
+    const sizing = await element.evaluate(el => ({
+      actual: parseFloat(getComputedStyle(el).fontSize),
+      intended: parseFloat(getComputedStyle(el.parentElement.closest('div[id^="tamerop-"]')).fontSize),
+    }));
+    expect(sizing.actual, 'Controls must retain the inspector typography after embedding').toBeCloseTo(sizing.intended, 3);
+    pending.add(await element.getAttribute('id'));
+  }
+  await controls.first().focus();
+  // Named chart/table scroll containers also belong in the tab order.
+  for (let step = 0; pending.size && step < count * 3 + 20; step++) {
+    const active = await page.evaluate(() => {
+      const element = document.activeElement;
+      const style = getComputedStyle(element);
+      return { id: element.id, outline: style.outlineStyle, width: parseFloat(style.outlineWidth) };
+    });
+    if (pending.has(active.id)) {
+      expect(active.outline, 'Keyboard focus must remain visible').not.toBe('none');
+      expect(active.width).toBeGreaterThan(0);
+      pending.delete(active.id);
+    }
+    if (pending.size) await page.keyboard.press('Tab');
+  }
+  expect([...pending], 'Controls missing from the keyboard focus order').toEqual([]);
+  await checkCanvasKeyboardEscape(page);
+  await controls.first().focus();
+}
+
+export async function checkCanvasKeyboardEscape(page) {
+  // Canvases also sit between controls and later panels. Test both directions
+  // explicitly: WGL's default keydown handler otherwise traps Tab on a plot.
+  for (const canvas of await page.locator('canvas:visible').all()) {
+    await canvas.focus();
+    await expect(canvas).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(canvas, 'Tab must leave a plot').not.toBeFocused();
+    await canvas.focus();
+    await expect(canvas).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(canvas, 'Shift+Tab must leave a plot').not.toBeFocused();
+  }
+}
+
+// Use the platform activation key, not a synthetic DOM click. Existing tests
+// still select plotted marks with real mouse events, so both routes are covered.
+export async function keyboardActivate(control) {
+  await control.focus();
+  await expect(control).toBeFocused();
+  await control.press(await control.getAttribute('type') === 'checkbox' ? 'Space' : 'Enter');
 }
 
 export async function selected(page, id) {
@@ -144,7 +204,7 @@ export async function scrollableCharts(page) {
 
 // Focus the real scroll container and use browser keyboard scrolling. Setting
 // scrollLeft in JavaScript would miss keyboard-access and event-routing bugs.
-export async function scrollChart(page, panel, side) {
+export async function scrollChart(page, panel, side, { graphic = panel.locator('canvas') } = {}) {
   await panel.scrollIntoViewIfNeeded();
   await panel.focus();
   await expect(panel).toBeFocused();
@@ -157,8 +217,38 @@ export async function scrollChart(page, panel, side) {
     await page.keyboard.press(side === 'right' ? 'ArrowRight' : 'ArrowLeft');
   }
   await expect.poll(remaining).toBeLessThanOrEqual(1);
-  const canvas = await panel.locator('canvas').boundingBox();
+  const canvas = await graphic.boundingBox();
   const bounds = await panel.boundingBox();
   if (side === 'right') expect(canvas.x + canvas.width).toBeLessThanOrEqual(bounds.x + bounds.width + 1);
   else expect(canvas.x).toBeGreaterThanOrEqual(bounds.x - 1);
+}
+
+// Offline SVGs and SVG images retain their intrinsic size. Verify both native
+// keyboard scrolling and pointer-wheel return without changing figure geometry.
+export async function checkOfflineChartScroll(page, panel, graphic) {
+  const before = await graphic.boundingBox();
+  await scrollChart(page, panel, 'right', { graphic });
+  const extent = await panel.evaluate(el => el.scrollWidth - el.clientWidth);
+  const outline = await panel.evaluate(el => ({ style: getComputedStyle(el).outlineStyle,
+    width: parseFloat(getComputedStyle(el).outlineWidth) }));
+  expect(outline.style).not.toBe('none'); expect(outline.width).toBeGreaterThan(0);
+  await panel.hover();
+  // Wheel dispatch returns before native scrolling finishes. After viewport
+  // resize and keyboard scrolling, allow the compositor to settle and continue
+  // a short real wheel gesture if its first event does not move the chart.
+  await panel.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  let wheelEvents = 0;
+  await expect.poll(async () => {
+    const left = await panel.evaluate(el => el.scrollLeft);
+    if (left > 1 && wheelEvents < 3) {
+      await page.mouse.wheel(-Math.ceil(extent), 0);
+      wheelEvents++;
+    }
+    return panel.evaluate(el => el.scrollLeft);
+  }, { message: 'A real horizontal wheel gesture must return to the left edge',
+    timeout: 5_000, intervals: [100, 250, 500, 1_000] }).toBeLessThanOrEqual(1);
+  const after = await graphic.boundingBox(), bounds = await panel.boundingBox();
+  expect(after.x).toBeGreaterThanOrEqual(bounds.x - 1);
+  expect([after.width, after.height]).toEqual([before.width, before.height]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 }

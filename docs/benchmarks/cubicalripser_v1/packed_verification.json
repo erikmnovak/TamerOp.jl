@@ -1,0 +1,6 @@
+{
+  "passed": 12,
+  "canonicalizer_sha256": "ec8fd48c3df16e023c2ed6e13d053d75d0504837ca8edfab4cfa9d54c8d21ead",
+  "test_sha256": "171febfe93fc0cbec9876c32c818c7e9e3bc841e0303147e9e9229b9e9b019fe",
+  "independent_controls": "a90d7bcf9b3fa067c969e867ecacc486e56f9d7ab0c9363566b2127aedb3570a"
+}

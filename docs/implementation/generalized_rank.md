@@ -16,6 +16,8 @@ spaces and maps; neither reconstructs an input filtration.
 
 The [executable examples](../examples/generalized_rank.jl) build the branching,
 signed, and landscape examples used below.
+The [region-query guide](../tutorials/generalized_rank_queries.ipynb) follows
+these questions through selected domains, matrix witnesses and linked figures.
 
 ## A branching question that endpoint ranks cannot answer
 
@@ -99,6 +101,39 @@ compression systems, such as source/sink compression, are also rejected:
 they need their own preservation hypotheses. The implemented contract is
 `:total`. In particular, the operation does not enumerate every interval;
 [generalized-diagram output sizes can be superpolynomial](https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.SoCG.2025.64).
+
+## An optional boundary zigzag witness
+
+A connected convex interval in a two-dimensional grid admits a smaller path
+whose full bars recover its generalized rank. The
+[boundary-cap construction of Dey, Kim and Mémoli](https://arxiv.org/html/2111.15058v3#S3.SS2)
+orders the minimal and maximal labels by their first index. Consecutive minima
+are joined through their coordinatewise maximum; consecutive maxima through
+their coordinatewise minimum. Reverse the lower path, connect its final
+minimum to the first maximum, and follow the upper path.
+
+The path keeps **occurrences**, not just distinct labels. For the middle seven
+labels of a three-by-three grid, it visits `2,5,4,8,5,6`. Both visits to 5
+remain, and only adjacent path arrows and their composites impose relations.
+Taking the induced order on the distinct labels would construct a different
+diagram. Nonuniform physical axis spacing does not change this index-lattice
+interpretation. This theorem is not applied to the continuous worms below.
+
+`boundary_zigzag` computes exact ranks on contiguous occurrence intervals.
+If $r(a,b)$ is their rank, the multiplicity of the inclusive bar $[a,b]$ is
+
+$$m(a,b)=r(a,b)-r(a-1,b)-r(a,b+1)+r(a-1,b+1),$$
+
+with out-of-range ranks zero. The result checks nonnegative multiplicities,
+reconstruction of occurrence dimensions, and agreement of the full-bar count
+with the original region rank. It stores endpoints and multiplicities without
+claiming an interval decomposition of the ambient module.
+
+For $t$ occurrences this reference algorithm uses $t(t+1)/2$ rank queries,
+plus the original region check. Query and algebra budgets include repeated
+stalk occurrences. This is an explicit witness computation, not the fast
+filtration-level zigzag reduction of the cited paper. It is never substituted
+silently for the scalar default.
 
 ## From a grid encoding to a continuous worm
 
@@ -220,5 +255,11 @@ The owner implementations are
 [`generalized_rank.jl`](../../src/invariants/generalized_rank.jl) and
 [`gril.jl`](../../src/invariants/gril.jl). `Workflow` supplies the encoding
 wrappers; both routes preserve the coefficient field and explicit budgets.
+The optional boundary witness lives in
+[`boundary_zigzag.jl`](../../src/invariants/boundary_zigzag.jl).
+
+For actual ambient interval summands, use the
+[interval-multiplicity account](interval_decomposition.md). Its boundary-aware
+Hom pairing asks a different question from restriction to a selected region.
 
 [Bibliography](references.md).

@@ -113,7 +113,7 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
                 rect[1] <= rect[3] || push!(issues, "RectLayer $idx has xlo > xhi.")
                 rect[2] <= rect[4] || push!(issues, "RectLayer $idx has ylo > yhi.")
             end
-        elseif layer isa PolygonLayer
+        elseif layer isa Union{PolygonLayer,Polygon3Layer}
             for polygon in layer.polygons
                 length(polygon) >= 3 || push!(issues, "PolygonLayer $idx polygons need at least three vertices.")
                 all(p -> all(isfinite, p), polygon) ||
@@ -158,6 +158,7 @@ function check_visual_spec(spec::VisualizationSpec; throw::Bool=false)
         end
     end
 
+    _check_composition!(issues,spec)
     valid = isempty(issues)
     throw && !valid && _throw_invalid_visual(:check_visual_spec, issues)
     return _visual_issue_report(:visual_spec, valid;
@@ -254,21 +255,21 @@ _visual_request_keywords(obj::MPLandscape, kind::Symbol) =
     kind === :landscape_slices ? (:idir, :ioff, :layer) : ()
 _visual_request_keywords(obj::OrdinaryPersistence.PersistenceDiagram, kind::Symbol) = (:dim,_INTERVAL_DISPLAY_KEYWORDS...)
 function _visual_request_keywords(obj::DataTypes.PointCloud, kind::Symbol)
-    kind === :points_3d && return (:dims, :color_values)
-    kind === :point_density && return (:dims, :labels, :color_values)
-    common = (:dims, :labels, :color_values, :density)
-    kind === :knn_graph && return (common..., :k)
-    kind === :radius_graph && return (common..., :radius)
+    kind === :points_3d && return (:dims, :color_values, :max_points)
+    kind === :point_density && return (:dims, :labels, :color_values, :max_points, :max_labels)
+    common = (:dims, :labels, :color_values, :density, :max_points, :max_labels)
+    kind === :knn_graph && return (common..., :k, :max_edges, _SOURCE_GRAPH_KEYS...)
+    kind === :radius_graph && return (common..., :radius, :max_edges, _SOURCE_GRAPH_KEYS...)
     return common
 end
 function _visual_request_keywords(obj::DataIngestion.PointCodensityResult, kind::Symbol)
-    kind === :codensity_radius_snapshots && return (:radii, :codensity_levels)
+    kind === :codensity_radius_snapshots && return (:radii, :codensity_levels, :max_points)
     return Tuple(k for k in _visual_request_keywords(DataIngestion.source_data(obj), kind) if k !== :color_values)
 end
 _visual_request_keywords(obj::DataTypes.GraphData, kind::Symbol) =
-    DataTypes.coord_matrix(obj) === nothing ? (:labels,) :
-    kind === :graph_3d ? (:dims,) : (:dims, :labels)
-_visual_request_keywords(obj::DataTypes.EmbeddedPlanarGraph2D, kind::Symbol) = (:labels,)
+    DataTypes.coord_matrix(obj) === nothing ? (:labels, _SOURCE_BUDGET_KEYS...) :
+    kind === :graph_3d ? (:dims, :max_points, :max_edges) : (:dims, :labels, _SOURCE_BUDGET_KEYS...)
+_visual_request_keywords(obj::DataTypes.EmbeddedPlanarGraph2D, kind::Symbol) = (:labels, :max_path_points, _SOURCE_BUDGET_KEYS...)
 _visual_request_keywords(obj::DataTypes.ImageNd, kind::Symbol) =
     kind === :channels ? (:view_dims, :colormap, :colorrange, :colorbar_label, :title) :
         (:view_dims, :slice_indices, :colormap, :colorrange, :colorbar_label, :title)
@@ -301,7 +302,7 @@ function _visual_request_cost(obj, kind::Symbol)
     elseif kind === :constant_subdivision
         :fiber_rank_grid
     elseif kind in (:knn_graph, :radius_graph)
-        :all_pairs_distances
+        :prepared_neighbor_graph
     elseif kind in (:fibered_family_contributions, :fibered_distance_diagnostic)
         :sampled_family_bottleneck_queries
     elseif kind === :fibered_query_barcode
@@ -381,6 +382,9 @@ end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.PointCloud, kind::Symbol; kwargs...)
     params = (; kwargs...)
+    _source_budget_check(; (k=>v for (k,v) in pairs(params) if k in (_SOURCE_BUDGET_KEYS...,:max_distance_pairs,:max_graph_edges))...)
+    nn = get(params,:nn_backend,:auto)
+    nn in (:auto,:bruteforce,:nearestneighbors) || push!(issues,"nn_backend must be :auto, :bruteforce or :nearestneighbors (exact preview graphs).")
     target = kind === :points_3d ? 3 : 2
     dims = get(params, :dims, nothing)
     if dims !== nothing
@@ -391,13 +395,13 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.P
     colors = get(params, :color_values, nothing)
     colors === nothing || length(colors) == DataTypes.npoints(obj) ||
         push!(issues, "color_values must contain one value per point.")
-    get(params, :labels, nothing) === nothing || _collect_point_labels(params.labels, DataTypes.npoints(obj))
+    get(params, :labels, nothing) === nothing || (params.labels isa AbstractVector && length(params.labels)==DataTypes.npoints(obj)) || push!(issues,"labels must contain one value per source point.")
     if kind === :knn_graph
         k = get(params, :k, nothing)
-        k === nothing || Int(k) > 0 || push!(issues, "knn_graph k must be positive.")
+        k === nothing || (k isa Int && k>0) || push!(issues, "knn_graph k must be a positive Int.")
     elseif kind === :radius_graph
         radius = get(params, :radius, nothing)
-        radius === nothing || float(radius) > 0 || push!(issues, "radius_graph radius must be positive.")
+        radius === nothing || (radius isa Real && !(radius isa Bool) && isfinite(radius) && isfinite(Float64(radius)) && radius>=0) || push!(issues, "radius_graph radius must be finite and nonnegative.")
     end
     return issues
 end
@@ -416,6 +420,7 @@ end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.GraphData, kind::Symbol; kwargs...)
     params = (; kwargs...)
+    _source_budget_check(; (k=>v for (k,v) in pairs(params) if k in _SOURCE_BUDGET_KEYS)...)
     dims = get(params, :dims, nothing)
     if dims !== nothing && DataTypes.coord_matrix(obj) !== nothing
         target = kind === :graph_3d ? 3 : 2
@@ -423,7 +428,7 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::DataTypes.G
             all(d -> d isa Integer && !(d isa Bool) && 1 <= d <= DataTypes.ambient_dim(obj), dims) ||
             push!(issues, "dims must select $target distinct axes within the graph coordinates.")
     end
-    get(params, :labels, nothing) === nothing || _collect_point_labels(params.labels, DataTypes.nvertices(obj))
+    get(params, :labels, nothing) === nothing || (params.labels isa AbstractVector && length(params.labels)==DataTypes.nvertices(obj)) || push!(issues,"labels must contain one value per source vertex.")
     return issues
 end
 
@@ -435,6 +440,7 @@ end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::DataIngestion.PointCodensityResult, kind::Symbol; kwargs...)
     params = (; kwargs...)
+    _source_budget_check(max_points=get(params,:max_points,5000))
     if kind === :codensity_radius_snapshots
         DataTypes.ambient_dim(DataIngestion.source_data(obj)) == 2 ||
             push!(issues, "codensity_radius_snapshots requires a 2-dimensional point cloud.")
@@ -590,14 +596,6 @@ function _append_visual_request_issues!(issues::Vector{String}, obj::InvariantRe
             report = _visual_rank_query_points(encoding_map(obj), collect(x), collect(y); throw=false)
             report.valid || append!(issues, String.(report.issues))
         end
-    end
-    return issues
-end
-
-function _append_visual_request_issues!(issues::Vector{String}, obj::ModuleTranslationResult, kind::Symbol; kwargs...)
-    if kind === :pushforward_overlay
-        map = translation_map(obj)
-        map isa EncodingMap || push!(issues, "pushforward_overlay currently requires translation_map(res) to be an EncodingMap.")
     end
     return issues
 end

@@ -2,11 +2,175 @@
 
 ## Unreleased
 
+- Compute exact interval-summand multiplicities on finite posets, prune candidates
+  with top/socle data, and decide interval-decomposability with explicit search
+  budgets. Retain simultaneous splitting maps on request, with a lesson,
+  executable guide, API contracts and algorithm account.
+
+- Compute relative persistence from checked filtered pairs, including later
+  subcomplex entry. Inspect quotient boundaries, homology bases, projection,
+  inclusion and signed connecting maps with their induced filtration maps.
+
+- Publish the completed CubicalRipser comparison on 48 large image/volume
+  requests, with verified barcodes, runtime curves, machine details and
+  downloadable measurements, including substantial losses and calibration limits.
+
+- Reduce 3D cubical barcode work with precomputed local boundary plans, compact
+  per-image ranks and shared ordering scratch. Preserve exact endpoints and
+  retain the existing 2D and advanced-output routes; report the local method
+  in provenance.
+
+- Compare repeated persistence results on declared common probes, with empirical
+  bands, support frequencies and linked replicate/source inspection. Add
+  conditional bounded-mean confidence intervals and reproducible whole-row
+  bootstrap bands with explicit IID and finite-grid contracts.
+
+- Reduce cubical H1 storage by replaying simple square boundaries when needed,
+  and cancel equal-grade singleton relations during the existing sweep.
+  Preserve exact barcodes and the general routes for richer outputs.
+
+- Reuse sparse-ingestion neighbor graphs and source coordinates in previews.
+  Add explicit point, edge, label and preparation budgets with original source
+  IDs, full counts and visible omissions; retain supplied graph geometry and
+  report reconstructed metric graphs separately.
+
+- Keep coordinate-field and matching inspector plots during compatible selections,
+  and batch measured persistence-diagram labels and leaders for faster rendering.
+
+- Compute full rank invariants with per-source map scratch and comparable-pair
+  output, without unconditional square rank buffers. Preserve serial and
+  threaded results, including zero ranks when requested.
+
+- Keep reversed grid axes as structured products, preserving vertex labels,
+  oriented covers, coordinate lookup, inspection order and JSON round trips.
+
+- Encode closed box faces and points on the fast axis-aligned route. Retain
+  shared birth/death events, exact rational witnesses, coefficient maps and
+  zero-volume geometry, with cell budgets that include the extra strata.
+
+- Store cubical component metadata compactly and handle already-reduced square
+  boundaries directly, avoiding generic column bookkeeping for those cases.
+  Preserve exact barcode endpoints, both input conventions and general routes
+  for periodicity, other fields and retained representatives.
+
+- Explore higher-dimensional scalar fields through linked coordinate planes,
+  shared signed scales, stable layers and explicit interpolated contours.
+  Place sampled landscapes in ambient coordinates with declared line parameters,
+  source windows, coverage masks and conditional interpolation bounds.
+
+- Batch Makie edges, support polygons, spatial faces, bars and labels, including
+  decorated interval views and exact coefficient tables. Preserve endpoint
+  conventions, selection anchors and overlapping outlines; add mandatory scene
+  growth checks and an offline browser fixture for the shared renderer.
+
+- Explore exact generalized rank on selected finite regions and continuous worms,
+  with optional limit/colimit matrices, repeated-occurrence boundary barcodes
+  and fixed-probe GRIL layers. Add a guide, task recipe and implementation account.
+
+- Add a finite-module and fringe-presentation editor with explicit failed-path witnesses, bounded undo/redo, checked object and Julia exports, saved drafts, and a construction guide.
+
+
+- Reuse cubical component pairings to shrink the remaining barcode reduction
+  and skip redundant dual-graph work. Traverse grid neighbors directly from
+  linear cell indices, preserving exact grades, tied events and thin grids.
+
+- Make coordinate and interaction acceptance mandatory across visualization
+  families, with a checked support matrix and native/browser CI. Add accessible
+  volume controls, preserve Tab navigation past inspector plots, fix nested
+  browser-fixture styling with Bonito 5.2, and keep saved figures readable in
+  narrow browsers through accessible chart scrolling.
+
+- Compute nonperiodic 1D-3D cubical F₂ barcodes directly from grid grades and
+  neighboring cells, without constructing boundary matrices. Preserve exact
+  grades, budgets and both input conventions; keep the general route for
+  periodicity, other fields and retained chains/source geometry. Remove the
+  vertex-grade round trip through ranked image ingestion on that route too.
+
+- Build general-dimensional cubical topology with arithmetic grid indexing and
+  preallocated sparse boundaries, reducing construction time and allocation
+  traffic while preserving cell order, oriented periodic boundaries, source
+  identities and cache reuse. The specialized 2D path is unchanged.
+
+- Save named mathematical views with exact retained readouts, source identities
+  and original module coordinates. Reopen supported Julia inspectors, share
+  self-contained offline HTML, and export figures with machine-readable records;
+  add an executable guide and session/serialization documentation.
+
+- Explore collections of supplied features, distances and kernels with linked
+  sample views, declared embeddings and selected-pair matching witnesses.
+  Preserve feature definitions, original values, masks and mathematical context
+  without hidden normalization or all-pairs work; extend the comparison guide.
+
+- Explore multicover and core constructions through linked source coverage,
+  retained cells, radius–depth events and homology. Preserve exact rhomboid
+  radii, terminal caps and repeated-site labels; add fixed-depth barcodes,
+  an executable geometric guide and the rhomboid implementation account.
+
+- Compare dimensions, anchored ranks and ordinary barcodes across fields,
+  degrees and construction choices through declared query correspondences.
+  Share scales and live selections, inspect signed differences and selected
+  matrices, retain provenance and numerical tolerance sensitivity, and add
+  an executable comparison guide with API and implementation documentation.
+
+- Correct vertex-valued cubical construction budgets to estimate sparse topology,
+  grades and assembly workspace. Feasible images and volumes no longer fail
+  a hypothetical dense-boundary check; cell, edge and memory limits still apply.
+
+- Inspect finite-category Ext/Tor dimensions, selected representatives and
+  actual Yoneda or supplied Tor products. Retain checked quotient witnesses,
+  coefficient fields, basis conventions and bounded multiplication tables;
+  add the derived-algebra guide, reference and product implementation account.
+
+- Add named figure composition, checked overlays and shared scales, authored
+  annotations and verified source-cycle/barcode connectors. Anchors follow
+  layout and live axis changes; static PNG/SVG/PDF and self-contained responsive
+  HTML preserve the selected figure. Include a figure-composition guide and recipe.
+
+
+- Follow selected vectors and subspaces through finite module maps, with checked
+  path agreement, image support and dimensions, optional generated submodules
+  and quotients, and explicit retained source-cycle bases. Add actual matrix
+  and region views, an executed guide, API contracts and the B08 account.
+
+- Add exact H0 component histories, source memberships and merge events for
+  one-parameter filtrations and declared multicritical slices. Link bars,
+  source geometry and merge forests in static and live inspectors, with explicit
+  tie rules, original-source checks and the component workflow in the source-cell guide.
+
+- Added a separate comparison with original C++ Ripser on larger Rips-barcode workloads, with verified results, machine details, and a documented sparse-cutoff limitation. The Ripser.py report remains separate.
+
+- Add refinement and change-of-poset inspection for arbitrary finite bases,
+  realized label pairs, actual classifier regions and supplied naturality
+  comparisons. Linked viewers share selection and retain explicit finite-category
+  guarantees. Add the executable transport guide, reference and implementation account.
+
+- Add chain/cochain and connecting-map inspectors, with checked cycle, boundary,
+  quotient and induced-map coordinates, supplied homotopy witnesses, exact source
+  overlays, and linked browser selection. Extend the canonical complexes guide.
+  Correct sparse zero validation to accept cancellation with explicitly stored zeros.
+
+- Retain verified source cycles, death fillings and cocycles, including filtered
+  chain correspondences through collapse, periodic source overlays and a bounded
+  exact weighted-support optimizer. Owned persistence JSON now uses schema 2
+  to preserve source geometry and maps.
+
+- Add filtered-complex geometry and linked cell inspection, with exact activity queries, source identities, signed boundaries, periodic and skeleton views, and a canonical source-cell guide. Correct superlevel image cell grades to use the required minimum over incident vertices.
+
+- Add linked signed-contribution inspection, rank endpoint-pair and prominence views, explicit smoothing, named backgrounds and direct-query checks.
+
 Changes prepared for the next release. Once a finite encoded module has been
 constructed, its retained algebra should support further questions without
 repeating work. These updates make dimensions, bases and coordinates cheaper
 to obtain while preserving the existing basis conventions and the
 [finite-poset interpretation of Ext and Tor](docs/math_categories.md).
+
+### Spectral pages and differential inspection
+
+- Add page charts and selected differential/kernel/image views for cohomological
+  and Tor spectral sequences, with explicit unknown, cropping and limit scope.
+- Add linked page navigation and supplied structure-map overlays; exact and
+  numerical fields use the existing owners' page and linear-algebra contracts.
+- Add the complexes-and-spectral-pages usage notebook and method reference.
 
 ### Distance and matching inspection
 
@@ -45,6 +209,12 @@ to obtain while preserving the existing basis conventions and the
   implementation account; plan separate mathematical and library-usage lessons.
 
 ### Ordinary persistence
+
+- Extend top-cell cubical persistence from images to volumes and arbitrary
+  positive array dimensions, with exact grades, signed periodic boundaries,
+  construction budgets, and retained source cells, cycles and cocycles.
+  Keep the established 2D construction path and distinguish voxel values
+  from vertex values.
 
 - Analyze `PersistenceDiagram` directly by degree with bottleneck/Wasserstein
   distances, landscapes, images, silhouettes, entropy and scalar summaries.

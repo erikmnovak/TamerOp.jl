@@ -1,0 +1,10 @@
+{
+  "circle": "Equally spaced unit-circle points: angle 2*pi*i/n, i=0,...,n-1.",
+  "planar": "NumPy default_rng(260106), n by 2 independent uniform(-1,1) coordinates.",
+  "sphere": "NumPy default_rng(610026), n by 3 independent standard-normal coordinates, each row normalized to unit length.",
+  "sparse_sphere": "Same spherical construction; store exactly distances <= 1.5.",
+  "grades": "Euclidean distances rounded using rint(distance*4096)/4096; supplied dissimilarities are shared exactly across Float32 and Float64.",
+  "format": "Dense: lower triangle in row order, one distance per line. Sparse: 0-based i j distance triples for i>j. 17-significant-digit text.",
+  "numpy": "2.5.3",
+  "input_integrity": "Exact input SHA256 values are recorded in manifest.json."
+}

@@ -1,0 +1,72 @@
+name: Visualization
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      JULIA_NUM_THREADS: '1'
+      JULIA_NUM_PRECOMPILE_TASKS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+      TAMEROP_COMPOSITION_HTML: ${{ github.workspace }}/test/browser/artifacts/composition.html
+      TAMEROP_PORTABLE_SESSION_OUTPUT: ${{ github.workspace }}/test/browser/artifacts/session.html
+      TAMEROP_PORTABLE_SESSION: ${{ github.workspace }}/test/browser/artifacts/session.html
+      TAMEROP_STATIC_HTML: ${{ github.workspace }}/test/browser/artifacts/static.html
+      TAMEROP_SOURCE_PREVIEW_HTML: ${{ github.workspace }}/test/browser/artifacts/source-preview.html
+      TAMEROP_BATCHED_HTML: ${{ github.workspace }}/test/browser/artifacts/batched.html
+      TAMEROP_BROWSER_OUTPUT: ${{ github.workspace }}/test/browser/test-results/live
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Support matrix, source ownership and acceptance selectors
+        run: |
+          python test/visualization_contracts.py
+          python -m unittest discover -s test -p 'test_visualization_contracts.py'
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - name: Prepare required graphics dependencies
+        run: julia --startup-file=no --project=test/browser -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate(); Pkg.precompile()'
+      - name: Mathematical and native renderer contracts for every visual family
+        run: python test/visualization_contracts.py --run-native
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: test/browser/package-lock.json
+      - name: Prepare sandboxed Chromium
+        working-directory: test/browser
+        run: |
+          npm ci
+          node --test acceptance-guard.test.mjs
+          npm run test:plan
+          npx playwright install --with-deps chromium
+      - name: Real browser controls, coordinates and lifecycle
+        working-directory: test/browser
+        run: npm test
+      - name: Reopen exports without a Julia server
+        env:
+          TAMEROP_BROWSER_OUTPUT: ${{ github.workspace }}/test/browser/test-results/offline
+        working-directory: test/browser
+        run: npm run test:offline
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: visualization-acceptance
+          path: |
+            test/browser/test-results
+            test/browser/playwright-report
+            test/browser/artifacts
+          retention-days: 7

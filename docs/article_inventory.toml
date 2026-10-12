@@ -209,7 +209,7 @@ type = "library_guide"
 topics = ["persistence", "geometry", "visualization", "features", "data_io"]
 question = "Which ordinary persistence construction and retained output answer my question?"
 state = "existing"
-scope = "Planned extensions: higher-dimensional top-cell versus vertex input, spatial alpha geometry limits, checked filtered pairs and typed extended persistence. Retain the existing guide identity and link the new mathematical lessons instead of embedding all proofs or temporal workflows here."
+scope = "The guide now covers higher-dimensional top-cell versus vertex input and construction budgets under A113. Planned extensions: spatial alpha geometry limits, checked filtered pairs and typed extended persistence. Retain the existing guide identity and link the new mathematical lessons instead of embedding all proofs or temporal workflows here."
 plan_ids = ["A113", "A114", "A118", "A119"]
 source = "docs/ordinary_persistence.md"
 related = ["ring", "B27", "B28", "B29", "B63", "B64", "ordinary_analysis", "B39", "B43", "B48", "ref_ordinary_persistence", "guide_representatives", "guide_slices_diagrams", "guide_features", "guide_data_io", "extended_persistence_lesson"]
@@ -243,16 +243,16 @@ migration_note = "Organize consequential choices as a workflow; let input refere
 
 [[articles]]
 id = "multicover"
-title = "Exact multicover computation"
+title = "Exploring radius, depth and the finite model"
 type = "library_guide"
 topics = ["geometry", "encodings"]
-question = "How do I choose an exact multicover construction and interpret its output?"
+question = "How do radius, depth and geometric construction choices relate to the finite model and its invariants?"
 state = "existing"
 plan_ids = ["A69", "A93"]
-source = "docs/multicover.md"
+source = "docs/tutorials/multicover.ipynb"
 related = ["geometric_bifiltrations", "rhomboid_depth", "exact_grades", "B23", "B24", "B25", "B26"]
 migration = "split"
-migration_note = "Keep backend eligibility, degeneracy, exactness and window choices beside user decisions; detailed construction algorithms belong in B23–B26."
+migration_note = "Keep backend eligibility, degeneracy, exactness and window choices beside user decisions; B23 explains the shared exact construction and inspector. B24–B26 retain their planned deeper cap, discovery and degenerate-model accounts. The canonical notebook executes the two-site, square, repeated-label and core comparison examples; no separate narrative gallery is needed."
 
 [[articles]]
 id = "rhomboid_depth"
@@ -290,7 +290,7 @@ source = "docs/lazy_inspection.md"
 related = ["guide_spaces_maps", "reuse_computations", "B17", "B49", "ref_results"]
 migration = "split"
 scope = "Deferred computation, retained state and reuse across ingestion, algebra, geometry and features; the spaces-and-maps guide owns the concrete selection workflow."
-migration_note = "Retain cheap inspection versus explicit computation across objects. Move specialized Yoneda/product workflow material to guide_derived and long-lived cache choices to reuse_computations when ready. Keep meaning/cost promises stable through optimizations."
+migration_note = "Develop inspection, deferred computation and reuse as one guide. The existing explanation already covers retained results, SessionCache ownership and repeated coordinate queries; add a worked repeated-query or batch example for the remaining reuse_computations scope. Move specialized Yoneda/product instruction to guide_derived when its treatment covers that material. Reconcile the overlapping planned reuse_computations identity after its remaining scope is fulfilled here. Keep meaning and cost promises stable through optimizations."
 
 [[articles]]
 id = "numerical_algebra"
@@ -412,7 +412,7 @@ topics = ["development"]
 question = "Which correctness checks are appropriate for a change or release?"
 state = "existing"
 source = "docs/testing.md"
-related = ["browser_checks", "writing", "releasing"]
+related = ["visualization_support", "browser_checks", "writing", "releasing"]
 migration = "retain"
 plan_ids = ["A17", "A79"]
 
@@ -627,7 +627,7 @@ state = "existing"
 plan_ids = ["A52", "A39", "A93"]
 source = "docs/tutorials/inputs_to_objects.ipynb"
 scope = "A small filtration and an exact diagonal-strip presentation lead to finite encodings, shared space/map queries, and finite-module algebra with a supplied morphism. Explain represented domains, direct ordinary routes and the finite base of algebraic operations; site and executed download derive from this notebook."
-related = ["guide_spaces_maps", "ingestion_options", "ordinary_persistence", "square", "indicator_presentations", "math_categories", "ref_inputs", "ref_encodings"]
+related = ["guide_presentations", "guide_spaces_maps", "ingestion_options", "ordinary_persistence", "square", "indicator_presentations", "math_categories", "ref_inputs", "ref_encodings"]
 migration = "retain"
 migration_note = "Retain a concise routing guide with equally serious raw-data and direct finite/lattice/geometric-presentation entrances. Reuse existing non-filtration sloped-region examples. Link guide_presentations for construction choices and subject guides for downstream algebra; do not turn this overview into all ingestion signatures."
 
@@ -651,11 +651,12 @@ title = "Composing, exporting and reopening selected results"
 type = "library_guide"
 topics = ["visualization", "data_io"]
 question = "How do I preserve the meaning of a selected result when I combine views or share it?"
-state = "planned"
-scope = "Explore styling and accessibility, compatible layers/backgrounds, authored versus computed connectors, reproducible export, retained object/view/selection state and supported offline reopening. Explain figure, mathematical artifact and live session as different outputs. Follow one figure/session through the available routes; link shared discovery, lifecycle and IO contracts instead of duplicating them."
+state = "existing"
+source = "docs/tutorials/compose_figures.ipynb"
+scope = "Compose compatible layers and named panels; distinguish authored explanations from checked representative correspondences; compare with shared scales; and export a selected figure to PNG/SVG/PDF or self-contained HTML. Explain fixed figures, mathematical artifacts and live sessions as different outputs, linking their separate discovery, lifecycle and IO contracts."
 related = ["visualization", "optional_integrations", "save_reload", "export_figure", "ref_visualization", "ref_io", "guide_live_inspection", "guide_data_io", "guide_comparisons", "compose_figure", "reopen_session", "B44", "B46", "B48", "ref_visual_sessions"]
-migration = "author"
-migration_note = "Own preserving and sharing a selected mathematical result through styling, compatible figure composition, export and supported saved sessions. Link visualization for choosing a view, guide_live_inspection for running one, and guide_data_io for mathematical artifacts. This is a separate sustained task, not another generic plotting manual."
+migration = "retain"
+migration_note = "Canonical A102 guide covers compatible overlays, authored and verified source-to-interval annotations, shared scales and fixed responsive HTML. Saved live sessions remain with guide_live_inspection/A100. Link visualization for choosing a view, guide_live_inspection for running one, and guide_data_io for mathematical artifacts. This is a separate sustained task, not another generic plotting manual."
 plan_ids = ["A45", "A100", "A102"]
 
 [[articles]]
@@ -700,7 +701,7 @@ topics = ["encodings", "geometry"]
 question = "How does the parameter domain change the meaning of a finite description and its queries?"
 state = "planned"
 plan_ids = ["A28", "A80"]
-scope = "Relate finite, integer-lattice and real polyhedral examples to the same recovery idea while preserving domain and boundary differences."
+scope = "Relate finite, integer-lattice and real polyhedral examples to the same recovery idea while preserving domain and boundary differences. Develop a closed point and a face-only interval with their neighboring maps, and contrast zero ambient volume with a nonzero stalk. Explain reversed order versus a change of coordinate sign; keep event storage and performance details in B06/B11."
 related = ["finite_encodings", "indicator_presentations", "exact_grades", "ref_encodings", "guide_presentations", "build_module", "build_presentation"]
 migration = "author"
 
@@ -882,8 +883,8 @@ type = "lesson"
 topics = ["invariants", "encodings"]
 question = "How can signed pieces reconstruct an invariant without decomposing the module itself?"
 state = "planned"
-plan_ids = ["A110"]
-scope = "Use a small grid to explain a cumulative invariant and its Möbius inversion, reconstructing the original function by summing signed contributions. State whether the input is Hilbert-, Euler- or rank-derived and specify the domain, parameter orientation and boundary/window convention. Negative weights do not represent negative-dimensional stalks, and reconstruction of the chosen invariant is not reconstruction of the module or a certified direct-sum decomposition. Show atoms or rectangles together with the function they reconstruct."
+plan_ids = ["A86", "A110"]
+scope = "Use a small grid to explain a cumulative invariant and its Möbius inversion, reconstructing the original function by summing signed contributions. State whether the input is Hilbert-, Euler- or rank-derived and specify the domain, parameter orientation and boundary/window convention. Negative weights do not represent negative-dimensional stalks, and reconstruction of the chosen invariant is not reconstruction of the module or a certified direct-sum decomposition. Show atoms or rectangles together with the function they reconstruct. Reuse the cross-module example from guide_slices_diagrams: overlap correction, inclusive grid versus half-open semantic endpoints, signed side-length prominence and image-of-shift smoothing. Distinguish that smoothing from convolution. Add this mathematical lesson to the focused summaries map and accessible outline when authored."
 related = ["slices_invariants", "decomposition_lesson", "features_lesson", "reading_module_figures", "B41", "ref_invariants", "guide_slices_diagrams", "guide_generalized_rank"]
 migration = "author"
 
@@ -912,15 +913,17 @@ migration = "author"
 
 [[articles]]
 id = "decomposition_lesson"
-title = "Decompositions, summands and approximations"
+title = "When does a module split into intervals?"
 type = "lesson"
 topics = ["algebra", "invariants", "visualization"]
 question = "When does a collection of pieces describe the module itself, and when does it only summarize or approximate it?"
-state = "planned"
+state = "existing"
+source = "docs/decomposition.md"
 plan_ids = ["A46", "A50", "A103"]
-scope = "Begin with the known two-square direct sum and its inclusion/projection maps, then distinguish a submodule from a split summand, interval-decomposable special cases, and general multiparameter modules. Compare genuine summands with signed contributions and sampled interval tracks/support approximations. State what an isomorphism, splitting witness or error guarantee would establish. Use hand-built examples where necessary; this lesson plan does not promise an implemented general decomposition or approximation solver. Use A46/A50 only within their verified multiplicity/decomposition scopes; bipath examples retain gluing maps. A103 approximate supports need their own hypotheses and precision metadata."
+scope = "Splittings and actual interval multiplicity on a finite encoding base; square direct sums, nonsplitting chain submodules, distinction from restriction ranks and signed summaries, and the three-line non-interval residual. Future A50/A103 treatments must retain separate general-decomposition and approximation guarantees."
 related = ["square", "diamond_maps", "module_operations", "algebraic_support", "signed_summaries", "slice_barcodes", "features_lesson", "B42", "B53", "B59"]
-migration = "author"
+migration = "review"
+migration_note = "A46 is authored. Preserve this broader expansion plan as the remaining algorithms become available: Begin with the known two-square direct sum and its inclusion/projection maps, then distinguish a submodule from a split summand, interval-decomposable special cases, and general multiparameter modules. Compare genuine summands with signed contributions and sampled interval tracks/support approximations. State what an isomorphism, splitting witness or error guarantee would establish. Use hand-built examples where necessary; this lesson plan does not promise an implemented general decomposition or approximation solver. Use A46/A50 only within their verified multiplicity/decomposition scopes; bipath examples retain gluing maps. A103 approximate supports need their own hypotheses and precision metadata."
 
 [[articles]]
 id = "reading_module_figures"
@@ -975,8 +978,8 @@ type = "lesson"
 topics = ["geometry", "encodings"]
 question = "How do two geometric measurements produce the module we investigate?"
 state = "planned"
-plan_ids = ["A52"]
-scope = "A small independently understood configuration, its radius/depth or function events, actual computed cells and maps/invariant; exact versus approximate geometry remains explicit, with a realistic example optional. Use a clearly marked later extension for A52: an additional scalar measurement creates a third parameter with its own order and induced maps; it is not merely another plot of a bifiltration."
+plan_ids = ["A52", "A93"]
+scope = "Use the two-site closed contact/cap and square loop examples shared with the multicover notebook, explaining why their parameter inclusions induce maps. Distinguish lifted coordinates, projections and schematic flags; the mathematical lesson receives its own focused reading-map view when authored. A small independently understood configuration, its radius/depth or function events, actual computed cells and maps/invariant; exact versus approximate geometry remains explicit, with a realistic example optional. Use a clearly marked later extension for A52: an additional scalar measurement creates a third parameter with its own order and induced maps; it is not merely another plot of a bifiltration."
 related = ["multicover", "rhomboid_depth", "representation_domains", "B21", "B22", "B23"]
 migration = "author"
 
@@ -1012,18 +1015,20 @@ state = "planned"
 plan_ids = ["A30"]
 scope = "SessionCache and retained results, repeated queries, batching, reproducible parameters and cache ownership; keep mathematical reuse separate from first-use compilation."
 related = ["lazy_inspection", "repeat_queries", "benchmarking", "B49", "ref_results", "ref_features"]
-migration = "author"
+migration = "review"
+migration_note = "Consolidate this planned treatment into lazy_inspection rather than commission a second overlapping guide. Review and supply the remaining batch example, reproducible parameters and ownership explanation there, then reconcile this planned identity and its incoming references. No separate source has been authored and the consolidation is not yet complete."
 
 [[articles]]
 id = "compare_encodings"
 title = "Refining and transporting encoded modules"
 type = "library_guide"
-topics = ["encodings", "algebra", "invariants"]
+topics = ["encodings", "algebra", "invariants", "visualization"]
 question = "How do restriction, refinement and pushforward change a description or its parameter base?"
-state = "planned"
+state = "existing"
+source = "docs/tutorials/compare_encodings.ipynb"
 scope = "Explore realized common refinements, re-encoding, restriction and supported left/right Kan extensions with explicit order/classifier and module comparison maps. Inspect naturality and identify the finite category before drawing derived conclusions. Integrate A88 comparison views as inspection of actual maps; computational shortcuts do not change the promised output. Link the mathematical transport lessons and B15 rather than duplicating their proofs."
-related = ["change_of_posets", "math_categories", "exact_matching", "ref_change_of_posets", "pushforwards_lesson", "transport_encoding"]
-migration = "author"
+related = ["change_of_posets", "math_categories", "exact_matching", "ref_change_of_posets", "B15", "pushforwards_lesson", "transport_encoding"]
+migration = "review"
 
 [[articles]]
 id = "save_reload"
@@ -1243,16 +1248,16 @@ migration = "author"
 
 [[articles]]
 id = "ref_modules"
-title = "Finite modules and presentations reference"
+title = "Finite modules, selected vectors and submodules"
 type = "api_reference"
 topics = ["algebra", "encodings"]
 question = "What are the exact contracts for finite posets, modules, morphisms and presentations?"
-state = "planned"
-plan_ids = ["A111"]
-planned_source = "docs/src/reference/modules.md"
-scope = "Review method-specific inputs, returns, mathematical scope, errors and costs; API coverage and binding decisions remain owned by api_coverage.toml. Planned method-family review includes A46/A50 certified decomposition, A104 vector/subspace propagation and generated submodules, and A111 additive map-induced matching with explicit chain restrictions and endpoint provenance."
-related = ["api_coverage", "api_inventory_guide"]
-migration = "author"
+state = "existing"
+source = "docs/src/reference/modules.md"
+plan_ids = ["A104", "A111"]
+scope = "Authored A104 selection, propagation, validation, generated submodule, inclusion/quotient and source-basis contracts. Continue the general finite-module, morphism, presentation and universal-construction method review here; certified decomposition and A111 additive matching remain separate scoped additions. API coverage owns per-family review debt."
+related = ["api_coverage", "api_inventory_guide", "guide_generated_submodules", "B08", "ref_source_representatives"]
+migration = "review"
 
 [[articles]]
 id = "ref_encodings"
@@ -1263,7 +1268,7 @@ question = "How are encodings constructed and queried on their stated domains?"
 state = "planned"
 plan_ids = ["A80"]
 planned_source = "docs/src/reference/encodings.md"
-scope = "Review method-specific inputs, returns, mathematical scope, errors and costs; API coverage and binding decisions remain owned by api_coverage.toml. Review A28 reversed structured axes, A80 lower-dimensional strata/rational point location, and A53 supported ambient shifts without conflating finite-poset reindexing with an ambient certificate."
+scope = "Review method-specific inputs, returns, mathematical scope, errors and costs; API coverage and binding decisions remain owned by api_coverage.toml. Document oriented ProductOfChainsPoset constructors, invariant vertex indexing, sign-correct grid representatives, native closed boundary strata, rational witnesses, repeated event walls, cell-budget accounting and exact JSON round trips; review and A53 supported ambient shifts without conflating finite-poset reindexing with an ambient certificate."
 related = ["api_coverage", "api_inventory_guide"]
 migration = "author"
 
@@ -1309,23 +1314,23 @@ title = "Derived algebra reference"
 type = "api_reference"
 topics = ["algebra"]
 question = "What are the contracts of Hom, Ext, Tor, products and spectral computations?"
-state = "planned"
-planned_source = "docs/src/reference/derived.md"
-scope = "Review method-specific inputs, returns, mathematical scope, errors and costs; API coverage and binding decisions remain owned by api_coverage.toml."
-related = ["api_coverage", "api_inventory_guide"]
-migration = "author"
+state = "existing"
+source = "docs/src/reference/derived.md"
+scope = "Current contracts cover finite-category Ext/Tor inputs, representative complexes, Yoneda products, Ext/Tor multiplication matrices and static derived views. Extend precise functorial-map, long-exact-sequence and spectral method coverage here; remaining review belongs to api_coverage.toml."
+related = ["guide_derived", "derived_functors", "products_lesson", "math_categories", "B33", "B34", "api_coverage", "api_inventory_guide"]
+migration = "review"
 
 [[articles]]
 id = "ref_change_of_posets"
 title = "Change-of-poset reference"
 type = "api_reference"
-topics = ["encodings", "algebra"]
+topics = ["encodings", "algebra", "visualization"]
 question = "What do restriction, pushforward and common-refinement operations guarantee?"
-state = "planned"
-planned_source = "docs/src/reference/change_of_posets.md"
+state = "existing"
+source = "docs/src/reference/change_of_posets.md"
 scope = "Review method-specific inputs, returns, mathematical scope, errors and costs; API coverage and binding decisions remain owned by api_coverage.toml."
-related = ["api_coverage", "api_inventory_guide"]
-migration = "author"
+related = ["compare_encodings", "B15", "ref_visualization", "api_coverage", "api_inventory_guide"]
+migration = "review"
 
 [[articles]]
 id = "ref_invariants"
@@ -1504,7 +1509,7 @@ type = "implementation_account"
 topics = ["algebra", "encodings"]
 question = "Which representations and algorithms underlie finite posets and module maps in memory, and why?"
 state = "planned"
-scope = "Dense, sparse and product-order representations; cover-edge storage, path composition, commutativity checks, batched maps and the cost of materializing order relations. Explain reversed-axis support at its actual implementation stage. Check the actual implementation and any proposed extensions before drafting."
+scope = "Dense, sparse and product-order representations; cover-edge storage, path composition, commutativity checks, batched maps and the cost of materializing order relations. Explain signed structured products, unchanged mixed-radix vertex labels, oriented covers/upper and lower ideals, serialization, and the separate sign change used by ambient grid classifiers. Explicit cover matrices still have their own storage cost. Check the actual implementation and any proposed extensions before drafting."
 plan_ids = ["B06", "A28", "A62"]
 related = ["implementation_index", "implementation_bibliography"]
 migration = "author"
@@ -1523,15 +1528,16 @@ migration = "author"
 
 [[articles]]
 id = "B08"
-title = "Kernels, quotients and universal constructions"
+title = "From selected images to submodules and quotients"
 type = "implementation_account"
 topics = ["algebra", "encodings"]
 question = "Which representations and algorithms underlie kernels, quotients and universal constructions, and why?"
-state = "planned"
-scope = "Stalkwise linear algebra together with induced structure maps; images/cokernels, pullbacks/pushouts, limits/colimits, exact sequences and their comparison identities. Separate a constructed submodule from a certified direct summand. Check the actual implementation and any proposed extensions before drafting."
+state = "existing"
+source = "docs/implementation/submodules_and_quotients.md"
+scope = "Follow selected-column propagation through principal-projective image, induced submodule maps and cokernel quotient coordinates; connect to general kernels, pullbacks and pushouts. Explain basis/source provenance, numerical contracts, allocation and reuse. Extend specialized universal-property algorithms within this B08 identity rather than duplicating the image/quotient mechanism."
 plan_ids = ["B08", "A104", "A71", "A75"]
-related = ["implementation_index", "implementation_bibliography"]
-migration = "author"
+related = ["implementation_index", "implementation_bibliography", "guide_generated_submodules", "ref_modules", "B01", "B29", "diamond_maps"]
+migration = "review"
 
 [[articles]]
 id = "B09"
@@ -1563,11 +1569,12 @@ title = "Axis-aligned box encoding"
 type = "implementation_account"
 topics = ["encodings", "geometry"]
 question = "Which representations and algorithms underlie axis-aligned box encoding, and why?"
-state = "planned"
-scope = "Threshold axes, masks/signatures, realized labels, lookup, open/closed endpoints, region representatives and the fast construction's memory model. Document the general-PL fallback; extend the account when A80 supplies additional fast-path strata. Check the actual implementation and any proposed extensions before drafting."
+state = "existing"
+source = "docs/implementation/box_encoding.md"
+scope = "Explain event traversal, repeated birth/death walls, singleton products, signature orders and active coefficient maps. Follow exact rational witnesses through lookup and serialization; distinguish ambient volume, intrinsic moments and geometric boundary contacts. State the expanded cell budget, Float64 input precision and lossless general-PL fallback."
 plan_ids = ["B11", "A28", "A75", "A80", "A82"]
-related = ["implementation_index", "implementation_bibliography"]
-migration = "author"
+related = ["implementation_index", "implementation_bibliography", "representation_domains", "indicator_presentations", "guide_presentations", "ref_encodings", "B09", "B12"]
+migration = "review"
 
 [[articles]]
 id = "B12"
@@ -1611,11 +1618,12 @@ title = "Change of poset, refinement and Kan extensions"
 type = "implementation_account"
 topics = ["encodings", "algebra"]
 question = "Which representations and algorithms underlie change of poset, refinement and Kan extensions, and why?"
-state = "planned"
+state = "existing"
+source = "docs/implementation/change_of_posets.md"
 scope = "Actual order/classifier and module-map construction for restriction, realized common refinements and Kan extensions. Explain category/variance, comparison maps and the conditions under which they identify outputs. Include supported ambient shift/refinement mechanics for supplied approximation witnesses, linking construction-specific certificates elsewhere. Optimization decisions preserve these contracts."
 plan_ids = ["B15", "A32", "A71", "A75", "A88", "A53", "A101"]
 related = ["implementation_index", "implementation_bibliography", "interleavings_lesson", "compare_encodings"]
-migration = "author"
+migration = "review"
 
 [[articles]]
 id = "B16"
@@ -1707,11 +1715,12 @@ title = "Exact rhomboid multicover construction"
 type = "implementation_account"
 topics = ["geometry", "persistence"]
 question = "Which representations and algorithms underlie exact rhomboid multicover construction, and why?"
-state = "planned"
-scope = "Site partitions, cell discovery, constrained radii, signed cellular boundaries, triangulated output and the maps connecting parameter values. Explain the base mathematical model and its general-position contract; B24–B26 own the substantial alternative execution strategies. Check the actual implementation and any proposed extensions before drafting."
+state = "existing"
+source = "docs/implementation/rhomboid_construction.md"
+scope = "Site partitions, cell discovery, constrained radii, signed cellular boundaries, triangulated output and the maps connecting parameter values. Explain the base mathematical model and its general-position contract; B24–B26 own the substantial alternative execution strategies. Retained native cell geometry, labelled flag layouts, exact membership, fixed-depth restrictions and independently budgeted selected algebra connect construction to inspection; the viewer does not reconstruct incidence from drawings."
 plan_ids = ["B23", "A09", "A64", "A72", "A76", "A93"]
 related = ["implementation_index", "implementation_bibliography", "B24", "B26"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "B24"
@@ -1777,13 +1786,14 @@ migration = "author"
 id = "B29"
 title = "Retaining representatives and tracing them to source cells"
 type = "implementation_account"
-topics = ["persistence", "visualization"]
+topics = ["persistence", "algebra", "geometry", "visualization"]
 question = "Which representations and algorithms underlie retaining representatives and tracing them to source cells, and why?"
-state = "planned"
+state = "existing"
+source = "docs/implementation/source_representatives.md"
 scope = "How original cell IDs, orientations and field coefficients survive supported reductions through verified lifting. Explain cycles, death fillings and scale-specific cocycles separately; source geometry, H0 components, optional representative optimization and display skeletons consume those records. State what is unavailable without retained source data. B64 owns cohomology reduction and B70 coordinate solves."
 plan_ids = ["B29", "A41", "A43", "A89", "A92", "A91", "A117"]
-related = ["implementation_index", "implementation_bibliography", "guide_representatives", "trace_source_class"]
-migration = "author"
+related = ["implementation_index", "implementation_bibliography", "guide_representatives", "trace_source_class", "ref_source_representatives", "filtrations_homology", "cohomology_lesson"]
+migration = "review"
 
 [[articles]]
 id = "B30"
@@ -1839,11 +1849,12 @@ title = "Yoneda products and validated Tor algebra"
 type = "implementation_account"
 topics = ["algebra"]
 question = "Which representations and algorithms underlie yoneda products and validated Tor algebra, and why?"
-state = "planned"
-scope = "Representative lifts/composition, signs, descent to homology, basis changes and independence of representatives. Explain the extra compatible algebraic structure required for Tor products and the repaired counterexample. Check the actual implementation and any proposed extensions before drafting."
+state = "existing"
+source = "docs/implementation/yoneda_products.md"
+scope = "Follow comparison lifts, actual structure-map composition, target-model transfer and quotient witnesses; then supplied Tor products, descent, Leibniz and homology associativity. Explain lazy degree-pair tables, snapshot/generation behavior and visual preparation costs. B33 owns additive derived complexes and maps; B44 owns rendering."
 plan_ids = ["B34", "A70", "A90"]
-related = ["implementation_index", "implementation_bibliography"]
-migration = "author"
+related = ["implementation_index", "implementation_bibliography", "guide_derived", "ref_derived", "B33", "B44"]
+migration = "retain"
 
 [[articles]]
 id = "B35"
@@ -1864,7 +1875,7 @@ type = "implementation_account"
 topics = ["invariants", "encodings"]
 question = "Which representations and algorithms underlie rank and Hilbert queries without quadratic storage, and why?"
 state = "planned"
-scope = "Comparable-pair traversal, sparse outputs, anchored queries, lazy dimensions, deduplicated batch misses and cache-generation fences. Explain the retained object and cost for each query rather than treating every request as an all-pairs table. Check the actual implementation and any proposed extensions before drafting."
+scope = "Comparable-pair traversal, sparse serial output, private parallel output chunks and source-stamped linear map scratch; distinguish returned pair count and retained category caches from temporary rank storage. Connect selected/anchored queries, lazy dimensions, deduplicated batch misses and cache-generation fences. Explain the retained object and cost for each query rather than treating every request as an all-pairs table. Check the actual implementation and any proposed extensions before drafting."
 plan_ids = ["B36", "A27", "A63", "A84"]
 related = ["implementation_index", "implementation_bibliography"]
 migration = "author"
@@ -1924,7 +1935,7 @@ type = "implementation_account"
 topics = ["invariants", "encodings"]
 question = "Which representations and algorithms underlie signed measures and Möbius inversion, and why?"
 state = "planned"
-scope = "Product-order and mixed-orientation inversion, rectangle atoms, boundary/window conventions, cancellation and reconstruction. Separate Euler-, Hilbert- and rank-derived outputs and explain sparse/storage choices. Check the actual implementation and any proposed extensions before drafting."
+scope = "Product-order and mixed-orientation inversion, rectangle atoms, boundary/window conventions, cancellation and reconstruction. Separate Euler-, Hilbert- and rank-derived outputs and explain sparse/storage choices. Explain the conversion from inclusive grid rectangle coordinates to physical half-open rank endpoint pairs, including infinite terminal deaths. Reuse the cancellation example from guide_slices_diagrams and link B44 for selected contributions/rendering and B46 for live reuse. Keep transport/convolution with B61. Check the actual implementation and any proposed extensions before drafting."
 plan_ids = ["B41", "A86"]
 related = ["implementation_index", "implementation_bibliography"]
 migration = "author"
@@ -1943,15 +1954,18 @@ migration = "author"
 
 [[articles]]
 id = "B43"
-title = "Landscapes, feature transforms and batched experiments"
+title = "From sampled landscapes to ambient queries"
 type = "implementation_account"
 topics = ["features", "invariants"]
-question = "Which representations and algorithms underlie landscapes, feature transforms and batched experiments, and why?"
-state = "planned"
+question = "How are retained line landscapes placed on an ambient grid, with their sampling and error contracts intact?"
+state = "existing"
+source = "docs/implementation/feature_transforms.md"
 scope = "Explain individual landscapes, images, silhouettes, entropy, scalar statistics and feature-vector layouts, from exact endpoint differences to numerical evaluation. Include grids/integration, multiplicities, normalization, essential policies, reusable plans and batched execution with actual routing and costs. B54 owns fixed GRIL, B61 signed transport, B71 learned/derivative consumers and B72 ensemble inference. Keep formulas and declared output semantics stable when kernels are optimized; empirical campaign results belong to benchmark reports."
-plan_ids = ["B43", "A116", "A25", "A33", "A95", "A98", "A122"]
+plan_ids = ["B43", "A44", "A116", "A25", "A33", "A95", "A98", "A122"]
 related = ["ordinary_analysis", "features_lesson", "implementation_index", "implementation_bibliography", "B54", "B61", "B71", "B72", "guide_features"]
-migration = "author"
+migration = "review"
+
+migration_note = "The account currently develops stored landscapes, ambient line/grid queries, normalization, source-window masks and conditional interpolation bounds. Extend it for integration, ordinary transforms and batched execution as one computation-centered account; B44 and B46 own drawing and interaction."
 
 [[articles]]
 id = "B44"
@@ -1961,9 +1975,9 @@ topics = ["visualization", "algebra"]
 question = "Which representations and algorithms underlie from visual specifications to renderers and exports, and why?"
 state = "existing"
 source = "docs/implementation/visual_specs.md"
-scope = "Specification validation, semantic composition/layers and correspondence checks, static/backend render routing, batching, budgets and faithful exports. Explain A38/A39 reuse and actual work/scene-count boundaries where implemented; mathematical algorithms are linked from their owner accounts. Keep chosen selections and figure annotations distinguishable. Use resolution incidence as a worked semantic-specification example: source/target matrix orientation, order-forced zeros, supplied grade embeddings, selected support sheets and certified coordinate changes are prepared before backend rendering."
-plan_ids = ["B44", "A16", "A34", "A35", "A38", "A44", "A81", "A39", "A42", "A45", "A94", "A98", "A102"]
-related = ["implementation_index", "implementation_bibliography", "guide_comparisons", "guide_visualize_share", "guide_resolutions", "ref_visualization", "B31"]
+scope = "Specification validation, semantic composition/layers and correspondence checks, static/backend render routing, batching, budgets and faithful exports. Explain A38 batching and A39 shared sparse-ingestion neighbor preparation, content-checked bounded caches, source identities, preparation/display budgets and actual work/scene-count boundaries; mathematical algorithms are linked from their owner accounts. Keep chosen selections and figure annotations distinguishable. Include signed-contribution scans, exact sums before display budgets, boundary-preserving endpoint adapters and shared-grid named backgrounds. Use resolution incidence as a worked semantic-specification example: source/target matrix orientation, order-forced zeros, supplied grade embeddings, selected support sheets and certified coordinate changes are prepared before backend rendering."
+plan_ids = ["B44", "A16", "A34", "A35", "A38", "A44", "A81", "A39", "A42", "A45", "A94", "A98", "A102", "A86"]
+related = ["guide_features", "B43", "implementation_index", "implementation_bibliography", "guide_comparisons", "guide_visualize_share", "guide_resolutions", "ref_visualization", "B31"]
 migration = "review"
 
 migration_note = "The account explains current specification, resolution-certificate, renderer and export mechanisms. Extend its semantic-composition and measured scene-budget sections as their supported implementations arrive; keep live-session mechanics with B46."
@@ -1986,11 +2000,14 @@ title = "Linked inspection sessions and browser execution"
 type = "implementation_account"
 topics = ["visualization", "performance"]
 question = "Which representations and algorithms underlie linked inspection sessions and browser execution, and why?"
-state = "planned"
-scope = "Shared selection/session state, exact queries, bounded reuse, event transport, lifecycle, validated editor updates and saved/reopened precomputed state. Explain what executes in Julia versus the browser and what survives serialization; link B48 for the owned schema and B45/B47 for geometry and interval identity. Native, browser and notebook frontends have distinct contracts."
-plan_ids = ["B46", "A37", "A40", "A42a", "A83", "A99", "A42", "A84", "A96", "A100", "A101"]
-related = ["implementation_index", "implementation_bibliography", "browser_checks", "guide_live_inspection", "ref_visual_sessions"]
-migration = "author"
+state = "existing"
+source = "docs/implementation/inspection_sessions.md"
+scope = "Shared selection/session state, exact queries, bounded reuse, event transport, lifecycle, validated editor updates and saved/reopened precomputed state. Explain what executes in Julia versus the browser and what survives serialization; link B48 for the owned schema and B45/B47 for geometry and interval identity. Native, browser and notebook frontends have distinct contracts. Include A86 signed-query transactions, direct-answer reuse across term/view changes, local term identity and independent viewer disposal; distinguish retained snapshots from live callbacks."
+plan_ids = ["B46", "A37", "A40", "A42a", "A83", "A99", "A42", "A84", "A96", "A100", "A101", "A86"]
+related = ["guide_presentations", "guide_features", "B43", "implementation_index", "implementation_bibliography", "browser_checks", "guide_live_inspection", "ref_visual_sessions"]
+migration = "review"
+
+migration_note = "Current account covers shared transactions, bounded reuse, live callbacks, captured states and portable offline selection. The editor account now covers the separate draft/object boundary, full cover-path witnesses, history and numeric exports. Extend future temporal/certificate behavior within this identity."
 
 [[articles]]
 id = "B47"
@@ -2010,11 +2027,14 @@ title = "Serialization, interchange and mathematical provenance"
 type = "implementation_account"
 topics = ["data_io", "encodings"]
 question = "Which representations and algorithms underlie serialization, interchange and mathematical provenance, and why?"
-state = "planned"
-scope = "Include A116's owned PersistenceDiagram schema, safe tagged type allowlist, exact scalar/precision preservation, compact/debug profiles, header inspection and strict loading. Account for retained cycles, fillings, cocycles, landmark selections and available source IDs; state that source complexes and independent chain certification are not recreated. Owned schemas and external adapters; fields, exact grades, maps, coordinates, source identities and cache exclusion; validation and round-trip comparison maps. Distinguish lossless mathematical data from bounded exports or interchange conventions. Check the actual implementation and any proposed extensions before drafting. For an adopted A56 bridge, account for ownership/copies, array layout, exact field/grade transport and the distinction between a live Julia handle and a saved mathematical artifact."
+state = "existing"
+source = "docs/implementation/serialization.md"
+scope = "Include A116's owned PersistenceDiagram schema, safe tagged type allowlist, exact scalar/precision preservation, compact/debug profiles, header inspection and strict loading. Account for retained cycles, fillings, cocycles, landmark selections and available source IDs; state when retained source correspondences and boundary equations are checked, and when only endpoints are present. Owned schemas and external adapters; fields, exact grades, maps, coordinates, source identities and cache exclusion; validation and round-trip comparison maps. Distinguish lossless mathematical data from bounded exports or interchange conventions. Check the actual implementation and any proposed extensions before drafting. For an adopted A56 bridge, account for ownership/copies, array layout, exact field/grade transport and the distinction between a live Julia handle and a saved mathematical artifact."
 plan_ids = ["B48", "A116", "A100", "A13", "A16", "A64", "A75", "A56"]
 related = ["ordinary_analysis", "ref_io", "implementation_index", "implementation_bibliography"]
-migration = "author"
+migration = "review"
+
+migration_note = "Current account covers owned encoding and diagram artifacts, exact visual values, source digests, coordinate-preserving module companions and portable resource checks. Extend external-adapter and bridge mechanisms here when implemented."
 
 [[articles]]
 id = "B49"
@@ -2070,11 +2090,12 @@ title = "Interval multiplicities and certified decomposition"
 type = "implementation_account"
 topics = ["algebra", "invariants"]
 question = "Which representations and algorithms underlie interval multiplicities and certified decomposition, and why?"
-state = "planned"
-scope = "Fixed-interval tests, top/socle pruning, summand extraction, inclusion/projection witnesses and exact decomposition or interoperable computation. Separate a multiplicity query from a complete decomposition. Conditional account: explain only implemented, verified portions of this scope; establish the algorithm and its hypotheses before drafting. This record is not an implementation-status claim."
+state = "existing"
+source = "docs/implementation/interval_decomposition.md"
+scope = "Exact Hom composition pairing, degree-zero top/socle antichain candidate generation, bounded exhaustive interval-decomposability decisions, simultaneous splitting maps and residuals. Uses the local Hom and exact coordinate engines; specialized presentation/essential-cover formulas and general A50 indecomposable solvers are not implemented by this account."
 plan_ids = ["B53", "A46", "A50", "A87"]
 related = ["implementation_index", "implementation_bibliography"]
-migration = "author"
+migration = "review"
 
 [[articles]]
 id = "B54"
@@ -2084,11 +2105,11 @@ topics = ["invariants", "algebra", "features"]
 question = "How do selected finite diagrams and continuous grid worms reduce to exact limit-to-colimit ranks?"
 state = "existing"
 source = "docs/implementation/generalized_rank.md"
-scope = "Sparse constraint/relation presentations, one-anchor comparison, exact coefficient fields and opt-in witnesses; declared-family total compression and signed reconstruction; continuous GRIL worms, contraction of connected grid fibers, exact critical widths, boundary conventions and query/output budgets. No all-interval enumeration, arbitrary-encoding geometry, learned selection, derivative implementation or specialized zigzag performance claim."
+scope = "Sparse constraint/relation presentations, one-anchor comparison, exact coefficient fields and opt-in witnesses; declared-family total compression and signed reconstruction; optional grid-index boundary caps with repeated occurrences and bounded rank-inversion barcodes; continuous GRIL worms, contraction of connected grid fibers, exact critical widths, boundary conventions and query/output budgets. No all-interval enumeration, arbitrary-encoding geometry, learned selection, derivative implementation or specialized zigzag performance claim."
 plan_ids = ["B54", "A54"]
 related = ["generalized_rank_lesson", "guide_generalized_rank", "signed_summaries", "features_lesson", "ref_invariants", "implementation_index", "implementation_bibliography"]
 migration = "review"
-migration_note = "Authored implementation account; publication routing and visual review remain separate. Keep mathematical background and library decision guidance in their own planned articles."
+migration_note = "Retain the exact-computation account and its costs; the authored guide owns exploration and the planned mathematical lesson owns the broader theory. The boundary witness uses rank inversion, not specialized fast zigzag reduction."
 
 [[articles]]
 id = "generalized_rank_lesson"
@@ -2098,7 +2119,7 @@ topics = ["invariants", "algebra", "features"]
 question = "What does generalized rank detect beyond pairwise ranks, and how does expanding a region produce a landscape?"
 state = "planned"
 planned_source = "docs/tutorials/generalized_rank.ipynb"
-scope = "Begin with parallel versus transverse maps from two lines to a plane, with the same dimensions and pairwise ranks. Motivate compatibility, limit, colimit and the one-anchor comparison without requiring derived algebra. Explain convexity and connectedness, finite labels versus an ambient restriction, a negative signed coefficient, and finite-family reconstruction versus decomposition. Introduce continuous worms and the GRIL supremum through a rectangle and a quadrant; interpret rank level and worm length, boundary attainment and exact versus sampled widths. Figures should pair both fork modules with their images, show signed overlap correction, and follow an expanding continuous worm with its rank staircase and resulting width. Conclude with what fixed probes retain and lose. Learned selection and differentiable training belong to a future optional topic."
+scope = "Begin with parallel versus transverse maps from two lines to a plane, with the same dimensions and pairwise ranks. Motivate compatibility, limit, colimit and the one-anchor comparison without requiring derived algebra. Explain convexity and connectedness, finite labels versus an ambient restriction, a negative signed coefficient, and finite-family reconstruction versus decomposition. Introduce continuous worms and the GRIL supremum through a rectangle and a quadrant; interpret rank level and worm length, boundary attainment and exact versus sampled widths. Explain why a finite grid interval admits a boundary-cap witness, keeping repeated occurrences and full bars distinct from an ambient decomposition and from continuous worms. Reuse the executed guide examples while giving the mathematical argument its own space. Figures should pair both fork modules with their images, show signed overlap correction, and follow an expanding continuous worm with its rank staircase and resulting width. Conclude with what fixed probes retain and lose. Learned selection and differentiable training belong to a future optional topic."
 plan_ids = ["A54", "B54"]
 related = ["slices_invariants", "diamond_maps", "universal_constructions", "signed_summaries", "features_lesson", "guide_generalized_rank", "B54"]
 migration = "author"
@@ -2109,12 +2130,13 @@ title = "Querying regions and building GRIL features"
 type = "library_guide"
 topics = ["invariants", "encodings", "features"]
 question = "When should I query finite-label generalized rank, a signed interval family, or continuous-worm GRIL, and how do I inspect the answer?"
-state = "planned"
-planned_source = "docs/generalized_rank.md"
-scope = "Follow an existing encoded module through selected-label queries, validation, scalar-first results and optional witnesses. Explore an explicitly supplied interval family, total compression, negative coefficients and reconstruction restricted to declared queries. Then use a positively oriented two-dimensional grid encoding for fixed centers, rank levels and worm lengths; explain the right-continuous zero-below/constant-above extension, exact rational widths, feature-array order and query/output budgets. Include runnable fork, negative-coefficient and rectangle/quadrant examples from docs/examples/generalized_rank.jl; show errors for disconnected/nonconvex domains and unsupported geometric encodings. Link the mathematical lesson and B54 at the point of need rather than repeating proofs. No training or autodiff interface is implied. When inspecting A86 signed-family cancellation, select a declared observable/query, show positive and negative contributions, and reconstruct its directly computed value. Distinguish that region-family example from pair-rank or Hilbert/Euler measures, whose query domains and inversions are explained in guide_slices_diagrams."
+state = "existing"
+source = "docs/tutorials/generalized_rank_queries.ipynb"
+scope = "Follow an existing encoded module through selected-label queries, validation, scalar-first results and optional witnesses. Explore an explicitly supplied interval family, total compression, negative coefficients and reconstruction restricted to declared queries. Then use a positively oriented two-dimensional grid encoding for fixed centers, rank levels and worm lengths; explain the right-continuous zero-below/constant-above extension, exact rational widths, feature-array order and query/output budgets. Include runnable fork, negative-coefficient and rectangle/quadrant examples from docs/examples/generalized_rank.jl; show errors for disconnected/nonconvex domains and unsupported geometric encodings. Link the mathematical lesson and B54 at the point of need rather than repeating proofs. Add explicit grid-index boundary-cap barcodes with repeated occurrences, full-bar rank verification, and live finite/worm queries with exact entry and retained-layer selection. No training or autodiff interface is implied. Reuse the cross-module family example in guide_slices_diagrams as a bridge, retaining the fork for the generalized-rank distinction. When inspecting A86 signed-family cancellation, select a declared observable/query, show positive and negative contributions, and reconstruct its directly computed value. Distinguish that region-family example from pair-rank or Hilbert/Euler measures, whose query domains and inversions are explained in guide_slices_diagrams."
 plan_ids = ["A54", "B54", "A86"]
 related = ["guide_inputs", "guide_spaces_maps", "generalized_rank_lesson", "B54", "features_lesson", "ref_invariants", "ref_features"]
-migration = "author"
+migration = "retain"
+migration_note = "Canonical executable usage guide with finite-region, signed, boundary and continuous-worm figures. Mathematical background remains the separate planned generalized_rank_lesson; generic live lifecycle remains in guide_live_inspection. Future optimization belongs in B54 with measurements in benchmark reports."
 
 [[articles]]
 id = "B55"
@@ -2231,7 +2253,7 @@ type = "implementation_account"
 topics = ["persistence", "algebra"]
 question = "Which representations and algorithms underlie persistent cohomology and retained cocycles, and why?"
 state = "planned"
-scope = "Explain the implemented persistent-cohomology reduction and retained scale-specific cocycles, variance, supported prime fields and comparison with homology intervals. Describe restriction of retained cochains to a requested scale, source-cell coefficients and costs; preserve the prohibition on collapse when cocycles are requested because cochain lifting is not supplied. The computation is available; this account remains unwritten. Circular coordinates and persistent cup products require their own constructions."
+scope = "Explain the implemented persistent-cohomology reduction and retained scale-specific cocycles, variance, supported prime fields and comparison with homology intervals. Describe restriction of retained cochains to a requested scale, source-cell coefficients and costs. State collapse restrictions for the selected construction and code version: current ingestion can use source=true to retain a verified cochain retraction, while the vertex-cubical route still rejects collapsed cocycles. The published c14f505 baseline has the older ingestion prohibition. Explain the actual correspondence before advertising a supported combination. This account remains unwritten; circular coordinates and persistent cup products require their own constructions."
 plan_ids = ["B64", "A112", "A117"]
 related = ["implementation_index", "implementation_bibliography"]
 migration = "author"
@@ -2250,15 +2272,16 @@ migration = "author"
 
 [[articles]]
 id = "B66"
-title = "Relative and extended persistence"
+title = "Relative persistence of filtered pairs"
 type = "implementation_account"
 topics = ["persistence", "algebra"]
-question = "Which representations and algorithms underlie relative and extended persistence, and why?"
-state = "planned"
-scope = "Compatible filtered pairs, quotient complexes and comparison maps, followed by the ordinary-to-relative extended filtration, interval types and endpoint conventions. Keep the two constructions distinct within the account. Conditional account: explain only implemented, verified portions of this scope; establish the algorithm and its hypotheses before drafting. This record is not an implementation-status claim."
+question = "How are quotient persistence and its connecting maps computed for a filtered pair?"
+state = "existing"
+source = "docs/implementation/relative_persistence.md"
+scope = "Inherited-grade quotient reduction, delayed-entry mapping cones, quotient chain snapshots, connecting signs and induced filtration maps. The relative-pair account is authored; the planned extended construction remains a separate continuation after A119."
 plan_ids = ["B66", "A118", "A119"]
 related = ["implementation_index", "implementation_bibliography"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "B67"
@@ -2562,6 +2585,30 @@ related = ["benchmark_suites", "benchmark_style"]
 migration = "author"
 
 [[articles]]
+id = "C22"
+title = "Cubical barcodes: TamerOp and CubicalRipser"
+type = "benchmark_report"
+topics = ["performance", "persistence"]
+question = "How do TamerOp and CubicalRipser compare on large image and volume barcodes?"
+state = "existing"
+source = "docs/benchmarks/cubicalripser.md"
+scope = "The closed 48-request study covers nonperiodic 2D/3D F2 barcodes under vertex and top-cell conventions, with noise, binary and smooth arrays, fixed size ladders and reserved asymmetric inputs. Three process passes give 864 exact-verified compiled uncached samples. Report substantial strengths and binary-vertex losses, larger calibration limits, machine and memory separately. Singleton axes and representative-cycle requests remain outside the timed scope."
+plan_ids = ["C22", "A25", "A113"]
+related = ["benchmark_suites", "benchmark_style", "cubicalripser_data"]
+migration = "retain"
+
+[[articles]]
+id = "cubicalripser_data"
+title = "CubicalRipser v1 result data"
+type = "resource"
+topics = ["performance", "persistence"]
+question = "Where are the CubicalRipser comparison's full times, barcodes and verification records?"
+state = "existing"
+source = "docs/benchmarks/cubicalripser_v1/README.md"
+related = ["C22"]
+migration = "retain"
+
+[[articles]]
 id = "mathematics_collection"
 title = "Mathematical lessons"
 type = "resource"
@@ -2732,29 +2779,30 @@ migration = "author"
 
 [[articles]]
 id = "guide_decomposition"
-title = "Computing multiplicities, summands and approximate supports"
+title = "Computing interval multiplicities and splittings"
 type = "library_guide"
 topics = ["algebra", "invariants"]
 question = "Which decomposition question can I ask of my module, and what evidence comes back with the answer?"
-state = "planned"
+state = "existing"
+source = "docs/tutorials/decomposition.ipynb"
 plan_ids = ["A46", "A50", "A103", "A51"]
-planned_source = "docs/guides/decomposition.md"
-scope = "Explore fixed-interval multiplicities, certified decomposable cases and supported exact indecomposable routes using one small module family. Inspect inclusion/projection maps and residuals. Explain category and adapter limits, including gluing data for bipath inputs. Keep approximate interval supports, signed summaries and sampled tracks distinct; describe A103 precision metadata only when implemented. Default to the cheapest useful result and make heavy witnesses explicit. Include the supported A51 inspection of a chosen central charge, selected/generated submodule, factors/slopes, thresholds, weighted skyscraper values and chambers. Explain changes in the mathematical stability choice before their view; chamber geometry and exact/approximate status must be declared."
+scope = "Canonical executable guide: square module, one multiplicity versus restricted rank, declared-family versus complete search, actual retractions and identity reconstruction, non-interval branching residual, encoding forwarding and explicit budgets. Extend for A50/A51/A103 only when their solver and guarantee contracts are established; approximate supports and HN investigations retain their distinct mathematical questions."
 related = ["decomposition_lesson", "guide_generated_submodules", "B53", "B59", "B42", "ref_modules", "ref_invariants", "hn_skyscraper_lesson", "B56"]
-migration = "author"
+migration = "review"
+migration_note = "A46 is authored. Preserve this broader expansion plan as the remaining algorithms become available: Explore fixed-interval multiplicities, certified decomposable cases and supported exact indecomposable routes using one small module family. Inspect inclusion/projection maps and residuals. Explain category and adapter limits, including gluing data for bipath inputs. Keep approximate interval supports, signed summaries and sampled tracks distinct; describe A103 precision metadata only when implemented. Default to the cheapest useful result and make heavy witnesses explicit. Include the supported A51 inspection of a chosen central charge, selected/generated submodule, factors/slopes, thresholds, weighted skyscraper values and chambers. Explain changes in the mathematical stability choice before their view; chamber geometry and exact/approximate status must be declared."
 
 [[articles]]
 id = "guide_generated_submodules"
 title = "Following vectors and constructing generated submodules"
 type = "library_guide"
-topics = ["algebra", "encodings"]
+topics = ["algebra", "encodings", "visualization"]
 question = "How can I propagate selected vectors or subspaces and recover the module they generate?"
-state = "planned"
+state = "existing"
+source = "docs/tutorials/generated_submodules.ipynb"
 plan_ids = ["A104"]
-planned_source = "docs/guides/generated_submodules.md"
-scope = "Start with a declared finite base, field, source stalk and vector/subspace coordinates. Follow actual comparable maps, inspect image dimensions and nonzero support, then request the generated submodule, inclusion or quotient. Demonstrate basis-change behavior and explain why a generated submodule need not split. Teach A104 mathematical operations independently of future selected-vector viewers."
+scope = "Canonical executed notebook: selected vectors and subspaces on overlapping square modules; actual image columns/ranks, no-map semantics, finite classifier pullback, optional generated submodule/inclusion/quotient, nonsplitting and basis changes. Links explicit retained source-cycle bases. Keep future HN/decomposition consumers separate."
 related = ["guide_spaces_maps", "universal_constructions", "decomposition_lesson", "hn_skyscraper_lesson", "B08", "ref_modules", "diamond_maps", "module_operations"]
-migration = "author"
+migration = "review"
 
 [[articles]]
 id = "guide_resolutions"
@@ -2948,12 +2996,14 @@ title = "Constructing modules without a filtration"
 type = "library_guide"
 topics = ["encodings", "algebra", "geometry"]
 question = "How do I choose and validate a finite diagram, lattice presentation or geometric-region presentation?"
-state = "planned"
-planned_source = "docs/guides/presentations.md"
-scope = "Start from supplied mathematical spaces/maps or a region-and-matrix presentation, then compare finite-poset, integer-flange, axis-aligned and general polyhedral routes. Preserve commuting paths, boundaries, orientations, fields and the ambient classifier. Include a meaningful non-filtration example and the validated A99 editor as an optional input method. Stop at a checked object ready for queries or algebra; full definitions and encoder algorithms live elsewhere."
-related = ["representation_domains", "indicator_presentations", "guide_inputs", "guide_spaces_maps", "build_module", "build_presentation", "B06", "B09", "B10", "B11", "B12", "ref_modules", "ref_encodings"]
+state = "existing"
+source = "docs/tutorials/presentations.ipynb"
+scope = "Start from supplied mathematical spaces/maps or a region-and-matrix presentation, then compare finite-poset, integer-flange, axis-aligned and general polyhedral routes. Preserve commuting paths, boundaries, orientations, fields and the ambient classifier. Use a meaningful non-filtration example to explain supplied maps, validated draft editing and ordinary object export. Stop at a checked object ready for queries or algebra; full definitions and encoder algorithms live elsewhere."
+related = ["B46", "ref_visual_sessions", "representation_domains", "indicator_presentations", "guide_inputs", "guide_spaces_maps", "build_module", "build_presentation", "B06", "B09", "B10", "B11", "B12", "ref_modules", "ref_encodings"]
 plan_ids = ["A13", "A20", "A28", "A80", "A99"]
-migration = "author"
+migration = "review"
+
+migration_note = "The canonical notebook teaches direct finite spaces/maps, failed-path repair, finite fringe images and checked editor export. Extend this same guide with integer-flange and geometric-region construction choices and their ambient classifiers. Include the closed-segment and point examples from B11 through public encode, selected space/map queries and exact representatives; compare native/general PL choices without repeating event traversal. Retain their encoder accounts elsewhere. The editor adds no mathematical reading-map node."
 
 [[articles]]
 id = "guide_morphisms"
@@ -2970,81 +3020,87 @@ migration = "author"
 
 [[articles]]
 id = "guide_derived"
-title = "Computing Ext, Tor and their induced maps"
+title = "Computing Ext, Tor and their products"
 type = "library_guide"
 topics = ["algebra", "encodings"]
 question = "How can I request the derived information I need in the right category and degree range?"
-state = "planned"
-planned_source = "docs/guides/derived.md"
-scope = "Begin with a finite base, field and module pair; request cheap dimensions before representatives and functorial comparison maps. Explain truncation, variance, pointwise tensor versus incidence-algebra Tor, resolution reuse and available products. Inspect nonzero representatives and Yoneda composition through supported views, keeping compatible product structures and numerical tolerance explicit. Resolution construction belongs to guide_resolutions; spectral calculations belong to guide_complexes."
+state = "existing"
+source = "docs/tutorials/derived.ipynb"
+scope = "Begin with the finite diamond and its vertex-simple modules; inspect cheap dimensions, chosen cocycles, nonzero Yoneda products, one cached degree table and an induced map. Contrast incidence-algebra Tor with pointwise tensor and supply actual Tor multiplication data. Preserve category, bases, signs, truncation, budgets and field tolerances. Extend broader functorial-map workflows in this identity; resolution construction stays with guide_resolutions and spectral calculations with guide_complexes."
 related = ["derived_functors", "products_lesson", "math_categories", "guide_resolutions", "guide_complexes", "compute_hom_ext", "numerical_algebra", "B33", "B34", "ref_derived"]
 plan_ids = ["A02", "A10", "A42", "A61", "A70", "A71", "A74", "A90"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "guide_complexes"
-title = "Working with complexes and spectral computations"
+title = "Working with complexes and spectral pages"
 type = "library_guide"
 topics = ["algebra", "persistence", "visualization"]
 question = "How do I build a compatible complex and inspect its homology, connecting maps or successive pages?"
-state = "planned"
-planned_source = "docs/guides/complexes.md"
+state = "existing"
+source = "docs/tutorials/complexes.ipynb"
 scope = "Follow one nonzero complex through differential checks, cycles/boundaries, cones, connecting maps and induced homology. Extend to a filtered or double complex with page dimensions before terms and representatives. State grading, shift, signs and page-to-limit scope. Integrate A42d/A89 views and supplied lifts without making coordinates canonical; link source topology and relative-pair workflows where they provide the input."
-related = ["module_complexes", "complexes_spectral_sequences", "cohomology_lesson", "relative_extended_lesson", "guide_derived", "B30", "B35", "ref_complexes"]
-plan_ids = ["A02", "A42", "A60", "A75", "A89"]
-migration = "author"
+related = ["module_complexes", "complexes_spectral_sequences", "cohomology_lesson", "relative_extended_lesson", "guide_derived", "B30", "B35", "B44", "ref_complexes", "ref_visualization"]
+plan_ids = ["A02", "A42", "A42d", "A60", "A75", "A89"]
+migration = "review"
+migration_note = "The canonical guide follows a differential, selected cycles and boundary adjustments, a map that kills a class, a cone connecting map and then a supplied filtered bicomplex with successive spectral pages. It owns the exploratory complex workflow and links source geometry to guide_representatives; precise chain/sequence controls belong in ref_visualization. Keep mathematical foundations and B30 implementation mechanisms in their own treatments."
 
 [[articles]]
 id = "guide_slices_diagrams"
-title = "Exploring slices, intervals and diagram comparisons"
+title = "Exploring slices, intervals and signed contributions"
 type = "library_guide"
 topics = ["invariants", "persistence", "encodings", "visualization"]
-question = "How do I choose a line or diagram query and interpret its intervals and matching witnesses?"
-state = "planned"
-planned_source = "docs/guides/slices_diagrams.md"
+question = "How do I interpret slice intervals, matching witnesses and signed contributions of an encoding?"
+state = "existing"
+source = "docs/tutorials/slices_diagrams.ipynb"
 scope = "Explore line restriction versus projection, exact endpoint coverage versus censored windows, multiplicity members and essential bars. Start from ordinary diagrams or a supported encoded module; vary a slice and compare selected outputs through explicit conventions. Include A85 cost witnesses and limiting cases but do not infer source-class continuation from an optimal matching. Shared live controls belong to guide_live_inspection; high-dimensional features belong to guide_features and exact 2D search to exact_matching. For A86, include a small pair-rank or Hilbert/Euler signed-measure cancellation example with the actual query/rectangle convention and direct reconstruction. A negative atom is a signed contribution, not a negative-dimensional summand. Region-family generalized rank remains in its dedicated guide."
-related = ["slice_barcodes", "distances_stability", "ordinary_persistence", "ordinary_analysis", "chosen_slice", "distance_witness", "exact_matching", "B37", "B38", "B39", "B47", "ref_invariants", "ref_comparisons"]
+related = ["slice_barcodes", "distances_stability", "ordinary_persistence", "ordinary_analysis", "chosen_slice", "distance_witness", "exact_matching", "B37", "B38", "B39", "B47", "ref_invariants", "ref_comparisons", "signed_summaries", "guide_generalized_rank", "B41", "B44", "ref_visualization"]
 plan_ids = ["A03", "A04", "A40", "A41", "A85", "A111", "A116", "A86"]
-migration = "author"
+migration = "review"
+
+migration_note = "The canonical notebook uses one explicit finite encoding for chain intervals, rank endpoint-pair cancellation, signed prominence/smoothing, Hilbert backgrounds and declared interval-family inspection. Expand slice choices and comparisons here as needed; retain the focused distance-witness recipe. Keep generalized-rank foundations in their dedicated lesson/guide and method contracts in the visualization reference."
 
 [[articles]]
 id = "guide_representatives"
-title = "Relating classes and cocycles to source cells"
+title = "From source cells to representative classes"
 type = "library_guide"
 topics = ["persistence", "algebra", "geometry", "visualization"]
-question = "Which retained source data explain a selected class, and what must be computed to recover them?"
-state = "planned"
-planned_source = "docs/guides/representatives.md"
+question = "Which source cells explain a selected class, and how is that correspondence checked?"
+state = "existing"
+source = "docs/tutorials/source_cells.ipynb"
 scope = "Distinguish homology cycles, death fillings and scale-specific cocycles, retaining source IDs, orientations, coefficients and reduction/lifting maps. Follow actual active cells and H0 components on supplied simplicial/cubical/cellular inputs. Explain opt-in storage, unavailable source geometry, periodic seams and the guarantee of any shorter representative. Geometry overlays consume verified chains; circular coordinate solvers remain a separate guide."
-related = ["filtrations_homology", "cohomology_lesson", "ordinary_persistence", "guide_coordinates", "trace_source_class", "B20", "B29", "B64", "ref_complexes", "ref_ordinary_persistence"]
+related = ["filtrations_homology", "cohomology_lesson", "ordinary_persistence", "guide_coordinates", "trace_source_class", "B20", "B29", "B64", "ref_complexes", "ref_ordinary_persistence", "ref_source_representatives"]
 plan_ids = ["A43", "A89", "A91", "A92", "A112", "A117"]
-migration = "author"
+migration = "review"
+migration_note = "The canonical notebook joins actual filtered cells to checked cycles, death fillings, cocycles and bounded weighted-support optimization. H0 component memberships, source merge events and slice-specific forests continue the same workflow; retained classes are not inferred from a cell highlight. B29 explains correspondence and contraction, and ref_source_representatives owns their contracts."
 
 [[articles]]
 id = "guide_features"
-title = "Choosing features and assembling comparable experiments"
+title = "Reading scalar fields in their original coordinates"
 type = "library_guide"
 topics = ["features", "invariants", "data_io"]
-question = "How do I turn compatible persistence results into numerical coordinates and batches?"
-state = "planned"
-planned_source = "docs/guides/features.md"
-scope = "Explore landscapes, images, silhouettes, entropy, scalar summaries and feature tables with common windows, units, layers, grids and normalization. Keep mathematical information loss visible. Include ordinary A116 transforms and supplied collection/distance/kernel matrices, with embedding distortion explicit; branch to signed transport, GRIL, uncertainty and learned probes for their specialized contracts. Batching, optional backends, reuse and saved tables are operational choices here, not new definitions. For A44/A98, distinguish an ambient landscape query/grid from a stack indexed by sampled slices. Controlled higher-dimensional sections state the fixed coordinates, remaining domain, layers and normalization; neither a surface nor an embedding supplies an unstated stability or injectivity claim."
+question = "How do I interpret sampled features in original coordinates and compare their sections?"
+state = "existing"
+source = "docs/tutorials/features.ipynb"
+scope = "Explore landscapes, images, silhouettes, entropy, scalar summaries and feature tables with common windows, units, layers, grids and normalization. Keep mathematical information loss visible. Include ordinary A116 transforms and feature-table construction; hand off supplied collection/distance/kernel matrices and declared embedding displays to guide_comparisons, keeping information loss explicit; branch to signed transport, GRIL, uncertainty and learned probes for their specialized contracts. Batching, optional backends, reuse and saved tables are operational choices here, not new definitions. For A44/A98, distinguish an ambient landscape query/grid from a stack indexed by sampled slices. Controlled higher-dimensional sections state the fixed coordinates, remaining domain, layers and normalization; neither a surface nor an embedding supplies an unstated stability or injectivity claim."
 related = ["features_lesson", "ordinary_analysis", "guide_generalized_rank", "guide_signed_transport", "guide_uncertainty", "guide_learned_gril", "feature_table", "reuse_computations", "B43", "ref_features"]
 plan_ids = ["A25", "A33", "A44", "A95", "A98", "A110", "A116", "A122"]
-migration = "author"
+migration = "review"
+
+migration_note = "The canonical notebook develops finite square-module landscapes, explicit ambient parameterization/windows, linked higher-dimensional scalar sections and shared signed scales. Extend the same guide for feature-table assembly and ordinary transform choices; the ordinary-analysis notebook owns their introductory examples. Do not create a separate viewer lesson or reading-map node."
 
 [[articles]]
 id = "guide_live_inspection"
-title = "Following selections through a live computation"
+title = "Keeping a selected mathematical view"
 type = "library_guide"
-topics = ["visualization", "encodings", "performance"]
+topics = ["visualization", "encodings", "data_io", "performance"]
 question = "How do I create, query and close a linked session without losing the meaning of a selection?"
-state = "planned"
-planned_source = "docs/guides/live_inspection.md"
-scope = "Own session lifecycle, parameter versus finite-label selection, exact text entry versus approximate pointer input, synchronization, cache reuse, budgets, transport and static/live/offline limits. Reuse mathematical investigations from subject guides instead of reteaching them. Distinguish local Julia callbacks, notebook frontends, standalone browser fixtures and precomputed scenes; no saved HTML claim substitutes for a working runtime contract."
+state = "existing"
+source = "docs/tutorials/live_inspection.ipynb"
+scope = "The canonical notebook follows exact square-module selections through capture, explicit source retention, closing, offline reopening and supported fresh Julia queries, with one ordinary interval variation. Own session lifecycle, parameter versus finite-label selection, exact text entry versus approximate pointer input, synchronization, cache reuse, budgets, transport and static/live/offline limits. Reuse mathematical investigations from subject guides instead of reteaching them. Distinguish local Julia callbacks, notebook frontends, standalone browser fixtures and precomputed scenes; no saved HTML claim substitutes for a working runtime contract."
 related = ["visualization", "guide_spaces_maps", "guide_morphisms", "guide_slices_diagrams", "guide_visualize_share", "B44", "B45", "B46", "ref_visual_sessions"]
 plan_ids = ["A37", "A38", "A40", "A42", "A81", "A83", "A84", "A99", "A100"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "guide_comparisons"
@@ -3052,12 +3108,13 @@ title = "Comparing results through declared correspondences"
 type = "library_guide"
 topics = ["visualization", "invariants", "algebra"]
 question = "Which views can share selections or scales when fields, degrees, constructions or samples differ?"
-state = "planned"
-planned_source = "docs/guides/comparisons.md"
-scope = "Establish the mathematical correspondence before choosing common scales, layers, coordinates and selections. Include construction/field comparisons, scalar fields and collections of supplied features or distances. Distinguish basis changes, changes of coefficient field, numerical tolerance, approximate embeddings and independent results. Delegate distance algorithms to their guide and ensemble inference to guide_uncertainty; semantic overlays and export live in guide_visualize_share. For A44, specify the coordinates held fixed in higher-dimensional sections, shared units/window/layers and exact versus sampled domains. A common color scale is not a mathematical identification between objects."
+state = "existing"
+source = "docs/tutorials/comparisons.ipynb"
+scope = "Establish the mathematical correspondence before choosing common scales, layers, coordinates and selections. Include construction/field comparisons, scalar fields and collections of supplied features, distances or kernels with declared embeddings. Distinguish basis changes, changes of coefficient field, numerical tolerance, approximate embeddings and independent results. Delegate distance algorithms to their guide and ensemble inference to guide_uncertainty; semantic overlays and export live in guide_visualize_share. For A44, specify the coordinates held fixed in higher-dimensional sections, shared units/window/layers and exact versus sampled domains. A common color scale is not a mathematical identification between objects."
 related = ["coefficients_lesson", "reading_module_figures", "distances_stability", "guide_features", "guide_uncertainty", "choose_coefficients", "B44", "ref_visualization"]
 plan_ids = ["A44", "A94", "A98", "A102"]
-migration = "author"
+migration = "retain"
+migration_note = "The canonical notebook owns A94 field/degree/construction comparison on explicit finite or original-parameter probes, rank rows, ordinary intervals, basis changes and tolerance sensitivity. The same guide owns supplied feature/distance/kernel collections, declared embeddings and selected-pair witness linkage. Higher-dimensional scalar sections are developed in guide_features and linked here; comparisons retain their explicit coordinate correspondence. Computation contracts live in ref_visualization and preparation/reuse in B44."
 
 [[articles]]
 id = "guide_coordinates"
@@ -3078,12 +3135,12 @@ title = "Analyzing ensembles of persistence results"
 type = "library_guide"
 topics = ["features", "invariants", "visualization"]
 question = "How do I align repeated outputs and distinguish descriptive variation from a supported inference?"
-state = "planned"
-planned_source = "docs/guides/uncertainty.md"
+state = "existing"
+source = "docs/tutorials/uncertainty.ipynb"
 scope = "Begin with supplied replicates, explicit coordinate/feature alignment and descriptive summaries; inspect support frequencies and bands with source examples. Only request confidence or bootstrap outputs under the implemented sampling and domain contract. Keep fixed layer/window, independence assumptions, pointwise versus simultaneous meaning and grid error adjacent to calls. Reuse collection rendering and normalization rather than creating a separate plotting API."
-related = ["uncertainty_lesson", "features_lesson", "guide_features", "guide_comparisons", "B72", "ref_features"]
+related = ["uncertainty_lesson", "features_lesson", "guide_features", "guide_comparisons", "B72", "ref_features", "ref_ensembles"]
 plan_ids = ["A95", "A98"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "guide_data_io"
@@ -3104,12 +3161,12 @@ title = "Build and validate a small module from spaces and maps"
 type = "recipe"
 topics = ["algebra", "encodings"]
 question = "How do I enter a commuting diagram directly and obtain a checked module?"
-state = "planned"
-planned_source = "docs/recipes/build_module.md"
+state = "existing"
+source = "docs/recipes/build_module.md"
 scope = "Supply a small nontrivial diamond, dimensions and actual maps over a stated field. Validate shapes, order and commuting paths, deliberately repair one failed square, and finish with a checked module and recovered comparable map. The A99 editor is an optional input variant with object/code export, not a new mathematical definition."
-related = ["persistence_modules", "diamond_maps", "guide_presentations", "guide_morphisms", "B06", "ref_modules"]
+related = ["ref_visual_sessions", "persistence_modules", "diamond_maps", "guide_presentations", "guide_morphisms", "B06", "ref_modules"]
 plan_ids = ["A20", "A99"]
-migration = "author"
+migration = "review"
 
 [[articles]]
 id = "build_presentation"
@@ -3169,12 +3226,12 @@ title = "Measure what persists through a branching region"
 type = "recipe"
 topics = ["invariants", "encodings", "algebra"]
 question = "How do I compute and check generalized rank on a chosen connected convex domain?"
-state = "planned"
-planned_source = "docs/recipes/query_region_invariant.md"
+state = "existing"
+source = "docs/recipes/query_region_invariant.md"
 scope = "Supply the hand-checkable fork and a validated domain, request scalar generalized rank, then optionally inspect witnesses. Contrast equal pairwise ranks with different region rank. An optional declared-family reconstruction is a continuation, not a claim of direct-sum multiplicity."
 related = ["generalized_rank_lesson", "guide_generalized_rank", "B54", "ref_invariants"]
 plan_ids = ["A54"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "relative_pair"
@@ -3182,12 +3239,12 @@ title = "Compute persistence relative to a boundary"
 type = "recipe"
 topics = ["persistence", "algebra"]
 question = "How do I construct a checked filtered pair and read its relative interval?"
-state = "planned"
-planned_source = "docs/recipes/relative_pair.md"
+state = "existing"
+source = "docs/recipes/relative_pair.md"
 scope = "Use disk/boundary or interval/endpoints with an expected nonzero relative class. Validate the subcomplex filtration, compute quotient persistence and inspect an available comparison/connecting map. Include empty/equal pair controls only as small variations; extended persistence is a separate subsequent task."
 related = ["relative_extended_lesson", "ordinary_persistence", "B30", "B66", "ref_persistence_variants"]
 plan_ids = ["A118"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "trace_source_class"
@@ -3221,12 +3278,12 @@ title = "Save a selection and reopen a supported offline view"
 type = "recipe"
 topics = ["visualization", "data_io"]
 question = "How do I preserve the mathematical selection and available interactions after Julia exits?"
-state = "planned"
-planned_source = "docs/recipes/reopen_session.md"
+state = "existing"
+source = "docs/recipes/reopen_session.md"
 scope = "Create one supported precomputed session with explicit object/view identities, parameter window, scales and selection. Save, close Julia and reopen using only the declared assets; check retained values and identify unavailable live computations. Diagram JSON alone is not a saved visual session."
 related = ["guide_live_inspection", "guide_visualize_share", "guide_data_io", "B46", "B48", "ref_visual_sessions"]
 plan_ids = ["A37", "A100"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "compose_figure"
@@ -3234,12 +3291,12 @@ title = "Compose compatible layers and annotations in a figure"
 type = "recipe"
 topics = ["visualization", "invariants"]
 question = "How do I combine a scalar background, mathematical overlay and explanatory annotation without changing their meaning?"
-state = "planned"
-planned_source = "docs/recipes/compose_figure.md"
+state = "existing"
+source = "docs/recipes/compose_figure.md"
 scope = "Start from computed objects sharing a checked domain/correspondence. Compose one signed/support overlay and a selected-source annotation with explicit scales and units, then export and verify the selected identities. Distinguish computed connectors from authored explanation; generic export mechanics belong to export_figure."
 related = ["reading_module_figures", "guide_comparisons", "guide_visualize_share", "export_figure", "B44", "ref_visualization"]
 plan_ids = ["A44", "A86", "A102"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "verify_interleaving"
@@ -3269,42 +3326,44 @@ migration = "author"
 
 [[articles]]
 id = "ref_decomposition"
-title = "Decomposition and approximation result contracts"
+title = "Interval decomposition contracts"
 type = "api_reference"
 topics = ["algebra", "invariants"]
 question = "Which multiplicities, summands, subquotients and witnesses are certified by a result?"
-state = "planned"
-planned_source = "docs/src/reference/decomposition.md"
-scope = "Specify accepted finite categories and interval families, native/adapter scope, splitting/reconstruction maps, residuals, precision and budget outcomes. Keep exact decomposition, signed summaries, sampled tracks, interval-support approximation and actual pruning separately named. Owner/method routing remains in API coverage; shared types receive one canonical definition."
+state = "existing"
+source = "docs/src/reference/decomposition.md"
+scope = "Exact finite-poset interval multiplicities, candidate pruning, complete and supplied-family outcomes, counts, residual dimensions, simultaneous splitting maps, validation, exact fields and budgets. Other indecomposable, approximation and pruning methods remain separately scoped future additions."
 related = ["decomposition_lesson", "guide_decomposition", "guide_approximation", "B53", "B58", "B59"]
 plan_ids = ["A46", "A50", "A87", "A103", "A107"]
-migration = "author"
+migration = "review"
+migration_note = "A46 is authored. Preserve this broader expansion plan as the remaining algorithms become available: Specify accepted finite categories and interval families, native/adapter scope, splitting/reconstruction maps, residuals, precision and budget outcomes. Keep exact decomposition, signed summaries, sampled tracks, interval-support approximation and actual pruning separately named. Owner/method routing remains in API coverage; shared types receive one canonical definition."
 
 [[articles]]
 id = "ref_persistence_variants"
-title = "Relative, extended and temporal persistence reference"
+title = "Filtered pairs and relative persistence"
 type = "api_reference"
 topics = ["persistence", "algebra"]
-question = "What pair, event and update contracts define these persistence variants?"
-state = "planned"
-planned_source = "docs/src/reference/persistence_variants.md"
+question = "What input, basis and map conventions define relative persistence?"
+state = "existing"
+source = "docs/src/reference/persistence_variants.md"
 scope = "Specify filtered pairs and quotient/connecting maps, extended interval types and source grades, zigzag event directions and decorations, allowed incremental edits and certified correspondences. Shared ordinary result/analysis methods stay in their canonical reference with variant-specific applicability explained here. Separate temporal landscapes from the computation engine."
 related = ["relative_extended_lesson", "extended_persistence_lesson", "temporal_persistence_lesson", "guide_temporal_persistence", "B66", "B67", "B68"]
 plan_ids = ["A55", "A118", "A119", "A120", "A121"]
-migration = "author"
+migration = "retain"
+migration_note = "The authored reference covers A118 checked pairs, quotients and homology maps. Extended and temporal method contracts remain a planned expansion; no corresponding implementation is implied."
 
 [[articles]]
 id = "ref_visual_sessions"
-title = "Live and saved inspection session reference"
+title = "Live and saved inspection sessions"
 type = "api_reference"
 topics = ["visualization", "data_io"]
 question = "What state and computation does a session retain, and which actions work in each execution environment?"
-state = "planned"
-planned_source = "docs/src/reference/visual_sessions.md"
+state = "existing"
+source = "docs/src/reference/visual_sessions.md"
 scope = "Specify lifecycle, selected parameter/label/member identity, exact entry, transport, cache ownership, snapshot/reset/close, supported editor mutation and offline asset/view schemas. State live-Julia versus precomputed behavior, thread/resource budgets and retained mathematical provenance. Rendering specifications and styles remain in ref_visualization; shared serialization primitives remain in ref_io."
-related = ["guide_live_inspection", "guide_visualize_share", "reopen_session", "B46", "B48"]
+related = ["build_module", "guide_presentations", "guide_live_inspection", "guide_visualize_share", "reopen_session", "B46", "B48"]
 plan_ids = ["A37", "A40", "A83", "A84", "A99", "A100"]
-migration = "author"
+migration = "review"
 
 [[articles]]
 id = "B71"
@@ -3324,11 +3383,12 @@ title = "Aligned ensembles and statistical uncertainty computations"
 type = "implementation_account"
 topics = ["features", "invariants", "visualization"]
 question = "How are repeated outputs aligned and which computations support the reported uncertainty?"
-state = "planned"
+state = "existing"
+source = "docs/implementation/ensembles.md"
 scope = "Explain the implemented alignment, descriptive summaries and any supported bootstrap or confidence-band procedure with its actual sampling hypotheses, fixed domains/layers, discretization, randomness and bounded work. Separate deterministic stability from statistical inference. B43 owns individual feature transforms; B44 owns rendering and B49 reuse. Keep experiment histories and measured claims in reports."
-related = ["implementation_index", "implementation_bibliography", "uncertainty_lesson", "guide_uncertainty", "B43", "B44", "ref_features"]
+related = ["implementation_index", "implementation_bibliography", "uncertainty_lesson", "guide_uncertainty", "B43", "B44", "ref_features", "ref_ensembles"]
 plan_ids = ["B72", "A95", "A98"]
-migration = "author"
+migration = "retain"
 
 [[articles]]
 id = "documentation_programme"
@@ -3352,4 +3412,67 @@ question = "How can the published Ripser comparison data be checked and interpre
 state = "existing"
 source = "docs/benchmarks/ripser_v1/README.md"
 related = ["C14"]
+migration = "retain"
+
+[[articles]]
+id = "ref_source_representatives"
+title = "Source representatives"
+type = "api_reference"
+topics = ["persistence", "geometry", "algebra", "visualization"]
+question = "What is retained and verified when a chain or cocycle is traced to source cells?"
+state = "existing"
+source = "docs/src/reference/source_representatives.md"
+scope = "Source correspondence and chain contracts, ordinary source retention, contravariant cocycle lifts, exact bounded representative optimization, source overlay limits and owned interchange. Link the general ordinary and filtered-cell contracts rather than duplicate them."
+related = ["guide_representatives", "B29", "ref_ordinary_persistence", "ref_visualization", "ref_inputs"]
+plan_ids = ["A43", "A89", "A91", "A92", "A112", "A117"]
+migration = "review"
+
+[[articles]]
+id = "C14_cpp"
+title = "Ordinary Rips barcodes: TamerOp and C++ Ripser"
+type = "benchmark_report"
+topics = ["performance", "persistence"]
+question = "How does TamerOp compare with original C++ Ripser on larger complete-barcode requests?"
+state = "existing"
+source = "docs/benchmarks/ripser_cpp.md"
+scope = "Ten larger dense/sparse distance requests, three paired process passes on a shared workstation, exact interval checks and separately retained sparse-threshold limitation. Distinct from the Ripser.py study."
+plan_ids = ["C14"]
+related = ["C14", "benchmark_suites", "benchmark_style", "ripser_cpp_data"]
+migration = "retain"
+
+[[articles]]
+id = "ripser_cpp_data"
+title = "C++ Ripser v1 result data"
+type = "resource"
+topics = ["performance", "persistence"]
+question = "Where are the original C++ Ripser comparison's timings, scope and verification data?"
+state = "existing"
+source = "docs/benchmarks/ripser_cpp_v1/README.md"
+related = ["C14_cpp"]
+migration = "retain"
+
+[[articles]]
+id = "visualization_support"
+title = "Visualization support and acceptance"
+type = "contributor_guide"
+topics = ["development", "visualization"]
+question = "Which display paths are supported and what evidence is required for each?"
+state = "existing"
+source = "docs/visualization_support.md"
+related = ["testing", "browser_checks", "writing", "ref_visualization"]
+migration = "retain"
+plan_ids = ["A36", "A37"]
+scope = "Generated from visualization_support.toml. Standing coordinate/interaction contracts, supported versus verified family paths, mandatory native/browser evidence and bounded frontend qualification. Outside the mathematical reading map."
+
+[[articles]]
+id = "ref_ensembles"
+title = "Ensembles of persistence results"
+type = "api_reference"
+topics = ["features", "invariants", "visualization"]
+question = "What alignment and statistical contracts do ensemble computations accept and guarantee?"
+state = "existing"
+source = "docs/src/reference/ensembles.md"
+scope = "Supplied grids, ordinary diagrams and scalar-field adapters; original coordinates, missing values, empirical summaries, conditional bounded-mean and approximate row-bootstrap inference; prepared visuals and session selection."
+related = ["guide_uncertainty", "uncertainty_lesson", "B72", "ref_visualization"]
+plan_ids = ["A95"]
 migration = "retain"

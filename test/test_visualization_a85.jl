@@ -195,8 +195,8 @@ end
         V.select_inspection!(session;pair=2)
         @test isempty(V.inspection_summary(session).listener_errors)
         @test length(ui.observers)==n
-        @test ui.rebuild_count[]==2
-        @test ui.figure[] !== initial_figure && isempty(initial_figure.content)
+        @test ui.rebuild_count[]==1 && ui.update_count[]==1
+        @test ui.figure[] === initial_figure && !isempty(initial_figure.content)
         @test length(ui.pointer_observers)==2
         V.close_inspection!(session)
         @test ui.closed[] && isempty(ui.observers) && isempty(ui.pointer_observers)

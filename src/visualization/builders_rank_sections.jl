@@ -86,7 +86,7 @@ function _rank_section_geometry(pi, geometry, anchor, from)
     # their exact represented values for clipping, just as static requests do.
     anchor = _visual_point(anchor)
     section = _RankSectionClassifier(pi, anchor, from)
-    orientation = pi isa GridEncodingMap ? pi.orientation : (1,1)
+    orientation = _inspection_parameter_orientation(pi)
     # The comparable orthant is the intersection a_i*x <= b_i.
     normals = ntuple(i -> ntuple(j -> i == j ? (from ? -orientation[i] : orientation[i]) : 0, 2), 2)
     bounds = ntuple(i -> normals[i][i] * anchor[i], 2)
@@ -232,7 +232,7 @@ function _rank_section_panel(obj, prepared, anchor, domain, row, selection, maxi
     end
     fixed_coordinates = row.from ? (:p1,:p2) : (:q1,:q2)
     varying_coordinates = row.from ? (:q1,:q2) : (:p1,:p2)
-    orientation = pi isa GridEncodingMap ? pi.orientation : (1,1)
+    orientation = _inspection_parameter_orientation(pi)
     axes = merge(geometry.axes, (; xlabel="$(varying_coordinates[1]) ($(orientation[1] == 1 ? "increasing" : "decreasing") order)",
         ylabel="$(varying_coordinates[2]) ($(orientation[2] == 1 ? "increasing" : "decreasing") order)"))
     subtitle *= "\n$(join(fixed_coordinates, ", ")) fixed; labels: rank / dim\nSolid/dashed = included/excluded; dotted = window cut"

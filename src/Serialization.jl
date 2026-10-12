@@ -44,6 +44,7 @@ Keep the owner file thin and place subsystem logic in the private fragments.
 module Serialization
 
 using JSON3
+using SHA
 using SparseArrays
 import Nemo
 using ..ExactReals: AlgebraicReal
@@ -84,5 +85,8 @@ include("serialization/external_interop.jl")
 include("serialization/external_cas.jl")
 include("serialization/owned_mppi.jl")
 include("serialization/owned_persistence.jl")
+include("serialization/owned_visual_values.jl")
+include("serialization/owned_visual_sources.jl")
+include("serialization/owned_visual_sessions.jl")
 
 end # module Serialization

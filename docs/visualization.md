@@ -12,6 +12,11 @@ the linked inspector's selection controls and lifecycle. The
 example with saved figures; the [ring notebook](tutorials/ring.ipynb) begins
 with ordinary intervals.
 
+[Keeping a selected mathematical view](tutorials/live_inspection.ipynb) follows
+the shared session lifecycle through capture and reopening. Use it to preserve
+named selections, export their plotted data and share finite offline choices.
+The [short recipe](recipes/reopen_session.md) saves an ordinary interval directly.
+
 The examples use the following imports. For parameter-plane and styling
 examples, `enc` is the square constructed in the
 [spaces-and-maps guide](spaces_and_maps.md#start-from-a-recognizable-object).
@@ -29,6 +34,57 @@ keywords and options that would have no effect on a recipe are errors.
 Building a mathematical specification with `OA.visual_spec` needs no plotting
 package; load CairoMakie to render a static figure, or WGLMakie for the live
 sessions below.
+
+## Previewing source data
+
+Before interpreting an invariant, it helps to see the data and the construction
+that produced it. A point-cloud graph preview answers a geometric question:
+which points are close under this neighbor rule? A retained graph or filtered
+complex answers which edges or cells the computation actually used.
+
+```julia
+points = OP.PointCloud([0.0 0.0; 1.0 2.0; 4.0 3.0; 6.0 0.0])
+sc = OP.SessionCache()
+preview = OA.visual_spec(points; kind=:knn_graph, k=1, cache=sc)
+```
+
+The specification identifies this as a reconstructed metric preview. For a
+large source, bound the drawing while keeping its original identities:
+
+```julia
+small_view = OA.visual_spec(points; kind=:knn_graph, k=1, cache=sc,
+                           max_points=3, max_edges=2)
+OA.visual_metadata(small_view).point_ids
+```
+
+The second request reuses the prepared graph. The caption reports how many
+points and edges are displayed; omitting an edge from the picture does not
+remove it from a filtration. Point selection is deterministic in source index
+order, so this thinning is a display choice, with no statistical sampling claim.
+Changing `dims` chooses drawing axes while neighbor distances still use every
+source coordinate.
+
+If ingestion already computed a compatible sparse graph, keep the same session:
+
+```julia
+filtration = OP.RipsFiltration(max_dim=1, knn=1,
+    construction=OP.ConstructionOptions(sparsify=:knn))
+complex = OP.encode(points, filtration; stage=:graded_complex, cache=sc)
+preview = OA.visual_spec(points; kind=:knn_graph, k=1, cache=sc)
+```
+
+For the actual complex at a parameter, use the retained
+[filtered-complex workflow](tutorials/complexes.ipynb). It preserves cell IDs,
+grades and geometry, including later restrictions or construction choices.
+A supplied `GraphData` can instead be passed directly to `visualize` without
+reconstructing its edges.
+
+Graph preparation has separate work and edge limits. If a raw preview exceeds
+them, reuse an existing graph, activate NearestNeighbors for exact spatial
+queries, or deliberately increase the relevant preparation budget. The
+[reference](src/reference/visualization.md#source-previews-and-preparation-budgets)
+states defaults, supported options and the difference between full counts and
+displayed subsets.
 
 ## Reading the parameter plane
 
@@ -99,6 +155,16 @@ scale. Cosmetic options such as `style=OP.VisualStyle(fontsize=18)` and
 exploratory call. A style applies only to calls where it is supplied.
 The [ring lesson](tutorials/ring.ipynb) develops this progression and finishes
 with an optional preview/export section.
+
+## Which source cells form this component?
+
+A degree-zero bar can be linked to the entire connected component of its source
+complex. Construct `history = OP.component_history(cells)` and call
+`OP.visualize(history; scale=...)` to join its intervals, source geometry and
+merge forest. The [source-cell guide](tutorials/source_cells.ipynb#follow-whole-connected-components)
+explores membership before and after a merge and explains why a multiparameter
+input needs a specified slice. Exact conventions and linked controls are in the
+[component reference](src/reference/source_representatives.md#components-and-merge-histories).
 
 ## Which vectors survive from here?
 
@@ -319,6 +385,21 @@ gives the precise contracts. Grade-plane views require supplied coordinates;
 a finite-poset resolution does not become an ambient multigraded free resolution
 just because it can be drawn in a plane.
 
+## Explain a signed contribution
+
+The [slices and signed-contributions guide](tutorials/slices_diagrams.ipynb)
+follows one finite encoding through a slice, rank endpoint pairs, Hilbert atoms
+and a declared interval family. Signed views link a selected term to its
+contribution and compare the sum with an optional direct observable query.
+They also expose rectangle diagonals, signed prominence and the effect of a
+specified smoothing vector. Use `kind=:signed_cancellation` for existing point
+atoms or inclusive grid barcodes; it is the default for four-coordinate rank
+measures and interval-family summaries.
+
+A signed sum reconstructs its declared observable. It does not supply an actual
+splitting of the module. The [reference](src/reference/visualization.md#signed-observables-and-cancellation)
+specifies the different query domains, boundaries and live-session controls.
+
 ## Choosing a view
 
 | Object and question | Recipe | Effective selections | Scope and work |
@@ -338,7 +419,7 @@ just because it can be drawn in a plane.
 | Cohomology dimensions: where is a degree supported? | `:cohomology_support`, `:cohomology_support_plane` | `box` | Same planar geometry; degree retained in the result |
 | Rank result with geometric provenance: what survives from x to y? | `:rank_query_overlay` | `pair` or `pairs`, `box` | Exact comparable-point validation and stored rank queries |
 | Rank table: which finite-poset pairs have a given rank? | `:rank_heatmap`, `:rank_rectangles` | None | Materializes a pair table; incomparable pairs are missing, not zero |
-| Rectangle signed barcode: what do its coefficients reconstruct? | `:density_image` | None | Accumulates weights at actual axis coordinates, including irregular or negative coordinates |
+| Signed observable: why do negative terms occur? | `:signed_cancellation` | `query`; optional `direct`, `term`, `smoothing` | Exact positive/negative sum with its query domain and boundary convention |
 | Sampled multiparameter image | `:mpp_image` | None | Displays the supplied image; distinct from rectangle reconstruction |
 | Image or volume: which array entries are displayed? | `:image`, `:slice_viewer` | `view_dims=(x_axis,y_axis)`, `slice_indices`, `colormap` | Heatmap rows are y and columns are x; fixed-axis defaults are described below |
 | Channel image | `:channels` | `view_dims`, `colormap` | One panel per channel; channel selection is not silently substituted for slicing |
@@ -713,3 +794,160 @@ endpoints retain their infinite costs. Start with the
 [distance-witness recipe](tutorials/distance_witness.ipynb) for a small checked
 calculation. The [finite-window matching guide](exact_matching.md#retain-and-inspect-the-witness)
 owns comparison of slices, sampled cost maps and exact optimizer witnesses.
+
+## Spectral pages
+
+A computed spectral sequence supports page-dimension charts and inspection of
+an actual selected differential, its kernel/image and its next-page
+contributions. The [complexes guide](tutorials/complexes.ipynb) develops the
+workflow, including live navigation. Start with `visualize(ss)`; choose
+`page=r` to move through pages and `kind=:spectral_differential, source=(p,q)`
+when a specific map becomes the question. See the
+[method reference](src/reference/visualization.md#spectral-pages-and-differentials)
+for conventions, unknown terms, truncation and supplied structure maps.
+
+## Relate geometric constructions to their invariants
+
+The [multicover guide](tutorials/multicover.ipynb) follows source balls and
+coverage depth into retained rhomboid or labelled flag cells, then selected
+homology and radius barcodes. It distinguishes exact physical radii, closed
+depth caps and lifted cell geometry from projections and schematic layouts.
+Core and core–Delaunay comparisons retain their numerical construction
+contracts; source shading never supplies the homology calculation.
+
+## See the filtered cells behind a result
+
+Use `filtered_complex(values)` to retain the same top-cell cubical model as
+`cubical_persistence`, or `filtered_complex(data, filtration)` for supported
+geometric ingestion inputs. `visualize(cells; parameter=...)` shows the actual
+active cells; a selected `cell` exposes its source identity, grades and signed
+boundary. The [source-cell guide](tutorials/source_cells.ipynb) compares top-cell
+and vertex inputs, inspects a filling square and explains periodic and skeleton
+drawings. The [reference](src/reference/visualization.md#filtered-complexes-and-source-cells)
+owns the full geometry, budget and live-selection contracts.
+
+For differential matrices, cycles, boundary adjustments and connecting maps,
+see [Working with complexes and spectral pages](tutorials/complexes.ipynb).
+The [chain inspection reference](src/reference/visualization.md#chain-and-cochain-inspection)
+specifies local quotient bases, field arithmetic, source-cell coordinates and
+linked-view controls.
+
+## Compare finite descriptions and transported modules
+
+The [refinement and transport notebook](tutorials/compare_encodings.ipynb) links
+actual classifier regions, arbitrary finite posets and their order maps. Supply
+an actual comparison morphism to inspect its matrices and commuting squares.
+Realized label pairs are certified only on a supplied finite source; a passing
+finite comparison does not assert encoding-independent Ext/Tor. See the
+[reference](src/reference/change_of_posets.md) for the static and live contracts.
+
+[Following vectors and constructing generated submodules](tutorials/generated_submodules.ipynb)
+compares selected-vector images with ambient maps and follows their inclusions
+and quotients. The figures preserve no-map, zero-image and unrepresented-region
+semantics.
+
+## Ext classes and products
+
+An Ext or Tor result defaults to a table of its computed dimensions. To
+understand a particular class, select its degree and quotient coordinates:
+
+```julia
+OP.visualize(E)
+OP.visualize(E; kind=:derived_class, degree=2, vector=[1])
+```
+
+The selected view shows an actual representative and adjacent differentials.
+Algebras additionally accept `kind=:product_table, p=1, q=1`; projective Ext
+models accept `kind=:yoneda_product` with an explicit right model and both
+coordinate vectors. Product requests perform algebraic work and retain the
+finite-category, field, degree and basis conventions. Tor multiplication
+requires supplied chain products. Cropping a matrix changes its display,
+not the computation or retained coefficients.
+
+The [derived-algebra guide](tutorials/derived.ipynb) follows the two routes
+through a diamond and demonstrates supplied Tor multiplication. The
+[reference](src/reference/derived.md#visualization-requests) specifies budgets,
+selection keywords and validation. These views are static; exact sequences
+are drawn from actual supplied sequence objects.
+
+## Combine and share selected views
+
+Use `visual_panel` to select one view, `overlay_visuals` to combine compatible
+layers, and `compose_visuals` to arrange named panels with attached explanations.
+The [composition guide](tutorials/compose_figures.ipynb) develops signed overlays,
+checked source-to-interval arrows, matrix callouts and exports. The
+[short recipe](recipes/compose_figure.md) starts with a scalar table. Coordinate
+context and annotation meaning remain part of the figure; matching colors do
+not establish a mathematical correspondence.
+
+## Compare corresponding results
+
+Use `compare_visuals` for shared-scale dimensions, anchored ranks and ordinary
+barcodes across fields, degrees or construction choices. Declare which finite
+labels or original parameter queries correspond before computing differences.
+The [comparison guide](tutorials/comparisons.ipynb) separates characteristic
+changes, basis changes, exact refinement, rounded queries and numerical rank.
+The [reference](src/reference/visualization.md#comparisons-through-declared-probes)
+defines masks, endpoint conventions, query budgets and linked-session behavior.
+
+## Explore collections of supplied results
+
+Use `visual_collection` for named feature rows, distance or kernel matrices and
+optional supplied embeddings. Selection links a sample to its retained invariant
+and source views, and an ordered pair to its matching witness. Preparation never
+computes all pairs or normalizes the inputs. The
+[comparison guide](tutorials/comparisons.ipynb) develops a small interval example;
+the [reference](src/reference/visualization.md#collections-of-features-distances-and-kernels)
+specifies mathematical context, masks, budgets and lifecycle.
+
+## Display paths
+
+CairoMakie produces static figures. WGLMakie also displays live inspection
+applications while Julia is running. A volume `:slice_viewer` returns a browser
+application with labelled sliders; render it again for an independent view.
+Its Cairo counterpart shows the currently selected plane. A saved mathematical
+view can offer offline selection among precomputed states; it cannot perform
+new Julia queries. The [display support matrix](visualization_support.md)
+separates these paths and their frontend verification.
+
+## Enter and repair a finite diagram
+
+If your input is a finite diagram of spaces and maps, `module_editor` provides
+labelled tables for its order, dimensions and coefficients. A failed commuting
+relation shows both paths and their composite matrices; valid input exports an
+ordinary module ready for algebraic queries. Finite indicator presentations
+can be entered through support lists and a matrix as well. The
+[construction guide](tutorials/presentations.ipynb) explores both inputs, and
+the [editor reference](src/reference/visual_sessions.md#author-a-finite-module-or-presentation)
+specifies validation, history and live/static behavior.
+
+
+## Explore rank across a region
+
+[Generalized-rank queries](tutorials/generalized_rank_queries.ipynb) starts with
+a finite diagram whose individual arrow ranks miss its branching compatibility.
+Use `generalized_rank_session(M; vertices=[1,2,3])` to explore a connected convex
+finite region; opt into `witnesses=true` for the limit-to-colimit matrices.
+A positive 2D grid encoding also supports an explicit `boundary=true` witness,
+with repeated boundary occurrences and full-bar multiplicities preserved.
+
+For an ambient question, `generalized_rank_session(enc; center=(1,2), width=1)`
+uses a continuous closed worm and exact GRIL widths on the supported positive
+2D grid extension. Finite-label regions and continuous worms have different
+domains. The guide develops this distinction and explains why a landscape
+supremum need not be attained. See the [session contracts](src/reference/visual_sessions.md#query-generalized-rank-regions)
+and [computation account](implementation/generalized_rank.md).
+
+For scalar invariants with three or more coordinates, the [features guide](tutorials/features.ipynb)
+shows linked coordinate-plane sections, fixed values, layer selection and shared
+signed scales. It also explains how to place stored line landscapes in ambient
+coordinates before drawing them.
+
+## Repeated results and uncertainty
+
+The [ensemble guide](tutorials/uncertainty.ipynb) compares repeated scalar
+queries in their original parameter coordinates, displays empirical bands and
+support frequencies, and links a selected replicate to retained sources. It
+distinguishes descriptive variability from mean inference under explicit IID
+and population-bounding assumptions. See the [ensemble reference](src/reference/ensembles.md)
+for accepted shapes, policies and finite-probe coverage.

@@ -1,5 +1,6 @@
 using Documenter
 using TOML
+import TamerOp
 
 # Notebook execution/conversion precedes this step. Formatting never reruns cells.
 source = joinpath(@__DIR__, ".build", "src")

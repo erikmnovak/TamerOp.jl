@@ -1,0 +1,392 @@
+schema_version = 1
+review_date = "2026-10-10"
+generated_page = "docs/visualization_support.md"
+renderer_sources = ["ext/visualization_wgl_ensembles.jl", "ext/visualization_makie_retained.jl", "ext/visualization_makie_annotations.jl", "ext/visualization_wgl_fields.jl", "ext/visualization_wgl_generalized_rank.jl", "ext/visualization_makie_batches.jl", "ext/visualization_wgl_editor.jl", "ext/visualization_makie_common.jl", "ext/visualization_makie_composition.jl", "ext/visualization_wgl_chains.jl", "ext/visualization_wgl_collections.jl", "ext/visualization_wgl_comparisons.jl", "ext/visualization_wgl_complexes.jl", "ext/visualization_wgl_components.jl", "ext/visualization_wgl_inspection.jl", "ext/visualization_wgl_intervals.jl", "ext/visualization_wgl_matchings.jl", "ext/visualization_wgl_signed.jl", "ext/visualization_wgl_slices.jl", "ext/visualization_wgl_spectral.jl", "ext/visualization_wgl_transport.jl", "ext/visualization_wgl_volume.jl", "ext/TamerOpCairoMakieExt.jl", "ext/TamerOpWGLMakieExt.jl"]
+core_sources = ["src/Visualization.jl", "src/visualization/types.jl", "src/visualization/style.jl", "src/visualization/rendering.jl", "src/visualization/validation.jl", "src/visualization/inspection_rendering.jl"]
+shared_browser_tests = ["static-export.spec.mjs"]
+shared_native_tests = ["test_visualization_a38.jl", "test_contracts.jl"]
+workflow = ".github/workflows/Visualization.yml"
+
+[verification]
+date = "2026-10-10"
+environment = "Julia 1.12.1, Makie 0.24.15, CairoMakie 0.15.15, WGLMakie 0.13.15, Bonito 5.2.0, Observables 0.5.5; Node 22.23.3, Playwright 1.63.0 and Chromium 153.0.8010.12 (revision 1243). One Julia/BLAS thread and one browser worker."
+native = "The earlier 29-owner qualification exercised: 23,860 assertions passed and 12 nested-app stylesheet assertions failed. After repair, a fresh focused run passed 251/251 embedding, style, coordinate, volume and WGL-export assertions. The later saved-HTML readability repair passed 103/103 export assertions in another fresh process. A99 subsequently passed 3,200 focused owner/API assertions with graphics loaded; its final field-label/export-control rendering run passed 14/14. A54 subsequently passed 545 focused checks, including 19 actual Cairo/WGL renderer/export assertions, and an extended 462-assertion boundary-oracle run. A44 subsequently passed 876 focused checks, including 43 native Cairo/WGL assertions. Its separate fresh mathematical regression run passed 1,158 and API guards passed 2,936. These overlapping counts are separate runs, not an aggregate total."
+live = "The earlier 27 standalone Chromium scenarios passed. Both additional A99 editor scenarios passed, including numeric edits, invalid relation recovery, downloads, linked-client cleanup and narrow keyboard scrolling. The strengthened composition-host keyboard scenario also passed against a fresh Julia server, including resize, pointer pan and unchanged correspondence geometry. Both A54 scenarios passed on the final browser run: finite selection, boundary occurrences/bars, matrix toggles, exact rational worm entry, verified pointer centers, layer reuse, linked-client cleanup and narrow keyboard scrolling. The A44 standalone Chromium scenario passed real sliders, native chart selection, plane/layer/baseline changes, invalid-input rollback, two-viewer synchronization with visible slider positions after reset, stale-error clearing, disconnect cleanup, narrow keyboard scrolling and close/release."
+offline = "All 3 scenarios passed with Julia stopped and networking disabled: fixed SVG compositions, saved finite states, and an actually rendered WGL scene with reload. Narrow SVG views preserve their intrinsic size and support keyboard and pointer scrolling."
+
+[[family]]
+id = "encoding"
+title = "Encoding regions and exact query overlays"
+sources = ["src/visualization/builders_encoding.jl", "src/visualization/region_geometry.jl"]
+native_tests = ["test_visualization.jl"]
+browser_tests = ["manual-inspectors.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Linked parameter selection uses the finite-module inspector; planar geometry only."
+
+[[family]]
+id = "ingestion"
+title = "Point clouds, graphs, images and construction counts"
+sources = ["src/visualization/builders_ingestion.jl", "src/visualization/source_previews.jl"]
+native_tests = ["test_visualization.jl", "test_visualization_a39.jl"]
+browser_tests = ["source-preview-offline.spec.mjs"]
+live = "unsupported"
+cairo = "native"
+wgl = "native"
+html = "browser"
+notebooks = "unverified"
+scope = "Static source previews with original IDs, explicit display/preparation budgets and bounded content-checked SessionCache reuse. Metric graphs are labelled reconstructions; supplied graphs retain actual edges. Exported source-preview HTML has its own offline Chromium check. ImageNd live volume controls have their own row."
+
+[[family]]
+id = "volume"
+title = "Image volume slice widget"
+sources = []
+native_tests = ["test_visualization.jl"]
+browser_tests = ["volume.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "unsupported"
+notebooks = "unverified"
+scope = "Displayed axes and fixed indices are explicit. Cairo renders the selected plane; live sliders require Julia."
+
+[[family]]
+id = "invariants"
+title = "Hilbert/rank, signed density, MPPI and sampled landscapes"
+sources = ["src/visualization/builders_invariants.jl"]
+native_tests = ["test_visualization.jl", "test_visualization_a41_intervals.jl"]
+browser_tests = []
+live = "unsupported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Static recipes; anchored ranks, signed queries and interval inspectors have separate rows. Sampling coordinates are not ambient landscape certificates."
+
+[[family]]
+id = "modules"
+title = "Finite spaces, maps and presentations"
+sources = ["src/visualization/builders_modules.jl", "src/visualization/builders_presentations.jl", "src/visualization/hasse_layout.jl", "src/visualization/inspection_session.jl"]
+native_tests = ["test_visualization.jl"]
+browser_tests = ["manual-inspectors.spec.mjs", "style-zoom.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Actual finite labels, exact entry, fields, selected image bases and parameter-order masks."
+
+[[family]]
+id = "rank"
+title = "Anchored rank sections"
+sources = ["src/visualization/builders_rank_sections.jl"]
+native_tests = ["test_visualization_a84.jl"]
+browser_tests = ["rank-sections.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Uses the module session; one selected anchor row and explicit comparable-pair domain."
+
+[[family]]
+id = "slices"
+title = "Restrictions to lines and slice barcodes"
+sources = ["src/visualization/builders_slices.jl", "src/visualization/inspection_slices.jl"]
+native_tests = ["test_visualization.jl", "test_visualization_a41_slices.jl", "test_visualization_a41_sessions.jl", "test_visualization_a41_live.jl"]
+browser_tests = ["inspectors.spec.mjs", "manual-inspectors.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Whole-line certification and window censoring remain different contracts; no between-line class continuation."
+
+[[family]]
+id = "intervals"
+title = "Barcodes and persistence diagrams"
+sources = ["src/visualization/interval_views.jl", "src/visualization/inspection_intervals.jl"]
+native_tests = ["test_visualization_a41_intervals.jl", "test_visualization_a41_sessions.jl", "test_visualization_a41_live.jl"]
+browser_tests = ["inspectors.spec.mjs", "style-zoom.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Multiplicity, source-member identity, endpoints, infinity and clipping; retained representatives are opt-in."
+
+[[family]]
+id = "matching"
+title = "Matching witnesses and distance comparisons"
+sources = ["src/visualization/builders_matchings.jl", "src/visualization/inspection_matchings.jl"]
+native_tests = ["test_visualization_a85.jl"]
+browser_tests = ["matching.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Selected supplied/computed witnesses and finite-window optimizer scope; not a general interleaving certificate."
+
+[[family]]
+id = "signed"
+title = "Signed decompositions and cancellation"
+sources = ["src/visualization/builders_signed.jl", "src/visualization/inspection_signed.jl"]
+native_tests = ["test_visualization_a86.jl"]
+browser_tests = ["signed.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Named observables and declared reconstruction domains, exact terms, endpoint glyphs and smoothing."
+
+[[family]]
+id = "morphisms"
+title = "Morphisms, Hom and exact sequences"
+sources = ["src/visualization/builders_morphisms.jl", "src/visualization/builders_morphism_comparisons.jl"]
+native_tests = ["test_visualization_a42b.jl", "test_visualization_a42b_comparisons.jl"]
+browser_tests = []
+live = "unsupported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Selections are Julia arguments. These static recipes do not advertise a bespoke live inspector."
+
+[[family]]
+id = "resolutions"
+title = "Betti/Bass and resolution incidence"
+sources = ["src/visualization/builders_resolutions.jl"]
+native_tests = ["test_visualization_a42c.jl"]
+browser_tests = []
+live = "unsupported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Static selected summands/maps in the declared category; no ambient free-resolution inference."
+
+[[family]]
+id = "spectral"
+title = "Spectral pages and differentials"
+sources = ["src/visualization/builders_spectral.jl", "src/visualization/inspection_spectral.jl"]
+native_tests = ["test_visualization_a42d.jl"]
+browser_tests = ["spectral.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Selected page/degree, actual differentials and quotient coordinates; associated-graded scope."
+
+[[family]]
+id = "propagation"
+title = "Selected vectors and generated submodules"
+sources = ["src/visualization/builders_propagation.jl"]
+native_tests = ["test_propagation.jl"]
+browser_tests = []
+live = "unsupported"
+cairo = "native"
+wgl = "shared"
+html = "shared"
+notebooks = "unverified"
+scope = "Static arguments; checked module-map propagation is not a splitting or class-tracking claim."
+
+[[family]]
+id = "transport"
+title = "Refinement and change of poset"
+sources = ["src/visualization/builders_transport.jl", "src/visualization/inspection_transport.jl"]
+native_tests = ["test_visualization_a88.jl"]
+browser_tests = ["transport.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Verified order maps and actual correspondences, not equal-index identification."
+
+[[family]]
+id = "source"
+title = "Source representatives and fillings"
+sources = ["src/visualization/builders_source_chains.jl"]
+native_tests = ["test_source_representatives.jl", "test_visualization_a41_live.jl", "test_visual_session_exports.jl"]
+browser_tests = ["source.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "shared"
+html = "shared"
+notebooks = "unverified"
+scope = "Uses retained interval/source correspondence; finite-module bases alone do not identify source cycles."
+
+[[family]]
+id = "complexes"
+title = "Filtered source complexes"
+sources = ["src/visualization/builders_complexes.jl", "src/visualization/inspection_complexes.jl"]
+native_tests = ["test_visualization_a92.jl"]
+browser_tests = ["complex.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Actual cells, grades and source IDs, periodic/3D geometry and explicit skeleton/display budgets."
+
+[[family]]
+id = "chains"
+title = "Chains, cohomology classes and connecting maps"
+sources = ["src/visualization/builders_chains.jl", "src/visualization/inspection_chains.jl"]
+native_tests = ["test_visualization_a89.jl"]
+browser_tests = ["chains.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Chosen representatives, original-basis witnesses and field-aware quotient coordinates."
+
+[[family]]
+id = "derived"
+title = "Ext, Tor and products"
+sources = ["src/visualization/builders_derived.jl"]
+native_tests = ["test_visualization_a90.jl"]
+browser_tests = []
+live = "unsupported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Static selected representatives and validated products; no bespoke live inspector."
+
+[[family]]
+id = "components"
+title = "H0 components and merge histories"
+sources = ["src/visualization/builders_components.jl", "src/visualization/inspection_components.jl"]
+native_tests = ["test_visualization_a91.jl"]
+browser_tests = ["components.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Original memberships, ties and merge edges; component identity is not an arbitrary barcode basis."
+
+[[family]]
+id = "geometric"
+title = "Multicover and geometric constructions"
+sources = ["src/visualization/builders_geometric.jl"]
+native_tests = ["test_visualization_a93.jl"]
+browser_tests = ["geometric.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Uses the complex session; retained construction cells, radius/depth and explicit lifted versus schematic geometry."
+
+[[family]]
+id = "comparisons"
+title = "Field, degree and construction comparisons"
+sources = ["src/visualization/builders_comparisons.jl", "src/visualization/inspection_comparisons.jl"]
+native_tests = ["test_visualization_a94.jl"]
+browser_tests = ["comparison.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Explicit alignment, scale and provenance; no inferred basis or class identity."
+
+[[family]]
+id = "collections"
+title = "Supplied feature, distance and kernel collections"
+sources = ["src/visualization/builders_collections.jl", "src/visualization/inspection_collections.jl"]
+native_tests = ["test_visualization_a98.jl"]
+browser_tests = ["collection.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Stable sample identities, declared features and supplied embeddings; no hidden all-pairs computation."
+
+[[family]]
+id = "composition"
+title = "Semantic figure composition"
+sources = ["src/visualization/composition.jl", "src/visualization/session_composition.jl"]
+native_tests = ["test_visualization_a102.jl", "test_visual_session_composition.jl"]
+browser_tests = ["composition.spec.mjs", "composition-offline.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "browser"
+notebooks = "unverified"
+scope = "Authored versus checked anchors; live axis transforms and fixed self-contained SVG HTML are different products. Browser acceptance covers the maintained Bonito host; embedding a raw Figure in another host requires that host's keyboard integration."
+
+[[family]]
+id = "saved"
+title = "Saved mathematical views"
+sources = ["src/visualization/saved_sessions.jl", "src/visualization/session_html.jl"]
+native_tests = ["test_visualization_a100.jl", "test_visual_session_codec.jl", "test_visual_session_boundaries.jl", "test_visual_session_exports.jl"]
+browser_tests = ["portable-session.spec.mjs"]
+live = "precomputed"
+cairo = "native"
+wgl = "shared"
+html = "browser"
+notebooks = "unverified"
+scope = "Offline selection is among explicitly precomputed states. Arbitrary Julia computations and source replay remain live operations. Narrow views scroll complete figures at their intrinsic size."
+
+[[family]]
+id = "editor"
+title = "Validated finite-module and fringe editor"
+sources = ["src/visualization/module_editor.jl", "src/visualization/editor_export.jl"]
+native_tests = ["test_visualization_a99.jl"]
+browser_tests = ["editor.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Cairo/WGL render retained snapshots; editing needs the live WGL table controls. Exact failed-path witnesses, invalid drafts, finite fringe support closure, bounded history and checked object/code export. Saved HTML is a prepared view, not an offline editor. Live notebook hosts require separate qualification."
+
+[[family]]
+id = "generalized_rank"
+title = "Generalized rank regions, boundary zigzags and GRIL"
+sources = ["src/visualization/builders_generalized_rank.jl", "src/visualization/inspection_generalized_rank.jl"]
+native_tests = ["test_visualization_a54.jl"]
+browser_tests = ["generalized-rank.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Exact finite-region and continuous-worm queries; optional matrices and grid-index boundary barcodes retain repeated occurrences. GRIL layers use exact suprema at declared probes. Live query selection requires Julia; snapshots are static. No learned probes, derivatives or ambient decomposition claim."
+
+[[family]]
+id = "coordinate_fields"
+title = "Coordinate sections and ambient landscapes"
+sources = ["src/visualization/builders_fields.jl", "src/visualization/inspection_fields.jl"]
+native_tests = ["test_visualization_a44.jl"]
+browser_tests = ["fields.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Declared Cartesian scalar samples and compatible comparisons, ordered planes, fixed values, layer IDs, global signed scales and affine contours. Ambient landscape queries preserve actual line parameters and source windows, with unavailable cells and conditional errors. Live selection requires Julia; static snapshots do not add saved-source reconstruction. No exact isosurface or interpolation between stored landscape lines is inferred."
+
+[[family]]
+id = "ensembles"
+title = "Repeated invariants and mean uncertainty"
+sources = ["src/visualization/builders_ensembles.jl", "src/visualization/inspection_ensembles.jl"]
+native_tests = ["test_visualization_a95.jl"]
+browser_tests = ["ensemble.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "shared"
+notebooks = "unverified"
+scope = "Aligned supplied grids and ordinary diagrams; empirical spread/frequency, conditional bounded-mean and approximate row-bootstrap bands at fixed probes. Linked replicate/source and probe selection requires Julia; no continuous-domain or whole-module confidence is implied."

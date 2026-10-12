@@ -2,6 +2,62 @@ with_fields(FIELDS_FULL) do field
 K = CM.coeff_type(field)
 @inline c(x) = CM.coerce(field, x)
 
+@testset "A28 oriented structured products" begin
+    for sizes in ((4,), (3,2), (2,1,3)), orientation in Iterators.product(ntuple(_ -> (-1,1), length(sizes))...)
+        points = collect(CartesianIndices(sizes))[:]
+        relation = BitMatrix([all(orientation[k] * (points[a][k] - points[b][k]) <= 0
+            for k in eachindex(sizes)) for a in eachindex(points), b in eachindex(points)])
+        P = FF.ProductOfChainsPoset(sizes; orientation=orientation)
+        D = FF.FinitePoset(relation)
+        @test FF.check_poset(P).valid
+        @test FF.leq_matrix(P) == relation
+        expected_edges = Set((a,b) for a in eachindex(points), b in eachindex(points)
+            if a != b && relation[a,b] && !any(w != a && w != b && relation[a,w] && relation[w,b]
+                                              for w in eachindex(points)))
+        @test Set(FF.cover_edges(P)) == expected_edges
+        for cached in (false,true)
+            cached && FF.build_cache!(P; cover=true, updown=true)
+            for a in eachindex(points)
+                @test collect(FF.upset_indices(P,a)) == findall(relation[a,:])
+                @test collect(FF.downset_indices(P,a)) == findall(relation[:,a])
+            end
+        end
+        axes = ntuple(k -> collect(1.0:sizes[k]), length(sizes))
+        @test FF.poset_equal(D, TO.DataIngestion.poset_from_axes(axes; orientation=orientation))
+        # Vertex labels and the actual maps agree under the identity indexing.
+        source = findfirst(a -> all(relation[a,:]), eachindex(points))
+        target = findfirst(a -> all(relation[:,a]), eachindex(points))
+        H = FF.one_by_one_fringe(P, FF.principal_upset(P,source), FF.principal_downset(P,target), c(1); field=field)
+        M = IR.pmodule_from_fringe(H)
+        @test Dict(TO.rank_invariant(M)) == Dict((a,b)=>1 for a in eachindex(points), b in eachindex(points) if relation[a,b])
+        @test all(Matrix(TO.map_leq(M,a,b)) == fill(c(1),1,1)
+                  for a in eachindex(points), b in eachindex(points) if relation[a,b])
+        # Classifier signs are a coordinate change, independent of index-order
+        # signs. Representatives must undo that coordinate change exactly.
+        pi = EC.GridEncodingMap(P, axes; orientation=orientation)
+        reps = EC.representatives(pi)
+        @test [EC.locate(pi, x) for x in reps] == collect(eachindex(points))
+        located = zeros(Int,length(points))
+        EC.locate_many!(located, pi, hcat(collect.(reps)...))
+        @test located == collect(eachindex(points))
+        mktemp() do path, io
+            close(io)
+            SER.save_encoding_json(path, P, H, pi)
+            restored, rpi = SER.load_encoding_json(path; output=:fringe_with_pi)
+            RP = FF.base_poset(restored)
+            @test RP isa FF.ProductOfChainsPoset
+            @test RP.orientation == orientation
+            @test FF.leq_matrix(RP) == relation
+            @test EC.representatives(rpi) == reps
+            RM = IR.pmodule_from_fringe(restored)
+            @test all(Matrix(TO.map_leq(RM,a,b)) == Matrix(TO.map_leq(M,a,b))
+                for a in eachindex(points), b in eachindex(points) if relation[a,b])
+        end
+    end
+    @test_throws ArgumentError FF.ProductOfChainsPoset((2,3); orientation=(1,0))
+    @test_throws ArgumentError TO.DataIngestion.poset_from_axes(([1,2],); orientation=(0,))
+end
+
 @testset "A12 fringe inspection never computes missing fibers" begin
     for n in (3, 20)
         P = chain_poset(n)

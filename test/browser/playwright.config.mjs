@@ -11,13 +11,15 @@ const project = process.env.TAMEROP_JULIA_PROJECT || directory;
 export default defineConfig({
   testDir: directory,
   testMatch: '*.spec.mjs',
+  testIgnore: ['portable-session.spec.mjs', 'composition-offline.spec.mjs', 'static-export.spec.mjs', 'source-preview-offline.spec.mjs'],
   fullyParallel: false,
+  forbidOnly: true,
   workers: 1,
   retries: 0,
   timeout: 600_000,
   expect: { timeout: 30_000 },
   outputDir: process.env.TAMEROP_BROWSER_OUTPUT || path.join(directory, 'test-results'),
-  reporter: [['list'], ['html', { open: 'never' }]],
+  reporter: [['list'], ['html', { open: 'never' }], [path.join(directory, 'acceptance-reporter.mjs')]],
   globalTeardown: path.join(directory, 'stop-server.mjs'),
   use: {
     browserName: 'chromium',

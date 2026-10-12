@@ -52,3 +52,5 @@ tamerop_outputs/
 /test/browser/playwright-report/
 /test/browser/Manifest.toml
 /test/browser/.stop-server
+
+/test/browser/artifacts/

@@ -105,7 +105,7 @@ function _subdivision_cech_vertices(X::Matrix{QQ}, spec;
     return geometry.masks[keep],geometry.radii2[keep]
 end
 
-function _subdivision_cech_complex(X::Matrix{QQ}, spec; return_simplex_tree=false,
+function _subdivision_cech_complex(X::Matrix{QQ}, spec; return_simplex_tree=false, retain_geometry=false,
                                     cache::Union{Nothing,EncodingCache}=nothing)
     n = size(X,1)
     requested_depth = get(spec.params,:depth_range,nothing)
@@ -167,5 +167,15 @@ function _subdivision_cech_complex(X::Matrix{QQ}, spec; return_simplex_tree=fals
     depth_axis = AlgebraicReal[-k for k in hi:-1:lo]
     axes = get(spec.params,:axes,(radius_axis,depth_axis))
     _record_ingestion_backend(:multicover,:subdivision_cech)
+    if retain_geometry
+        labels = [Tuple(_rhomboid_indices(mask,n)) for mask in masks]
+        # Barycentres are a schematic drawing of labelled flags, not an embedding.
+        positions = [Tuple(vcat([isempty(s) ? zero(QQ) : sum(X[i,a] for i in s)/length(s)
+                                for a in Base.axes(X,2)],QQ[length(s)])) for s in labels]
+        geometry = [[positions[v] for v in simplex] for group in simplices for simplex in group]
+        sources = [(;subsets=Tuple(labels[v] for v in simplex),radius_squared=radii2[last(simplex)])
+                   for group in simplices for simplex in group]
+        return result,axes,(1,-1),(;geometry,sources,backend=:subdivision_cech,representation=:schematic_flags)
+    end
     return result,axes,(1,-1)
 end

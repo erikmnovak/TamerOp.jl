@@ -850,6 +850,41 @@ end
     end
 end
 
+@testset "A36 nonuniform heatmap centers edges and backend parity" begin
+    V = TamerOp.Visualization
+    # The explicit numbers identify each row/column independently; NaN is an
+    # absent cell, not a measured zero. Center and edge vectors are distinct
+    # contracts, including when either physical coordinate decreases.
+    values = [11.0 23.0 35.0; 47.0 NaN 69.0]
+    plotted = [11.0 47.0; 23.0 NaN; 35.0 69.0]
+    fixtures = (
+        ([-2.0, 0.0, 5.0], [1.0, 4.0], [-3.0, -1.0, 2.5, 7.5], [-0.5, 2.5, 5.5]),
+        ([-2.0, -1.0, 0.0, 5.0], [1.0, 2.0, 4.0], [-2.0, -1.0, 0.0, 5.0], [1.0, 2.0, 4.0]),
+        ([5.0, 0.0, -2.0], [4.0, 1.0], [7.5, 2.5, -1.0, -3.0], [5.5, 2.5, -0.5]),
+    )
+    specs = [V.VisualizationSpec(:coordinate_oracle;
+        layers=V.AbstractVisualizationLayer[V.HeatmapLayer(x, y, copy(values), :viridis, 1.0, "value")])
+        for (x, y, _, _) in fixtures]
+    @test all(s -> V.check_visual_spec(s).valid, specs)
+    for (package, backend) in ((:CairoMakie, :cairomakie), (:WGLMakie, :wglmakie))
+        if Base.find_package(string(package)) === nothing
+            @test_skip false # The required graphics lane loads both extensions.
+            continue
+        end
+        @eval import $package
+        mk = getfield(@__MODULE__, package)
+        for (spec, (_, _, xedges, yedges)) in zip(specs, fixtures)
+            fig = V.render(spec; backend=backend)
+            ax = only(block for block in fig.content if block isa mk.Axis)
+            heatmap = only(plot for plot in ax.scene.plots if plot isa mk.Heatmap)
+            # Inspect the actual plotted cells, not just the spec passed in.
+            @test collect(heatmap[1][]) == xedges
+            @test collect(heatmap[2][]) == yedges
+            @test isequal(heatmap[3][], plotted)
+        end
+    end
+end
+
 @testset "Visualization engine v1" begin
     TOA = TamerOp.Advanced
     VIZ = TamerOp.Visualization
@@ -1030,14 +1065,14 @@ end
     @test TamerOp.available_visuals(nothing) == ()
     @test TamerOp.available_visuals(grid_pi) == (:regions, :region_labels, :query_overlay)
     @test TamerOp.available_visuals(compiled_grid) == (:regions, :region_labels, :query_overlay)
-    @test TamerOp.available_visuals(enc_result) == (:regions, :region_labels, :query_overlay, :hasse, :module_inspector, :rank_section)
-    @test TamerOp.available_visuals(emap) == (:regions, :region_labels, :pushforward_overlay)
+    @test TamerOp.available_visuals(enc_result) == (:regions, :region_labels, :query_overlay, :hasse, :module_inspector, :rank_section, :generalized_rank)
+    @test TamerOp.available_visuals(emap) == (:order_map, :regions, :region_labels, :pushforward_overlay)
     @test TamerOp.available_visuals(cref) == (:common_refinement,)
-    @test TamerOp.available_visuals(trans) == (:pushforward_overlay,)
+    @test TamerOp.available_visuals(trans) == (:change_of_poset, :pushforward_overlay)
     @test TamerOp.available_visuals(img) == (:mpp_image,)
     @test TamerOp.available_visuals(L) == (:mp_landscape, :landscape_slices)
-    @test TamerOp.available_visuals(sb) == (:rectangles, :density_image)
-    @test TamerOp.available_visuals(pm) == (:signed_atoms,)
+    @test TamerOp.available_visuals(sb) == (:rectangles, :density_image, :signed_cancellation, :signed_diagonals, :signed_prominence)
+    @test TamerOp.available_visuals(pm) == (:signed_atoms, :signed_cancellation)
     @test TamerOp.available_visuals(slice_single) == (:barcode, :persistence_diagram, :barcode_bank, :slice_family)
     @test TamerOp.available_visuals(arr) == (:fibered_arrangement, :fibered_query, :fibered_cell_highlight, :fibered_tie_break, :fibered_offset_intervals, :fibered_projected_comparison)
     @test TamerOp.available_visuals(fam) == (:fibered_family, :fibered_chain_cells, :fibered_family_contributions, :fibered_distance_diagnostic)
@@ -1240,8 +1275,8 @@ end
     @test length(spec_map.layers[1].segments) == FF.nvertices(Qmap)
 
     spec_cref = TOA.visual_spec(cref; kind=:common_refinement)
-    @test spec_cref.layers[1] isa TOA.PointLayer
-    @test length(spec_cref.layers[1].points) == FF.nvertices(Pcommon)
+    @test spec_cref.panels[1].kind === :transport_hasse
+    @test length(spec_cref.panels[1].metadata.vertex_ids) == FF.nvertices(Pcommon)
 
     spec_bar = TOA.visual_spec(slice_single; kind=:barcode)
     @test spec_bar.layers[1] isa TOA.SegmentLayer
@@ -1730,6 +1765,11 @@ end
             @test occursin("Bonito", html)
             @test !occursin("VisualizationSpec", html)
             @test sizeof(html) > 10_000
+            output = get(ENV, "TAMEROP_STATIC_HTML", "")
+            if !isempty(output)
+                mkpath(dirname(abspath(output)))
+                cp(TamerOp.export_path(exported), output; force=true)
+            end
             @test WGLMakie.Makie.current_backend() === WGLMakie
             if have_cairo
                 # Import order and a previously active WGL renderer must not
@@ -2058,6 +2098,91 @@ end
     @test !isempty(thin_spec.metadata.warnings)
 end
 
+@testset "A28 grid coordinate and index orientations compose" begin
+    V = TamerOp.Visualization
+    for index_sign in (-1,1), coordinate_sign in (-1,1)
+        P = FF.ProductOfChainsPoset((2,2); orientation=(index_sign,1))
+        M = MD.PModule{QQ}(P, ones(Int,4),
+            Dict(edge => ones(QQ,1,1) for edge in FF.cover_edges(P)); field=CM.QQField())
+        pi = EC.GridEncodingMap(P, ([0,2],[0,2]); orientation=(coordinate_sign,1))
+        enc = RES.EncodingResult(P,M,EC.compile_encoding(P,pi))
+        start_x, end_x = index_sign == 1 ? (0,2coordinate_sign) : (2coordinate_sign,0)
+        a, b = (start_x,0), (end_x,2)
+        for kind in (:module_inspector, :rank_section)
+            spec = kind == :module_inspector ?
+                V.visual_spec(enc;kind,parameter_pair=(a,b)) :
+                V.visual_spec(enc;kind,source=a,point=b)
+            @test spec.metadata.inspection.defined
+            @test spec.metadata.inspection.rank == 1
+            @test spec.metadata.inspection.matrix == ones(QQ,1,1)
+            @test V.check_visual_spec(spec).valid
+            if kind == :rank_section
+                increasing = index_sign * coordinate_sign == 1
+                @test occursin(increasing ? "increasing" : "decreasing",spec.panels[1].axes.xlabel)
+            end
+        end
+        backward = V.visual_spec(enc;kind=:module_inspector,parameter_pair=(b,a))
+        @test !backward.metadata.inspection.defined
+        @test CC.describe(V.ComparisonCase(enc)).query_orientation == (index_sign*coordinate_sign,1)
+        @test first(V._inspection_slice_capability(enc,true)) == (index_sign*coordinate_sign == 1)
+    end
+end
+
+@testset "A80 native box strata retain exact drawing geometry" begin
+    V = TamerOp.Visualization
+    for (upper,dimension,vertices) in (([0,2],1,Set([(0,0),(0,2)])),
+                                      ([0,0],0,Set([(0,0)])))
+        _,_,pi = PLB.encode_fringe_boxes([PLB.BoxUpset([0,0])],[PLB.BoxDownset(upper)])
+        rid = EC.locate(pi,(0,0))
+        spec = V.visual_spec(pi;kind=:regions,box=([-1,-1],[3,3]))
+        pieces = filter(c -> c.region_id == rid,spec.metadata.geometry.components)
+        @test length(pieces) == 1
+        @test only(pieces).dimension == dimension
+        @test Set(only(pieces).vertices) == vertices
+        @test all(only(pieces).vertex_included)
+        @test V.check_visual_spec(spec).valid
+        query = V.visual_spec(pi;kind=:query_overlay,
+            points=[(-1,0),(0,0),(1,0)],box=([-1,-1],[3,3]))
+        @test [q.region_id for q in query.metadata.query_readout] ==
+              [EC.locate(pi,x) for x in ((-1,0),(0,0),(1,0))]
+    end
+    _,_,pi = PLB.encode_fringe_boxes([PLB.BoxUpset([1,0]),PLB.BoxUpset([nextfloat(1.0),0])],
+        [PLB.BoxDownset([1,1]),PLB.BoxDownset([nextfloat(1.0),1])])
+    spec = V.visual_spec(pi;kind=:regions,box=([0,-1],[2,2]))
+    @test V.check_visual_spec(spec).valid
+    @test all(EC.locate(pi,x) == r for (r,x) in enumerate(EC.representatives(pi)))
+    @test any(c -> c.dimension == 2 &&
+              maximum(p[1] for p in c.vertices)-minimum(p[1] for p in c.vertices) ==
+                  QQ(nextfloat(1.0))-QQ(1),spec.metadata.geometry.components)
+end
+
+@testset "A80 box strata Cairo and WGL coordinates" begin
+    V = TamerOp.Visualization
+    for (backend,name) in ((:cairomakie,"CairoMakie"),(:wglmakie,"WGLMakie"))
+        if Base.find_package(name) === nothing
+            @test_skip false
+            continue
+        end
+        backend == :cairomakie ? (@eval import CairoMakie) : (@eval import WGLMakie)
+        Makie = backend == :cairomakie ? CairoMakie.Makie : WGLMakie.Makie
+        for upper in ([0,2],[0,0])
+            _,_,pi = PLB.encode_fringe_boxes([PLB.BoxUpset([0,0])],[PLB.BoxDownset(upper)])
+            spec = V.visual_spec(pi;kind=:regions,box=([-1,-1],[3,3]))
+            fig = V.render(spec;backend=backend,size=(620,480))
+            axis = only(x for x in fig.content if x isa Makie.Axis)
+            drawn_segments = Set(Tuple(p) for plot in axis.scene.plots if plot isa Makie.LineSegments for p in plot[1][])
+            drawn_points = Set(Tuple(p) for plot in axis.scene.plots if plot isa Makie.Scatter for p in plot[1][])
+            for layer in spec.layers
+                if layer isa V.SegmentLayer
+                    @test all((s[k],s[k+1]) in drawn_segments for s in layer.segments for k in (1,3))
+                elseif layer isa V.PointLayer
+                    @test all(p in drawn_points for p in layer.points)
+                end
+            end
+        end
+    end
+end
+
 @testset "A81 visualization request and renderer contracts" begin
     VIZ = TamerOp.Visualization
     DT = TamerOp.DataTypes
@@ -2065,7 +2190,7 @@ end
     report = VIZ.check_visual_request(pc; kind=:knn_graph, k=1)
     @test report.valid
     @test :k in report.supported_keywords
-    @test report.construction_cost.work == :all_pairs_distances
+    @test report.construction_cost.work == :prepared_neighbor_graph
     @test report.construction_cost.timing == :not_measured
     @test !report.rendering.hover
     @test !report.rendering.selection
@@ -2148,21 +2273,65 @@ end
     if Base.find_package("WGLMakie") !== nothing
         @eval import WGLMakie
         VIZ = TamerOp.Visualization
+        ext = Base.get_extension(TamerOp, :TamerOpWGLMakieExt)
         A = [100i + 10j + k for i in 1:2, j in 1:3, k in 1:4]
         img = TamerOp.DataTypes.ImageNd(A)
-        for vd in ((1, 3), (3, 1))
-            spec = VIZ.visual_spec(img; kind=:slice_viewer, view_dims=vd, slice_indices=Dict(2 => 1))
-            fig = VIZ.render(spec; backend=:wglmakie, size=(600, 420))
+        for xdim in 1:3, ydim in 1:3
+            xdim == ydim && continue
+            vd = (xdim, ydim)
+            other = only(setdiff(1:3, vd))
+            spec = VIZ.visual_spec(img; kind=:slice_viewer, view_dims=vd, slice_indices=Dict(other => 1))
+            app = VIZ.render(spec; backend=:wglmakie, size=(600, 420))
+            ui = ext._inspection_ui(app)
+            fig = ui.figure
             ax = only(filter(item -> item isa WGLMakie.Axis, fig.content))
             hm = only(filter(plot -> plot isa WGLMakie.Makie.Heatmap, ax.scene.plots))
-            # Makie's first matrix axis follows displayed x.
-            expected = vd == (1, 3) ? Float64.(A[:, 1, :]) : permutedims(Float64.(A[:, 1, :]))
+            # An independent array-index oracle covers every displayed ordering;
+            # do not use the extraction helper under test to construct it.
+            expected = [Float64(A[ntuple(d -> d == xdim ? x : d == ydim ? y : 1, 3)...])
+                        for x in 1:size(A, xdim), y in 1:size(A, ydim)]
             @test hm[3][] == expected
-            slider = only(filter(item -> item isa WGLMakie.Makie.Slider, fig.content))
-            slider.value[] = 3
-            expected = vd == (1, 3) ? Float64.(A[:, 3, :]) : permutedims(Float64.(A[:, 3, :]))
+            @test only(spec.layers).values == permutedims(expected)
+            slider = only(values(ui.controls.sliders))
+            slider.value[] = size(A, other)
+            expected = [Float64(A[ntuple(d -> d == xdim ? x : d == ydim ? y : size(A, other), 3)...])
+                        for x in 1:size(A, xdim), y in 1:size(A, ydim)]
             @test hm[3][] == expected
+            static = VIZ.visual_spec(img; kind=:image, view_dims=vd,
+                                     slice_indices=Dict(other => size(A, other)))
+            @test only(static.layers).values == permutedims(expected)
+            ui.dispose()
+            @test ui.closed[]
         end
+
+        # Two fixed axes must update independently: moving the second control
+        # must retain the first selection, including when x precedes y in storage.
+        A4 = [1000i + 100j + 10k + l for i in 1:2, j in 1:3, k in 1:4, l in 1:5]
+        for vd in ((4, 2), (2, 4))
+            spec = VIZ.visual_spec(TamerOp.DataTypes.ImageNd(A4); kind=:slice_viewer,
+                view_dims=vd, slice_indices=Dict(1 => 1, 3 => 1))
+            app = VIZ.render(spec; backend=:wglmakie, size=(600, 420))
+            ui = ext._inspection_ui(app)
+            fig = ui.figure
+            ax = only(item for item in fig.content if item isa WGLMakie.Axis)
+            hm = only(plot for plot in ax.scene.plots if plot isa WGLMakie.Makie.Heatmap)
+            sliders = ui.controls.sliders
+            @test length(sliders) == 2
+            for (i, k) in ((1, 1), (2, 1), (2, 4), (1, 4))
+                sliders[1].value[] = i
+                sliders[3].value[] = k
+                expected = vd == (4, 2) ? [Float64(A4[i, j, k, l]) for l in 1:5, j in 1:3] :
+                                          [Float64(A4[i, j, k, l]) for j in 1:3, l in 1:5]
+                @test hm[3][] == expected
+                static = VIZ.visual_spec(TamerOp.DataTypes.ImageNd(A4); kind=:image,
+                    view_dims=vd, slice_indices=Dict(1 => i, 3 => k))
+                @test only(static.layers).values == permutedims(expected)
+            end
+            ui.dispose()
+            @test ui.closed[]
+        end
+    else
+        @test_skip false
     end
 end
 
@@ -2340,7 +2509,7 @@ end
         M = MD.PModule{K}(P, [1, 2, 1],
             Dict((1, 2) => injection, (2, 3) => projection); field=field)
         @test V.visual_spec(M).kind == :hasse
-        @test Set(V.available_visuals(M)) == Set((:hasse, :module_inspector, :rank_section))
+        @test Set(V.available_visuals(M)) == Set((:hasse, :module_inspector, :rank_section, :generalized_rank))
         cases = [
             (pair=(1, 2), matrix=injection, rank=1, nullity=0),
             (pair=(2, 3), matrix=projection, rank=1, nullity=1),
@@ -2610,7 +2779,7 @@ end
         end
         fig = V.render(inspector; backend, size=(1000, 600))
         makie.update_state_before_display!(fig)
-        labels = [String(item.text[]) for item in fig.content if item isa makie.Label]
+        labels = [r.text for r in visual_text_records(fig,makie)]
         @test "1/3" in labels
         @test "e1 @ 1 [source]" in labels
         @test "e1 @ 2 [target]" in labels
@@ -2657,7 +2826,7 @@ end
     enc = RES.EncodingResult(P, M, nothing; H)
     @test TamerOp.encoding_presentation(enc) === H
     @test V.available_visuals(H) == (:presentation_inspector,)
-    @test V.available_visuals(enc) == (:hasse, :module_inspector, :presentation_inspector, :rank_section)
+    @test V.available_visuals(enc) == (:hasse, :module_inspector, :presentation_inspector, :rank_section, :generalized_rank)
     @test !(:presentation_inspector in V.available_visuals(M))
     @test V.visual_spec(H).kind == :presentation_inspector
     before = (H.fiber_queries[], H.fiber_dims[])
@@ -2709,7 +2878,7 @@ end
         [TOA.BoxDownset([2.0, 2.0]), TOA.BoxDownset([3.0, 3.0])], QQ[1 0; 0 1], opts)
     pi = TamerOp.encoding_map(enc)
     @test V.available_visuals(enc) == (:regions, :region_labels, :query_overlay,
-        :hasse, :module_inspector, :presentation_inspector, :rank_section)
+        :hasse, :module_inspector, :presentation_inspector, :rank_section, :generalized_rank)
     t = (1//2, 5//2)
     qt = EC.locate(pi, t)
     spec = V.visual_spec(enc; kind=:presentation_inspector, point=t,
@@ -2929,17 +3098,17 @@ end
         end
         fig = V.render(zero_view; backend)
         makie.update_state_before_display!(fig)
-        labels = [item for item in fig.content if item isa makie.Label]
-        texts = [String(item.text[]) for item in labels]
+        labels = visual_text_records(fig,makie)
+        texts = [item.text for item in labels]
         @test "downset / upset" in texts
         @test any(startswith("D2"), texts) && any(startswith("U1"), texts)
         @test any(occursin("Empty matrix (1 x 0): the image has no basis vectors"), texts)
         @test "Active downset coordinates: D2" in texts
         active_color = makie.to_color(V._visual_color(V.VisualStyle(), V._VisualRole(:selected)))
-        @test any(item -> item.text[] == "0" &&
-            makie.to_color(item.color[]) == active_color, labels)
-        @test any(item -> startswith(item.text[], "D2") &&
-            makie.to_color(item.color[]) == active_color, labels)
+        @test any(item -> item.text == "0" &&
+            makie.to_color(item.color) == active_color, labels)
+        @test any(item -> startswith(item.text, "D2") &&
+            makie.to_color(item.color) == active_color, labels)
         axes = [item for item in fig.content if item isa makie.Axis]
         for ax in (item for item in fig.content if item isa makie.Axis)
             isempty(ax.subtitle[]) && continue
@@ -2961,7 +3130,7 @@ end
         @test Tuple(makie.widths(makie.viewport(fig.scene)[])) == zero_view.metadata.figure_size
         mapped = V.render(map_view; backend)
         makie.update_state_before_display!(mapped)
-        map_texts = [String(item.text[]) for item in mapped.content if item isa makie.Label]
+        map_texts = [r.text for r in visual_text_records(mapped,makie)]
         @test "Induced map C" in map_texts
         @test "Ambient downset projection R" in map_texts
         @test "downset / image basis" in map_texts
@@ -3490,14 +3659,14 @@ end
         s = TamerOp.inspection_session(enc; box=([-1,-1],[4,4]))
         viewers = B.App[]
         # A server route is reusable, but each inspector viewer has one client.
-        # Expand the inner App so the outer render pass processes all its DOM.
-        # Returning the App directly printed Dropdown objects and caused other
-        # widgets to fall back to independent HTML displays in a real browser.
+        # Embed the App directly: Bonito renders its children in this session.
+        # Explicit jsrender here would render twice and detach generated CSS
+        # from the final DOM; the class checks below catch that loss.
         wrapper = B.App() do browser_session
             V.inspection_summary(s).closed && return B.DOM.p("Inspection session closed.")
             viewer = TamerOp.visualize(s; backend=:wglmakie)
             push!(viewers, viewer)
-            return B.jsrender(browser_session, viewer)
+            return viewer
         end
         clients = [B.Session(B.NoConnection(); asset_server=B.NoServer()) for _ in 1:3]
         try
@@ -4132,13 +4301,13 @@ end
         @test all(isapprox.(scatters[2][1].markersize[], 1.5 .* scatters[1][1].markersize[]))
         @test scatters[2][1].marker[] != scatters[2][2].marker[]
         @test M.to_color(scatters[2][1].color[]) == M.to_color(scatters[2][2].color[])
-        lines = [only(p for p in ax.scene.plots if p isa M.Lines) for ax in axes]
+        lines = [only(p for p in ax.scene.plots if p isa M.LineSegments) for ax in axes]
         @test isapprox(lines[2].linewidth[] / lines[1].linewidth[],2)
         labels = [[item for item in fig.content if item isa M.Label] for fig in figures]
-        entries = [only(item for item in blocks if item.text[] == "1/3") for blocks in labels]
-        @test isapprox(entries[2].fontsize[] / entries[1].fontsize[],1.5)
-        @test M.to_font(entries[2].font[]) == M.to_font(enlarged.mono_font)
-        texts = [String(item.text[]) for item in labels[2]]
+        entries = [only(r for r in visual_text_records(fig,M) if r.text == "1/3") for fig in figures]
+        @test isapprox(entries[2].fontsize / entries[1].fontsize,1.5)
+        @test M.to_font(entries[2].font) == M.to_font(enlarged.mono_font)
+        texts = [r.text for r in visual_text_records(figures[2],M)]
         @test any(t -> startswith(t,"s1") && occursin("source",t), texts)
         @test any(t -> startswith(t,"t1") && occursin("target",t), texts)
         title = only(item for item in labels[2] if item.text[] == "Style panel")
@@ -4252,23 +4421,22 @@ end
             figure = V.render(support; backend=:cairomakie, style, size=(720,560))
             axis = only(block for block in figure.content if block isa M.Axis)
             textplots = [plot for plot in axis.scene.plots if plot isa M.Text]
-            @test length(textplots) == length(membership_layer.labels) + 1
+            @test length(textplots) == 2
             query = last(textplots)
-            # Makie normalizes positional text arguments into input_text;
-            # text is the separate keyword fallback, unused by this renderer.
+            # Every string and its mathematical anchor survive batching.
             @test query.input_text[] == query_layer.labels
             @test query.space[] === :data
             @test query.markerspace[] === :pixel
-            @test query.offset[][1] > 0 && query.offset[][2] > 0
-            push!(query_offsets,query.offset[])
+            @test first(query.offset[])[1] > 0 && first(query.offset[])[2] > 0
+            push!(query_offsets,first(query.offset[]))
             # Support membership and query annotations occupy opposite sides
             # of their data anchors; their coordinates are never nudged.
             for membership in textplots[1:end-1]
                 @test membership.space[] === :data
                 @test membership.markerspace[] === :pixel
-                @test membership.offset[][1] < 0 && membership.offset[][2] < 0
+                @test all(o->o[1]<0 && o[2]<0,membership.offset[])
             end
-            push!(membership_offsets,first(textplots).offset[])
+            push!(membership_offsets,first(first(textplots).offset[]))
             @test query_layer.positions == [(0.5,2.5)]
             @test membership_layer.positions == membership_positions
             @test only(support.metadata.query_readout).point == point
@@ -4282,7 +4450,7 @@ end
         figure = V.render(ordinary; backend=:cairomakie, style=last(styles))
         axis = only(block for block in figure.content if block isa M.Axis)
         textplot = only(plot for plot in axis.scene.plots if plot isa M.Text)
-        @test all(iszero,textplot.offset[])
+        @test all(o->all(iszero,o),textplot.offset[])
         @test only(ordinary.layers).positions == [(0.5,2.5)]
     end
 end

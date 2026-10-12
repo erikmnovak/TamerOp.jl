@@ -11,8 +11,12 @@ using ..ExactReals: AlgebraicReal
 import ..SliceInvariants: bottleneck_distance, bottleneck_matching, wasserstein_distance,
     persistence_landscape, persistence_image, persistence_silhouette, barcode_entropy, barcode_summary
 using ..DataTypes: GradedComplex, ImageNd
+using ..Options: ConstructionOptions
 import ..DataIngestion
 import ..ChainComplexes: describe
+import ..ChainComplexes: dimensions, basis
+import ..ChainComplexes
+import ..DerivedFunctors
 import ..FiniteFringe: field
 import ..Results: provenance, result_summary
 
@@ -70,7 +74,7 @@ are omitted. Use `finite_intervals`, `essential_births`, `persistence_intervals`
 cohomology representatives from `persistence_cocycle`. Hand-built endpoint
 diagrams retain neither kind of representative.
 """
-struct PersistenceDiagram{T<:Real,M<:NamedTuple}
+struct PersistenceDiagram{T<:Real,M<:NamedTuple,S}
     finite_by_dim::Vector{Vector{Tuple{T,T}}}
     essential_by_dim::Vector{Vector{T}}
     field::PrimeField
@@ -78,6 +82,7 @@ struct PersistenceDiagram{T<:Real,M<:NamedTuple}
     meta::M
     retained_representatives::Union{Nothing,_PersistenceRepresentatives{T}}
     retained_cocycles::Union{Nothing,_PersistenceCocycles{T}}
+    retained_source::S
 end
 
 PersistenceDiagram(finite::Vector{Vector{Tuple{T,T}}}, essential::Vector{Vector{T}},
@@ -87,6 +92,10 @@ PersistenceDiagram(finite::Vector{Vector{Tuple{T,T}}}, essential::Vector{Vector{
 PersistenceDiagram(finite::Vector{Vector{Tuple{T,T}}}, essential::Vector{Vector{T}},
                    field::PrimeField, order::Symbol, meta::NamedTuple, representatives) where {T<:Real} =
     PersistenceDiagram(finite, essential, field, order, meta, representatives, nothing)
+
+PersistenceDiagram(finite::Vector{Vector{Tuple{T,T}}}, essential::Vector{Vector{T}},
+                   field::PrimeField, order::Symbol, meta::NamedTuple, representatives, cocycles) where {T<:Real} =
+    PersistenceDiagram(finite, essential, field, order, meta, representatives, cocycles, nothing)
 
 function PersistenceDiagram(finite_by_dim::AbstractVector{<:AbstractVector{Tuple{T,T}}},
                             essential_by_dim::AbstractVector{<:AbstractVector{T}};
@@ -179,7 +188,7 @@ function _representative_chain_record(chain::_PersistenceChain, dim::Int)
 end
 
 """
-    persistence_representative(diag; dim, kind=:finite, index=1)
+    persistence_representative(diag; dim, kind=:finite, index=1, scale=nothing)
 
 Inspect one original interval member's retained prime-field cycle. Opt in when computing
 the diagram with `representatives=true`; the default interval-only computation
@@ -197,12 +206,14 @@ recorded prime field. Zero coefficients are omitted. Its class is nonzero throug
 the returned interval, including birth and excluding finite death in filtration
 order. A finite interval also has a `bounding_chain` whose boundary is this cycle
 at death. Essential intervals have no such chain in the supplied finite complex.
-These are deterministic reduction choices, not canonical, optimized, or geometric
-representatives. Source-cell IDs do not assert an embedding in the original data.
+These are deterministic reduction choices, not canonical or optimized.
+`scale` defaults to birth and must lie in the interval and construction window.
+With source retention, `source_cycle` and `source_bounding_chain` are verified
+source records at scale and death respectively. IDs alone do not assert geometry.
 The input diagram and its retained storage must be treated as read-only.
 """
 function persistence_representative(diag::PersistenceDiagram; dim::Integer,
-                                   kind::Symbol=:finite, index::Integer=1)
+                                   kind::Symbol=:finite, index::Integer=1, scale=nothing)
     slot = _diagram_degree_slot(diag, dim)
     kind in (:finite, :essential) || throw(ArgumentError("kind must be :finite or :essential."))
     !(index isa Bool) && 1 <= index <= typemax(Int) ||
@@ -213,6 +224,7 @@ function persistence_representative(diag::PersistenceDiagram; dim::Integer,
     birth = kind === :finite ? values[slot][index][1] : values[slot][index]
     death = kind === :finite ? values[slot][index][2] :
         (diag.order === :sublevel ? Inf : -Inf)
+    scale = _representative_scale(diag,birth,death,scale)
     retained = diag.retained_representatives
     context = (; dimension=Int(dim), kind, index=Int(index), interval=(birth, death),
         field=diag.field, order=diag.order, birth_included=true, death_included=false,
@@ -221,7 +233,7 @@ function persistence_representative(diag::PersistenceDiagram; dim::Integer,
             diag.field.p == 2 ? :noncanonical_f2_column_reduction : :noncanonical_prime_column_reduction,
         source_geometry=:not_asserted)
     retained === nothing && return merge(context, (; available=false, reason=:not_retained,
-        cycle=nothing, bounding_chain=nothing))
+        scale, cycle=nothing, bounding_chain=nothing,source_cycle=nothing,source_bounding_chain=nothing))
     records = kind === :finite ? retained.finite : retained.essential
     slot <= length(records) && index <= length(records[slot]) ||
         throw(ArgumentError("retained representatives disagree with the diagram's interval storage."))
@@ -229,9 +241,10 @@ function persistence_representative(diag::PersistenceDiagram; dim::Integer,
     record.birth == birth && (kind === :essential ? record.death === nothing : record.death == death) ||
         throw(ArgumentError("retained representative endpoints disagree with the diagram; recompute after mutation."))
     chain = record.bounding_chain
-    return merge(context, (; available=true, reason=:retained,
+    result = merge(context, (; available=true, reason=:retained,
         cycle=_representative_chain_record(record.cycle, Int(dim)),
         bounding_chain=chain === nothing ? nothing : _representative_chain_record(chain, Int(dim) + 1)))
+    return _representative_source(diag,result,scale)
 end
 
 """Return the coefficient field actually used for ordinary persistence."""
@@ -270,6 +283,7 @@ function _diagram_summary(diag::PersistenceDiagram)
         essential_counts=Tuple(length.(diag.essential_by_dim)),
         representatives_available=diag.retained_representatives !== nothing,
         cocycles_available=diag.retained_cocycles !== nothing,
+        source_available=diag.retained_source !== nothing,
         provenance=provenance(diag))
 end
 
@@ -383,6 +397,7 @@ function check_persistence_diagram(diag::PersistenceDiagram; throw::Bool=false)
         end
     end
     _check_cocycle_storage!(issues, diag)
+    isempty(issues) && _check_source_storage!(issues,diag)
     valid = isempty(issues)
     throw && !valid && Base.throw(ArgumentError(join(issues, " ")))
     return (kind=:persistence_diagram_validation, valid=valid, issues=issues)
@@ -707,6 +722,8 @@ function _top_cell_complex_2d(vals::AbstractMatrix{T},
     return GradedComplex(cells, SparseMatrixCSC{Int,Int}[b1, b2], grades)
 end
 
+include("ordinary_persistence/cubical.jl")
+
 # One active binary column; each higher level marks nonempty words below it.
 # Saved pivot columns use sparse indices or packed words. Finding the largest
 # entry skips empty ranges without rescanning or copying the active destination
@@ -1030,6 +1047,8 @@ include("ordinary_persistence/prime.jl")
 include("ordinary_persistence/cohomology.jl")
 include("ordinary_persistence/implicit_rips.jl")
 include("ordinary_persistence/analysis.jl")
+include("ordinary_persistence/source_representatives.jl")
+include("ordinary_persistence/components.jl")
 include("ordinary_persistence/result_data.jl")
 
 """
@@ -1245,11 +1264,12 @@ mathematical state. Cochains are retained for public queries only when
 """
 function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
                              order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false,
-                             max_homology_dim=nothing, method::Symbol=:auto, cocycles=false)
+                             max_homology_dim=nothing, method::Symbol=:auto, cocycles=false, source=false)
     _normalize_order(order)
     _normalize_field(field)
     representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
     cocycles isa Bool || throw(ArgumentError("cocycles must be true or false."))
+    source isa Bool || throw(ArgumentError("source must be true or false."))
     source_data, source_filtration = data, filtration
     weighted = filtration isa DataIngestion.EdgeWeightedFiltration
     rips = weighted || filtration isa Union{DataIngestion.RipsFiltration,DataIngestion.LandmarkRipsFiltration}
@@ -1275,19 +1295,22 @@ function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
     if rips
         order === :sublevel || throw(ArgumentError("Rips and weighted flag filtrations use increasing birth thresholds; request order=:sublevel."))
     end
-    if cocycles && DataIngestion.construction_mode(filtration).collapse !== :none
-        throw(ArgumentError("cocycles require collapse=:none; cochain lifting through ingestion collapses is not implemented."))
+    if cocycles && !source && DataIngestion.construction_mode(filtration).collapse !== :none
+        throw(ArgumentError("cocycles with collapse require source=true to retain a verified cochain retraction; otherwise use collapse=:none."))
     end
     degree = rips ? Int(something(max_homology_dim,
         get(DataIngestion.filtration_parameters(filtration), :max_dim, 1))) : 0
-    implicit = rips && method !== :explicit && !representatives && degree <= 2
+    implicit = rips && method !== :explicit && !representatives && !source && degree <= 2
     if method === :implicit && !implicit
-        throw(ArgumentError("implicit flag persistence supports barcodes and cocycles through H2; use method=:explicit for higher degrees or homology representatives."))
+        throw(ArgumentError("implicit flag persistence supports barcodes and cocycles through H2; use method=:explicit for higher degrees, homology representatives or retained source geometry."))
     end
     if implicit
         (cache === nothing || cache isa DataIngestion.EncodingCache) ||
             throw(ArgumentError("cache must be nothing or an EncodingCache."))
         diag = _implicit_rips_diagram(data, filtration, field, degree, max_homology_dim, Val(cocycles);landmarks=landmark_info)
+    elseif source
+        correspondence = DataIngestion.source_correspondence(source_data,source_filtration;field,cache)
+        diag = persistence_diagram(correspondence;order,representatives,cocycles)
     else
         build = DataIngestion.build_graded_complex(data, filtration; cache=cache)
         diag = persistence_diagram(DataIngestion.graded_complex(build); order, field, representatives, cocycles)
@@ -1298,7 +1321,7 @@ function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
     # some supported requests deliberately substitute a different model.
     meta = merge(diag.meta, (construction=implicit ? merge(diag.meta.construction,(requested=kind,)) :
                                 (requested=kind, effective=:not_recorded, substitution=:not_recorded),
-                            source=typeof(source_data), geometry=:ingestion_contract))
+                            source=typeof(source_data), geometry=source ? :retained_source_cells : :ingestion_contract))
     if landmark_info !== nothing
         meta = merge(meta,(landmarks=landmark_info, approximation=:landmark_restriction,
             landmark_bound_scope=:full_metric_rips_before_neighbor_selection_or_cutoff))
@@ -1344,7 +1367,7 @@ function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
         end
     end
     return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
-                              meta, diag.retained_representatives, diag.retained_cocycles)
+                              meta, diag.retained_representatives, diag.retained_cocycles, diag.retained_source)
 end
 
 function _periodic_tuple(periodic, ::Val{N}) where {N}
@@ -1365,33 +1388,65 @@ function _validate_cubical_values(values::AbstractArray{T,N}) where {T<:Real,N}
     return nothing
 end
 
+function _vertex_cubical_preflight(values::AbstractArray{T,N}, periodic, construction) where {T,N}
+    N >= 1 || throw(ArgumentError("cubical persistence requires at least one array dimension."))
+    construction.sparsify === :none && construction.collapse === :none ||
+        throw(ArgumentError("Cubical construction requires sparsify=:none and collapse=:none."))
+    spec = DataIngestion.FiltrationSpec(; kind=:cubical, construction)
+    DataIngestion._construction_check_cubical!(size(values), periodic, 1, spec)
+    return nothing
+end
+
+@inline function _incident_vertex_grade(values::AbstractArray{T,N}, origin, mask,
+                                         periodic, order) where {T,N}
+    ranges = ntuple(a -> 1:(mask[a]+1), N)
+    grade = values[origin...]
+    for corner in CartesianIndices(ranges)
+        coords = ntuple(N) do a
+            c = origin[a] + corner[a] - 1
+            c > size(values,a) && periodic[a] ? 1 : c
+        end
+        candidate = values[coords...]
+        (order === :sublevel ? candidate > grade : candidate < grade) && (grade = candidate)
+    end
+    return grade
+end
+
 function _vertex_cubical_complex(values::AbstractArray{T,N}, periodic::NTuple{N,Bool},
                                  order::Symbol, construction, cache) where {T<:Real,N}
-    # Cubical topology is owned by DataIngestion. Its image-grade storage uses
-    # Float64, so send order ranks through that public builder and restore the
-    # original exact values afterward. Maximal ranks implement lower stars;
-    # decreasing rank order implements upper stars without numeric negation.
-    levels = sort!(unique(vec(values)); rev=order === :superlevel)
-    length(levels) <= 2^53 || throw(ArgumentError("too many distinct vertex levels for cubical rank construction."))
-    ranks = Dict(value => i for (i, value) in enumerate(levels))
-    rank_values = map(v -> ranks[v], values)
-    filtration = DataIngestion.CubicalFiltration(; periodic=periodic, construction=construction)
-    build = DataIngestion.build_graded_complex(ImageNd(Array(rank_values)), filtration; cache=cache)
-    ranked = DataIngestion.graded_complex(build)
-    grades = NTuple{1,T}[(levels[Int(g[1])],) for g in ranked.grades]
-    return GradedComplex(ranked.cells_by_dim, ranked.boundaries, grades)
+    _vertex_cubical_preflight(values,periodic,construction)
+    _validate_cubical_values(values)
+    structure = DataIngestion._cubical_structure(size(values); periodic,cache)
+    cells = [collect(1:length(group)) for group in structure.cells_by_dim]
+    grades = Vector{NTuple{1,T}}(undef,sum(length,cells))
+    i=1
+    for group in structure.cells_by_dim, (origin,mask) in group
+        grades[i]=(_incident_vertex_grade(values,origin,mask,periodic,order),)
+        i+=1
+    end
+    return GradedComplex(cells,structure.boundaries,grades)
 end
+
+include("ordinary_persistence/grid_cubical.jl")
 
 """
     cubical_persistence(values; periodic=false, order=:sublevel,
-                        input=:top_cells, field=F2(), representatives=false, cocycles=false)
+                        input=:top_cells, field=F2(), construction=ConstructionOptions(),
+                        representatives=false, cocycles=false, source=false)
 
-Ordinary cubical persistence over `F2()`, `F3()` or `Fp(p)`.
-`input=:top_cells` supports two-dimensional arrays;
-entries grade squares, and their faces receive the minimum incident value for
-sublevels or maximum for superlevels. `input=:vertices` supports arbitrary
-positive array dimension; cells receive the maximum vertex value for sublevels
-or minimum for superlevels. Both routes preserve exact input grade values.
+Ordinary cubical persistence over `F2()`, `F3()` or `Fp(p)` in any positive
+array dimension. With `input=:top_cells`, entries grade intervals, squares,
+voxels, or higher-dimensional cubes; faces receive the minimum incident value
+for sublevels or maximum for superlevels. With `input=:vertices`, cells receive
+the maximum vertex value for sublevels or minimum for superlevels. Both routes
+preserve exact input grade values.
+
+Use `construction=ConstructionOptions(budget=ConstructionBudget(...))` to cap
+construction. For cubical inputs `max_simplices` counts cells in all dimensions,
+and `max_edges` counts one-dimensional cells, including periodic loops.
+Top-cell budgets are checked before enumeration; `memory_budget_bytes` bounds
+an estimated construction footprint, not process RSS or persistence-reduction
+memory. Sparsification and collapse are unsupported for cubical inputs.
 
 `periodic` is a Bool or one Bool per array axis. One periodic cell along an axis
 has coincident endpoints with cancelling boundary coefficients, as required for
@@ -1403,45 +1458,65 @@ respectively. Zero-length intervals are omitted.
 `representatives=true` retains cell-chain cycles and finite death bounding
 chains; inspect them with [`persistence_representative`](@ref). Cell indices refer
 to the constructed cubical complex, not pixel coordinates.
+
+Barcode-only requests over F2 on nonperiodic arrays of dimension 1-3 use a
+matrix-free grid backend, reported by `provenance(diagram).backend` as
+`:f2_cubical_grid`. In 3D, `provenance(diagram).local_reduction` reports
+`:relative_tables`: input-independent local boundary plans remove zero-length
+pairs before global reduction. The plans are bundled with the package and
+loaded during precompilation; no image-dependent state is reused across calls.
+Other requests retain the general oriented-complex route.
+Both preserve the same filtration and exact endpoint types. The grid route
+establishes the tensor boundary identity by construction; supplied arbitrary
+complexes continue to receive full chain validation.
 """
 function cubical_persistence(values::AbstractArray{<:Real}; periodic=false,
                              order::Symbol=:sublevel, input::Symbol=:top_cells,
-                             field=F2(), representatives=false, cocycles=false)
+                             field=F2(), construction::ConstructionOptions=ConstructionOptions(),
+                             representatives=false, cocycles=false, source=false)
+    source isa Bool || throw(ArgumentError("source must be true or false."))
     _normalize_order(order)
     _normalize_field(field)
     representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
     cocycles isa Bool || throw(ArgumentError("cocycles must be true or false."))
-    _validate_cubical_values(values)
     per = _periodic_tuple(periodic, Val(ndims(values)))
+    input in (:vertices,:top_cells) || throw(ArgumentError("cubical persistence input must be :top_cells or :vertices."))
+    if ndims(values) <= 3 && !any(per) && field.p == 2 && !representatives && !cocycles && !source
+        return _cubical_grid_diagram(values,input,order,field,construction)
+    end
     if input === :vertices
         return _vertex_cubical_persistence(values, per, order, field,
-            DataIngestion.construction_mode(DataIngestion.CubicalFiltration()), nothing, representatives, cocycles)
+            construction, nothing, representatives, cocycles, source)
     end
-    input === :top_cells || throw(ArgumentError("cubical persistence input must be :top_cells or :vertices."))
-    ndims(values) == 2 || throw(ArgumentError("cubical persistence input=:top_cells supports two-dimensional arrays."))
-    G = _top_cell_complex_2d(values, per, order)
-    diag = persistence_diagram(G; order, field, representatives, cocycles)
+    G = _top_cell_complex(values, per, order, construction)
+    input_complex = source ? _ordinary_source_cubical(G,size(values),per,order,:top_cells) : G
+    diag = persistence_diagram(input_complex; order, field, representatives, cocycles)
     meta = merge(diag.meta, (construction=(requested=:cubical_top_cells, effective=:cubical_top_cells,
         substitution=:none), source=(shape=size(values), periodic=per),
         grade_arithmetic=:exact_input_values, geometry=:cubical_cells))
     return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
-                              meta, diag.retained_representatives, diag.retained_cocycles)
+                              meta, diag.retained_representatives, diag.retained_cocycles, diag.retained_source)
 end
 
-function _vertex_cubical_persistence(values, per, order, field, construction, cache, representatives, cocycles)
+function _vertex_cubical_persistence(values, per, order, field, construction, cache, representatives, cocycles, source=false)
     cocycles && construction.collapse !== :none &&
         throw(ArgumentError("cocycles require collapse=:none; cochain lifting is not implemented."))
+    if ndims(values) <= 3 && !any(per) && field.p == 2 && !representatives && !cocycles && !source
+        return _cubical_grid_diagram(values,:vertices,order,field,construction)
+    end
     G = _vertex_cubical_complex(values, per, order, construction, cache)
-    diag = persistence_diagram(G; order, field, representatives, cocycles)
+    input_complex = source ? _ordinary_source_cubical(G,size(values),per,order,:vertices) : G
+    diag = persistence_diagram(input_complex; order, field, representatives, cocycles)
     meta = merge(diag.meta, (construction=(requested=:cubical_vertices, effective=:cubical_vertices,
         substitution=:none), source=(shape=size(values), periodic=per),
         grade_arithmetic=:exact_input_values, geometry=:cubical_cells))
     return PersistenceDiagram(diag.finite_by_dim, diag.essential_by_dim, diag.field, diag.order,
-                              meta, diag.retained_representatives, diag.retained_cocycles)
+                              meta, diag.retained_representatives, diag.retained_cocycles, diag.retained_source)
 end
 
 function persistence_diagram(data::ImageNd, filtration::DataIngestion.CubicalFiltration;
-                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false, cocycles=false)
+                             order::Symbol=:sublevel, field=F2(), cache=nothing, representatives=false, cocycles=false, source=false)
+    source isa Bool || throw(ArgumentError("source must be true or false."))
     _normalize_order(order)
     _normalize_field(field)
     representatives isa Bool || throw(ArgumentError("representatives must be true or false."))
@@ -1456,10 +1531,9 @@ function persistence_diagram(data::ImageNd, filtration::DataIngestion.CubicalFil
     end
     values isa AbstractArray{<:Real} || throw(ArgumentError("cubical channel must be a real-valued array."))
     size(values) == size(data.data) || throw(ArgumentError("cubical channel shape must match the image."))
-    _validate_cubical_values(values)
     per = _periodic_tuple(params.periodic, Val(ndims(values)))
     return _vertex_cubical_persistence(values, per, order, field,
-                                      DataIngestion.construction_mode(filtration), cache, representatives, cocycles)
+                                      DataIngestion.construction_mode(filtration), cache, representatives, cocycles, source)
 end
 
 """
@@ -1482,5 +1556,8 @@ function check_torus_persistence(diag::PersistenceDiagram;
     return (kind=:torus_persistence_validation, valid=valid,
             essential_counts=(h0=counts[1], h1=counts[2], h2=counts[3]), issues=issues)
 end
+
+include("ordinary_persistence/filtered_geometry.jl")
+include("ordinary_persistence/relative.jl")
 
 end # module OrdinaryPersistence

@@ -937,6 +937,23 @@ module Algebras
         return lock(() -> get!(A.mult_cache, key, MU), A.lock)
     end
 
+    """
+        multiplication_matrix(A::ExtAlgebra, p, q)
+
+    Compute or reuse the Yoneda structure constants for one degree pair.
+    Target basis vectors index rows; column `(i-1)*dim(A,q)+j` is the product
+    of left basis vector `i` with right basis vector `j`. Thus the matrix acts
+    on `kron(left, right)`, with the right index varying fastest. Only degrees
+    with `p,q >= 0` and `p+q` in the computed range are accepted. The returned
+    cached matrix is read-only; copy it before editing. No extra Koszul sign
+    is inserted in this composition convention.
+    """
+    function multiplication_matrix(A::ExtAlgebra, p::Int, q::Int)
+        p >= 0 && q >= 0 && p <= A.tmax && q <= A.tmax-p ||
+            throw(ArgumentError("Yoneda product degrees exceed the computed range $(degree_range(A))."))
+        return _ensure_mult_cache!(A, p, q)
+    end
+
 
     """
         multiply(A::ExtAlgebra{K}, p::Int, x::AbstractVector{K}, q::Int, y::AbstractVector{K}) -> Vector{K}

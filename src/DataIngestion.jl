@@ -79,6 +79,7 @@ import ..Modules
 import ..ModuleComplexes
 import ..FieldLinAlg
 using ..ModuleComplexes: ModuleCochainComplex, cohomology_module
+import ..AbelianCategories
 using ..AbelianCategories: kernel_with_inclusion, image_with_inclusion, _cokernel_module, is_zero_morphism
 
 using ..FlangeZn: Face, IndFlat, IndInj, Flange
@@ -1223,17 +1224,17 @@ struct ImageLowerStarFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 ImageLowerStarFiltration(; channels=nothing,
-                          periodic=false,
+                          periodic=false, orientation=nothing,
                           construction::ConstructionOptions=ConstructionOptions()) =
-    ImageLowerStarFiltration((; channels, periodic, construction))
+    ImageLowerStarFiltration((; channels, periodic, orientation, construction))
 
 struct ImageDistanceBifiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 ImageDistanceBifiltration(; mask=nothing, channels=nothing,
-                           periodic=false,
+                           periodic=false, orientation=nothing,
                            construction::ConstructionOptions=ConstructionOptions()) =
-    ImageDistanceBifiltration((; mask, channels, periodic, construction))
+    ImageDistanceBifiltration((; mask, channels, periodic, orientation, construction))
 
 struct WingVeinBifiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -1648,9 +1649,9 @@ struct CubicalFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
 CubicalFiltration(; channels=nothing,
-                  periodic=false,
+                  periodic=false, orientation=nothing,
                   construction::ConstructionOptions=ConstructionOptions()) =
-    CubicalFiltration((; channels, periodic, construction))
+    CubicalFiltration((; channels, periodic, orientation, construction))
 
 """
     RhomboidFiltration(; max_dim=nothing, radius=nothing, depth_range=nothing,
@@ -2490,6 +2491,7 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
         return ImageLowerStarFiltration(;
             channels=get(p, :channels, nothing),
             periodic=get(p, :periodic, false),
+            orientation=get(p, :orientation, nothing),
             construction=construction,
         )
     elseif k === :image_distance_bifiltration
@@ -2497,6 +2499,7 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             mask=get(p, :mask, nothing),
             channels=get(p, :channels, nothing),
             periodic=get(p, :periodic, false),
+            orientation=get(p, :orientation, nothing),
             construction=construction,
         )
     elseif k === :wing_vein_bifiltration
@@ -2510,6 +2513,7 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
         return CubicalFiltration(;
             channels = get(p, :channels, nothing),
             periodic = get(p, :periodic, false),
+            orientation=get(p, :orientation, nothing),
             construction = construction,
         )
     elseif k === :delaunay_lower_star
@@ -2861,9 +2865,11 @@ function _greedy_perm_indices(points::AbstractVector{<:AbstractVector{<:Real}}, 
     return landmark_indices(select_landmarks(PointCloud(points);count=m))
 end
 
+include("data_ingestion/preview_graphs.jl")
+
 function _point_cloud_sparsify_edge_driven(points::AbstractVector{<:AbstractVector{<:Real}},
                                            spec::FiltrationSpec,
-                                           construction::ConstructionOptions)
+                                           construction::ConstructionOptions; cache=nothing)
     n = length(points)
     n == 0 && return NTuple{2,Int}[], Float64[], Float64[]
     backend = _pointcloud_nn_backend(spec)
@@ -2871,13 +2877,15 @@ function _point_cloud_sparsify_edge_driven(points::AbstractVector{<:AbstractVect
     if construction.sparsify == :radius
         radius = get(spec.params, :radius, nothing)
         radius === nothing && error("construction.sparsify=:radius requires radius.")
-        edges, dists = _point_cloud_radius_graph(points, Float64(radius); backend=backend, approx_candidates=approx_candidates)
+        graph = _prepared_point_graph(points, :radius, Float64(radius); backend, approx_candidates, cache)
+        edges, dists = graph.edges, graph.dists
         _construction_cap_edges!(edges, spec)
         return edges, dists, Float64[]
     elseif construction.sparsify == :knn
         k = Int(get(spec.params, :knn, 8))
         k > 0 || error("construction.sparsify=:knn requires knn > 0.")
-        edges, dists, kdist = _point_cloud_knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
+        graph = _prepared_point_graph(points, :knn, k; backend, approx_candidates, cache)
+        edges, dists, kdist = graph.edges, graph.dists, graph.kdist
         radius = get(spec.params, :radius, nothing)
         if radius !== nothing
             keep = findall(d -> d <= radius, dists)
@@ -2891,7 +2899,7 @@ end
 
 function _point_cloud_sparsify_edge_driven(points::AbstractMatrix{<:Real},
                                            spec::FiltrationSpec,
-                                           construction::ConstructionOptions)
+                                           construction::ConstructionOptions; cache=nothing)
     n = size(points, 1)
     n == 0 && return NTuple{2,Int}[], Float64[], Float64[]
     backend = _pointcloud_nn_backend(spec)
@@ -2899,13 +2907,15 @@ function _point_cloud_sparsify_edge_driven(points::AbstractMatrix{<:Real},
     if construction.sparsify == :radius
         radius = get(spec.params, :radius, nothing)
         radius === nothing && error("construction.sparsify=:radius requires radius.")
-        edges, dists = _point_cloud_radius_graph(points, Float64(radius); backend=backend, approx_candidates=approx_candidates)
+        graph = _prepared_point_graph(points, :radius, Float64(radius); backend, approx_candidates, cache)
+        edges, dists = graph.edges, graph.dists
         _construction_cap_edges!(edges, spec)
         return edges, dists, Float64[]
     elseif construction.sparsify == :knn
         k = Int(get(spec.params, :knn, 8))
         k > 0 || error("construction.sparsify=:knn requires knn > 0.")
-        edges, dists, kdist = _point_cloud_knn_graph(points, k; backend=backend, approx_candidates=approx_candidates)
+        graph = _prepared_point_graph(points, :knn, k; backend, approx_candidates, cache)
+        edges, dists, kdist = graph.edges, graph.dists, graph.kdist
         radius = get(spec.params, :radius, nothing)
         if radius !== nothing
             keep = findall(d -> d <= radius, dists)
@@ -3106,18 +3116,55 @@ end
 
 function _estimate_cubical_cell_counts(dims::NTuple{N,Int};
                                        periodic::NTuple{N,Bool}=ntuple(_ -> false, N)) where {N}
+    # Coefficients of prod_i (vertices_i + edges_i*t). Polynomial accumulation
+    # avoids enumerating 2^N masks and overflowing a machine-word bit shift.
     counts = fill(big(0), N + 1)
-    for mask in 0:((1 << N) - 1)
-        k = count_ones(mask)
-        c = big(1)
-        for i in 1:N
-            maskbit = Int((mask >> (i - 1)) & 1)
-            axis_count = periodic[i] ? dims[i] : max(dims[i] - maskbit, 0)
-            c *= big(axis_count)
+    counts[1] = 1
+    for i in 1:N
+        vertices = big(dims[i])
+        edges = periodic[i] ? vertices : max(vertices - 1, 0)
+        for d in i:-1:1
+            counts[d + 1] = counts[d + 1] * vertices + counts[d] * edges
         end
-        counts[k + 1] += c
+        counts[1] *= vertices
     end
     return counts
+end
+
+# Cubical construction stores sparse incidences, not the Cartesian product of
+# adjacent chain groups. Count uncancelled faces even on periodic singleton
+# axes: this covers the 2D triplet builder and conservatively bounds direct
+# assembly, which can omit coincident low/high faces.
+function _estimate_cubical_construction_bytes(counts, dimension::Int, channels::Int)
+    total = sum(counts; init=big(0))
+    incidences = sum(2d * counts[d + 1] for d in 1:dimension; init=big(0))
+    # Conservative allowance for cell coordinates, orientation lookup tables,
+    # cell IDs and construction workspace, also reserved for the 2D route.
+    topology = total * (4dimension + 32) * sizeof(Int)
+    # I/J/V triplets, CSC storage and sparse assembly workspace; cancellation
+    # can shrink the result, but must not shrink this construction allowance.
+    boundaries = 6sizeof(Int) * incidences + sizeof(Int) * (total + dimension)
+    # Grades, distinct-axis extraction/sorting and channel/rank conversion.
+    # Inputs themselves are caller-owned. This is a construction estimate,
+    # not a bound on allocator overhead, process RSS or later homology work.
+    grades = 4big(channels) * sizeof(Float64) * total + 4sizeof(Int) * first(counts)
+    return topology + boundaries + grades
+end
+
+function _construction_check_cubical!(dims::NTuple{N,Int}, periodic::NTuple{N,Bool},
+                                      channels::Int, spec::FiltrationSpec) where {N}
+    counts = _estimate_cubical_cell_counts(dims; periodic)
+    total = sum(counts; init=big(0))
+    incidences = sum(2d * counts[d + 1] for d in 1:N; init=big(0))
+    max(total, incidences) < typemax(Int) ||
+        throw(ArgumentError("Cubical construction exceeds machine-indexable cell/incidence storage."))
+    _construction_check_max_simplices!(total, N, spec)
+    N >= 1 && _construction_check_max_edges!(counts[2], spec)
+    if _construction_memory_budget(spec) !== nothing
+        _construction_check_memory_budget!(
+            _estimate_cubical_construction_bytes(counts, N, channels), spec)
+    end
+    return nothing
 end
 
 function _estimate_image_cell_counts(data::ImageNd,
@@ -3531,13 +3578,15 @@ sublevel-style order (increasing) and -1 for superlevel-style order (decreasing)
 
 Notes
 -----
-- If all `orientation[i] == 1` and `kind=:grid`, a structured `ProductOfChainsPoset`
-  is returned to avoid materializing the transitive closure.
-- Otherwise, we fall back to a dense `FinitePoset`.
+- `kind=:grid` returns a structured `ProductOfChainsPoset`, including reversed
+  axes, without materializing the transitive closure.
+- `kind=:dense` explicitly requests a dense `FinitePoset`.
 """
 function poset_from_axes(axes::NTuple{N,Vector{T}};
                          orientation::NTuple{N,Int}=ntuple(_ -> 1, N),
                          kind::Symbol = :grid) where {N,T}
+    all(o -> o == 1 || o == -1, orientation) ||
+        throw(ArgumentError("poset_from_axes: orientations must be +1 or -1"))
     sizes = ntuple(i -> length(axes[i]), N)
     total = 1
     for i in 1:N
@@ -3545,10 +3594,7 @@ function poset_from_axes(axes::NTuple{N,Vector{T}};
     end
 
     if kind == :grid
-        if all(o -> o == 1, orientation)
-            return ProductOfChainsPoset(sizes)
-        end
-        kind = :dense
+        return ProductOfChainsPoset(sizes; orientation=orientation)
     end
     if kind == :dense
         # Enumerate all multi-indices in mixed radix order.
@@ -7324,16 +7370,17 @@ function _knn_graph_bruteforce_edges_only(points::AbstractMatrix{<:Real}, k::Int
     return _finalize_edge_pairs_edges_only(edge_keys, edge_count)
 end
 
-function _radius_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real}}, r::Float64)
+function _radius_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real}}, r::Float64; max_edges::Int=typemax(Int))
     n = length(points)
     edges = NTuple{2,Int}[]
     dists = Float64[]
-    sizehint!(edges, min(max(0, 4 * n), 200_000))
-    sizehint!(dists, min(max(0, 4 * n), 200_000))
+    sizehint!(edges, min(max(0, 4 * n), 200_000,max_edges))
+    sizehint!(dists, min(max(0, 4 * n), 200_000,max_edges))
     for i in 1:n
         for j in (i + 1):n
             d = _euclidean_distance(points[i], points[j])
             if d <= r
+                length(edges)<max_edges || throw(ArgumentError("Radius graph exceeds max_graph_edges=$max_edges."))
                 push!(edges, (i, j))
                 push!(dists, d)
             end
@@ -7342,16 +7389,17 @@ function _radius_graph_bruteforce(points::AbstractVector{<:AbstractVector{<:Real
     return edges, dists
 end
 
-function _radius_graph_bruteforce(points::AbstractMatrix{<:Real}, r::Float64)
+function _radius_graph_bruteforce(points::AbstractMatrix{<:Real}, r::Float64; max_edges::Int=typemax(Int))
     n = size(points, 1)
     edges = NTuple{2,Int}[]
     dists = Float64[]
-    sizehint!(edges, min(max(0, 4 * n), 200_000))
-    sizehint!(dists, min(max(0, 4 * n), 200_000))
+    sizehint!(edges, min(max(0, 4 * n), 200_000,max_edges))
+    sizehint!(dists, min(max(0, 4 * n), 200_000,max_edges))
     @inbounds for i in 1:(n - 1)
         for j in (i + 1):n
             d = _euclidean_distance(points, i, j)
             d <= r || continue
+            length(edges)<max_edges || throw(ArgumentError("Radius graph exceeds max_graph_edges=$max_edges."))
             push!(edges, (i, j))
             push!(dists, d)
         end
@@ -7482,7 +7530,7 @@ end
 function _point_cloud_radius_graph(points::AbstractVector{<:AbstractVector{<:Real}},
                                    r::Float64;
                                    backend::Symbol=:auto,
-                                   approx_candidates::Int=0)
+                                   approx_candidates::Int=0, max_edges::Int=typemax(Int))
     n = length(points)
     if n == 0
         return NTuple{2,Int}[], Float64[]
@@ -7492,7 +7540,7 @@ function _point_cloud_radius_graph(points::AbstractVector{<:AbstractVector{<:Rea
     if backend0 != :bruteforce
         impl = _POINTCLOUD_RADIUS_GRAPH_IMPL[]
         if impl !== nothing
-            out = impl(points, r; backend=backend0, approx_candidates=approx_candidates)
+            out = impl(points, r; backend=backend0, approx_candidates=approx_candidates,max_edges)
             out === nothing || begin
                 _record_ingestion_backend(:radius_graph, backend0)
                 return out
@@ -7502,13 +7550,13 @@ function _point_cloud_radius_graph(points::AbstractVector{<:AbstractVector{<:Rea
         end
     end
     _record_ingestion_backend(:radius_graph, :bruteforce)
-    return _radius_graph_bruteforce(points, r)
+    return _radius_graph_bruteforce(points, r;max_edges)
 end
 
 function _point_cloud_radius_graph(points::AbstractMatrix{<:Real},
                                    r::Float64;
                                    backend::Symbol=:auto,
-                                   approx_candidates::Int=0)
+                                   approx_candidates::Int=0, max_edges::Int=typemax(Int))
     n = size(points, 1)
     n == 0 && return NTuple{2,Int}[], Float64[]
     d = size(points, 2)
@@ -7516,10 +7564,10 @@ function _point_cloud_radius_graph(points::AbstractMatrix{<:Real},
     if backend0 != :bruteforce
         return _point_cloud_radius_graph(_point_rows_view(points), r;
                                          backend=backend0,
-                                         approx_candidates=approx_candidates)
+                                         approx_candidates=approx_candidates,max_edges)
     end
     _record_ingestion_backend(:radius_graph, :bruteforce)
-    return _radius_graph_bruteforce(points, r)
+    return _radius_graph_bruteforce(points, r;max_edges)
 end
 
 function _point_cloud_radius_edges(points::AbstractVector{<:AbstractVector{<:Real}},
@@ -10644,7 +10692,7 @@ struct _PointCloudLowdimLazyPayload
 end
 
 function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec;
-                                            expansion_budget::Bool=true)
+                                            expansion_budget::Bool=true, cache=nothing)
     points = data.points
     pmat = point_matrix(data)
     n = length(points)
@@ -10673,7 +10721,7 @@ function _point_cloud_lowdim_edge_payload(data::PointCloud, spec::FiltrationSpec
 
     if include_edge_dim
         if construction.sparsify != :none
-            edges, edge_dists, kdist = _point_cloud_sparsify_edge_driven(pmat, spec, construction)
+            edges, edge_dists, kdist = _point_cloud_sparsify_edge_driven(pmat, spec, construction; cache)
         else
             radius = haskey(spec.params, :radius) ? Float64(spec.params[:radius]) : Inf
                 if isfinite(radius) && _POINTCLOUD_LOWDIM_RADIUS_STREAMING[]
@@ -10880,15 +10928,15 @@ function _materialize_flag_output(edges::Vector{NTuple{2,Int}}, vertex_grades,
 end
 
 function _graded_complex_from_point_cloud_flag(data::PointCloud, spec::FiltrationSpec;
-                                                return_simplex_tree::Bool=false)
-    payload = _point_cloud_lowdim_edge_payload(data, spec)
+                                                return_simplex_tree::Bool=false, cache=nothing)
+    payload = _point_cloud_lowdim_edge_payload(data, spec; cache)
     grades = _point_cloud_lowdim_grades_by_dim(payload, spec)
     return _materialize_flag_output(payload.edges, grades[1], grades[2], spec;
                                      return_simplex_tree=return_simplex_tree)
 end
 
-function _point_cloud_lowdim_lazy_payload(data::PointCloud, spec::FiltrationSpec)
-    payload = _point_cloud_lowdim_edge_payload(data, spec)
+function _point_cloud_lowdim_lazy_payload(data::PointCloud, spec::FiltrationSpec; cache=nothing)
+    payload = _point_cloud_lowdim_edge_payload(data, spec; cache)
     grades_by_dim = _point_cloud_lowdim_grades_by_dim(payload, spec)
     if !payload.include_edge_dim
         resize!(grades_by_dim, 1)
@@ -10903,8 +10951,8 @@ end
 
 function _graded_complex_from_point_cloud_lowdim(data::PointCloud,
                                                  spec::FiltrationSpec;
-                                                 return_simplex_tree::Bool=false)
-    payload = _point_cloud_lowdim_edge_payload(data, spec)
+                                                 return_simplex_tree::Bool=false, cache=nothing)
+    payload = _point_cloud_lowdim_edge_payload(data, spec; cache)
     n = payload.n
     kind = payload.kind
     include_edge_dim = payload.include_edge_dim
@@ -11209,7 +11257,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         Symbol(get(spec.params, :simplex_agg, :max)) == :max ||
             throw(ArgumentError("sparse flag expansion requires simplex_agg=:max."))
         return _graded_complex_from_point_cloud_flag(data, spec;
-                                                     return_simplex_tree=return_simplex_tree)
+                                                     return_simplex_tree=return_simplex_tree, cache)
     end
     if construction.sparsify != :none && max_dim > 1
         throw(ArgumentError("sparse max_dim > 1 requires a supported Rips flag filtration."))
@@ -11218,7 +11266,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
     if max_dim <= 1 &&
        (kind == :rips || kind == :rips_density || kind == :rips_codensity ||
         kind == :rips_lowerstar || kind == :function_rips || kind == :degree_rips)
-        return _graded_complex_from_point_cloud_lowdim(data, spec; return_simplex_tree=return_simplex_tree)
+        return _graded_complex_from_point_cloud_lowdim(data, spec; return_simplex_tree=return_simplex_tree, cache)
     end
 
     if _POINTCLOUD_DIM2_PACKED_KERNEL[] &&
@@ -11738,6 +11786,97 @@ function _cubical_structure_2d(dims::NTuple{2,Int},
     return (cells_by_dim=cells_by_dim, cell_index=nothing, boundaries=boundaries)
 end
 
+# Orientation blocks follow _combinations' lexicographic order, and cells in
+# each block follow CartesianIndices. A face's index is its block offset plus
+# a column-major linear index; no dictionary is needed for individual cells.
+function _cubical_structure_nd(dims::NTuple{N,Int}, periodic::NTuple{N,Bool}) where {N}
+    TCell = Tuple{NTuple{N,Int},NTuple{N,Int}}
+    TBlock = Tuple{NTuple{N,Int},NTuple{N,Int},Int}
+    blocks = Vector{Vector{TBlock}}(undef, N + 1)
+    offsets = Vector{Dict{NTuple{N,Int},Int}}(undef, N + 1)
+    counts = zeros(Int, N + 1)
+    for k in 0:N
+        blocks[k+1] = TBlock[]
+        offsets[k+1] = Dict{NTuple{N,Int},Int}()
+        for active in _combinations(N, k)
+            mask = ntuple(i -> Int(i in active), N)
+            shape = ntuple(i -> _cubical_axis_count(dims[i], mask[i], periodic[i]), N)
+            block_count = foldl(Base.Checked.checked_mul, shape; init=1)
+            offset = counts[k+1]
+            push!(blocks[k+1], (mask, shape, offset))
+            offsets[k+1][mask] = offset
+            counts[k+1] = Base.Checked.checked_add(offset, block_count)
+        end
+    end
+
+    cells_by_dim = Vector{Vector{TCell}}(undef, N + 1)
+    for k in 0:N
+        cells = Vector{TCell}(undef, counts[k+1])
+        for (mask, shape, offset) in blocks[k+1]
+            j = offset
+            for coords in CartesianIndices(shape)
+                j += 1
+                @inbounds cells[j] = (Tuple(coords), mask)
+            end
+        end
+        cells_by_dim[k+1] = cells
+    end
+
+    boundaries = Vector{SparseMatrixCSC{Int,Int}}(undef, N)
+    for k in 1:N
+        stored = 0
+        for (mask, shape, _) in blocks[k+1]
+            # A periodic singleton's low/high faces coincide and cancel over
+            # the integers. Omit that pair, retaining the cell itself.
+            faces = 2count(i -> mask[i] == 1 && dims[i] > 1, 1:N)
+            stored = Base.Checked.checked_add(stored, Base.Checked.checked_mul(faces, prod(shape)))
+        end
+        colptr = Vector{Int}(undef, Base.Checked.checked_add(counts[k+1], 1))
+        rowval = Vector{Int}(undef, stored)
+        nzval = Vector{Int}(undef, stored)
+        t = 1
+        for (mask, shape, offset) in blocks[k+1]
+            # Deleting active axes in reverse order puts face orientation
+            # blocks in increasing row order. Only each low/high pair can
+            # reverse at a periodic seam. Plans are built once per block.
+            active = [i for i in 1:N if mask[i] == 1]
+            plans = Tuple{NTuple{N,Int},Int,Int,Int}[]
+            for pos in k:-1:1
+                axis = active[pos]
+                dims[axis] == 1 && continue
+                face = ntuple(i -> i == axis ? 0 : mask[i], N)
+                face_shape = ntuple(i -> _cubical_axis_count(dims[i], face[i], periodic[i]), N)
+                strides = ntuple(i -> prod(face_shape[j] for j in 1:i-1; init=1), N)
+                push!(plans, (strides, offsets[k][face], axis, isodd(pos) ? 1 : -1))
+            end
+            col = offset
+            for coords in CartesianIndices(shape)
+                col += 1
+                @inbounds colptr[col] = t
+                for (strides, face_offset, axis, sign_low) in plans
+                    low = face_offset + 1
+                    @inbounds for i in 1:N
+                        low += (coords[i] - 1) * strides[i]
+                    end
+                    high = low + (_cubical_next_coord(coords[axis], dims[axis], periodic[axis]) - coords[axis]) * strides[axis]
+                    if low < high
+                        @inbounds rowval[t] = low; nzval[t] = sign_low
+                        @inbounds rowval[t+1] = high; nzval[t+1] = -sign_low
+                    else
+                        @inbounds rowval[t] = high; nzval[t] = -sign_low
+                        @inbounds rowval[t+1] = low; nzval[t+1] = sign_low
+                    end
+                    t += 2
+                end
+            end
+        end
+        colptr[end] = t
+        @assert t == stored + 1
+        boundaries[k] = SparseMatrixCSC(counts[k], counts[k+1], colptr, rowval, nzval)
+    end
+    return (cells_by_dim=cells_by_dim, cell_index=nothing, boundaries=boundaries)
+end
+
 function _cubical_structure(dims::NTuple{N,Int};
                             periodic::NTuple{N,Bool}=ntuple(_ -> false, N),
                             cache::Union{Nothing,EncodingCache}=nothing) where {N}
@@ -11755,66 +11894,7 @@ function _cubical_structure(dims::NTuple{N,Int};
     cached = if N == 2 && _CUBICAL_2D_FASTPATH[]
         _cubical_structure_2d((dims[1], dims[2]), (periodic[1], periodic[2]))
     else
-        cells_by_dim = Vector{Vector{Tuple{NTuple{N,Int},NTuple{N,Int}}}}(undef, N + 1)
-        cell_index = Vector{Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}}(undef, N + 1)
-        for k in 0:N
-            cells_by_dim[k+1] = Tuple{NTuple{N,Int},NTuple{N,Int}}[]
-            cell_index[k+1] = Dict{Tuple{NTuple{N,Int},NTuple{N,Int}},Int}()
-        end
-
-        for _ in _combinations(N, 0)
-            mask = ntuple(i -> 0, N)
-            for coords in CartesianIndices(Tuple(dims))
-                origin = ntuple(i -> coords[i], N)
-                key2 = (origin, mask)
-                push!(cells_by_dim[1], key2)
-            end
-        end
-        for k in 1:N
-            for mask_idxs in _combinations(N, k)
-                mask = ntuple(i -> (i in mask_idxs ? 1 : 0), N)
-                ranges = Vector{UnitRange{Int}}(undef, N)
-                for i in 1:N
-                    ranges[i] = 1:_cubical_axis_count(dims[i], mask[i], periodic[i])
-                end
-                for coords in CartesianIndices(Tuple(ranges))
-                    origin = ntuple(i -> coords[i], N)
-                    key2 = (origin, mask)
-                    push!(cells_by_dim[k+1], key2)
-                end
-            end
-        end
-
-        for k in 0:N
-            for (i, key2) in enumerate(cells_by_dim[k+1])
-                cell_index[k+1][key2] = i
-            end
-        end
-
-        boundaries = SparseMatrixCSC{Int,Int}[]
-        for k in 1:N
-            I = Int[]
-            J = Int[]
-            V = Int[]
-            for (j, (origin, mask)) in enumerate(cells_by_dim[k+1])
-                axes = [i for i in 1:N if mask[i] == 1]
-                for (pos, axis) in enumerate(axes)
-                    mask_face = ntuple(i -> (i == axis ? 0 : mask[i]), N)
-                    origin_low = origin
-                    origin_high = ntuple(i -> (i == axis ? _cubical_next_coord(origin[i], dims[i], periodic[i]) : origin[i]), N)
-                    low_key = (origin_low, mask_face)
-                    high_key = (origin_high, mask_face)
-                    row_low = cell_index[k][low_key]
-                    row_high = cell_index[k][high_key]
-                    sign_low = isodd(pos) ? 1 : -1
-                    sign_high = -sign_low
-                    push!(I, row_low); push!(J, j); push!(V, sign_low)
-                    push!(I, row_high); push!(J, j); push!(V, sign_high)
-                end
-            end
-            push!(boundaries, dropzeros!(sparse(I, J, V, length(cells_by_dim[k]), length(cells_by_dim[k+1]))))
-        end
-        (cells_by_dim=cells_by_dim, cell_index=cell_index, boundaries=boundaries)
+        _cubical_structure_nd(dims, periodic)
     end
 
     if cache !== nothing
@@ -11834,7 +11914,8 @@ function _cubical_structure(dims::NTuple{N,Int};
 end
 
 function _cubical_grades_2d(channels::Vector{<:AbstractArray},
-                            periodic::NTuple{2,Bool}=(false, false))
+                            periodic::NTuple{2,Bool}=(false, false);
+                            orientation=ntuple(_ -> 1, length(channels)))
     img = channels[1]
     nx, ny = size(img)
     px, py = periodic
@@ -11862,7 +11943,7 @@ function _cubical_grades_2d(channels::Vector{<:AbstractArray},
             grades[t] = ntuple(ch -> begin
                 a = Float64(channels[ch][i, j])
                 b = Float64(channels[ch][i2, j])
-                a >= b ? a : b
+                orientation[ch] == 1 ? max(a,b) : min(a,b)
             end, C)
             t += 1
         end
@@ -11873,7 +11954,7 @@ function _cubical_grades_2d(channels::Vector{<:AbstractArray},
             grades[t] = ntuple(ch -> begin
                 a = Float64(channels[ch][i, j])
                 b = Float64(channels[ch][i, j2])
-                a >= b ? a : b
+                orientation[ch] == 1 ? max(a,b) : min(a,b)
             end, C)
             t += 1
         end
@@ -11887,9 +11968,9 @@ function _cubical_grades_2d(channels::Vector{<:AbstractArray},
                 b = Float64(channels[ch][i2, j])
                 c = Float64(channels[ch][i, j2])
                 d = Float64(channels[ch][i2, j2])
-                m1 = a >= b ? a : b
-                m2 = c >= d ? c : d
-                m1 >= m2 ? m1 : m2
+                m1 = orientation[ch] == 1 ? max(a,b) : min(a,b)
+                m2 = orientation[ch] == 1 ? max(c,d) : min(c,d)
+                orientation[ch] == 1 ? max(m1,m2) : min(m1,m2)
             end, C)
             t += 1
         end
@@ -11899,18 +11980,18 @@ end
 
 function _cubical_grades_2d_image_distance(img::AbstractArray,
                                            dist::AbstractArray,
-                                           periodic::NTuple{2,Bool}=(false, false))
+                                           periodic::NTuple{2,Bool}=(false, false); orientation=(1,1))
     size(img) == size(dist) || error("image and distance channels must have the same size.")
-    return _cubical_grades_2d(AbstractArray[img, dist], periodic)
+    return _cubical_grades_2d(AbstractArray[img, dist], periodic; orientation)
 end
 
 function _cubical_cell_grade(channels::Vector{<:AbstractArray},
                              origin::NTuple{N,Int},
                              mask::NTuple{N,Int},
                              dims::NTuple{N,Int},
-                             periodic::NTuple{N,Bool}) where {N}
+                             periodic::NTuple{N,Bool}; orientation=ntuple(_ -> 1, length(channels))) where {N}
     C = length(channels)
-    maxv = fill(-Inf, C)
+    maxv = [o == 1 ? -Inf : Inf for o in orientation]
     active = Int[]
     for i in 1:N
         mask[i] == 1 && push!(active, i)
@@ -11931,7 +12012,7 @@ function _cubical_cell_grade(channels::Vector{<:AbstractArray},
         end, N)
         for ch in 1:C
             v = Float64(channels[ch][coords...])
-            v > maxv[ch] && (maxv[ch] = v)
+            (orientation[ch] == 1 ? v > maxv[ch] : v < maxv[ch]) && (maxv[ch] = v)
         end
     end
     return ntuple(i -> maxv[i], C)
@@ -11947,26 +12028,29 @@ function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
     end
     N = length(dims)
     C = length(channels)
+    orientation = get(spec.params, :orientation, ntuple(_ -> 1, C))
+    orientation === nothing && (orientation = ntuple(_ -> 1, C))
+    length(orientation)==C && all(o->o in (-1,1),orientation) || throw(ArgumentError("image orientation must have one +1/-1 per channel."))
     periodic = _cubical_periodic_from_spec(spec, Val(N))
 
     budget = _construction_budget(spec)
     if budget.max_simplices !== nothing || budget.max_edges !== nothing ||
        budget.memory_budget_bytes !== nothing
-        _construction_check_counts!(_estimate_cubical_cell_counts(dims; periodic=periodic), spec)
+        _construction_check_cubical!(dims, periodic, C, spec)
     end
     cached = _cubical_structure(dims; periodic=periodic, cache=cache)
     cells_by_dim = cached.cells_by_dim
     grades = if N == 2 && _CUBICAL_2D_FASTPATH[]
         if C == 2 && spec.kind == :image_distance_bifiltration
-            _cubical_grades_2d_image_distance(channels[1], channels[2], periodic)
+            _cubical_grades_2d_image_distance(channels[1], channels[2], periodic; orientation)
         else
-            _cubical_grades_2d(channels, periodic)
+            _cubical_grades_2d(channels, periodic; orientation)
         end
     else
         out = Vector{NTuple{C,Float64}}()
         for k in 0:N
             for (origin, mask) in cells_by_dim[k+1]
-                push!(out, _cubical_cell_grade(channels, origin, mask, dims, periodic))
+                push!(out, _cubical_cell_grade(channels, origin, mask, dims, periodic; orientation))
             end
         end
         out
@@ -11974,7 +12058,6 @@ function _graded_complex_from_image_channels(channels::Vector{<:AbstractArray},
 
     cells = [collect(1:length(cells_by_dim[k+1])) for k in 0:N]
     G = GradedComplex(cells, cached.boundaries, grades)
-    orientation = get(spec.params, :orientation, ntuple(_ -> 1, C))
     axes = get(spec.params, :axes, _axes_from_grades(grades, C; orientation=orientation))
     return G, axes, orientation
 end
@@ -13338,7 +13421,7 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
        spec_try isa FiltrationSpec &&
        _is_point_cloud_lowdim_direct_lazy_kind(spec_try.kind) &&
        Int(get(spec_try.params, :max_dim, 1)) <= 1
-        direct_payload = _point_cloud_lowdim_lazy_payload(data, spec_try)
+        direct_payload = _point_cloud_lowdim_lazy_payload(data, spec_try; cache=enc_cache)
         axes0 = direct_payload.axes
         orientation0 = direct_payload.orientation
     else
@@ -13782,5 +13865,9 @@ function encode(path::AbstractString, spec::FiltrationSpec;
                           strict_preflight=strict_preflight)
     return run_ingestion(plan; stage=plan.stage, degree=degree)
 end
+
+include("data_ingestion/filtered_geometry.jl")
+include("data_ingestion/geometric_inspection.jl")
+include("data_ingestion/source_chains.jl")
 
 end # module DataIngestion

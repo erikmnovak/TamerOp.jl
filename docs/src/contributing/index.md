@@ -41,3 +41,7 @@ The [repository contributor history](https://github.com/erikmnovak/TamerOp.jl/gr
 records contributions to tracked files. Mathematical and software sources are
 credited where their ideas are used, including the
 [implementation bibliography](../../implementation/references.md).
+
+## Browse all contributor guidance
+
+<!-- COLLECTION: contributing -->

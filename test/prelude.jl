@@ -52,6 +52,7 @@ const _TEST_SURFACE_MODULES = (
     TamerOp.MultiparameterImages,
     TamerOp.Visualization,
     TamerOp.Invariants,
+    TamerOp.IntervalDecompositions,
     TamerOp.Workflow,
     TamerOp.DataIngestion,
     TamerOp.OrdinaryPersistence,
@@ -246,3 +247,5 @@ const FIELDS_FULL = Tuple(getproperty((QQ=FIELD_QQ, F2=FIELD_F2, F3=FIELD_F3,
 with_fields(fields, f::Function) = foreach(f, fields)
 with_fields(f::Function, fields) = foreach(f, fields)
 
+
+include("helpers/visualization.jl")

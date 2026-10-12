@@ -16,6 +16,7 @@ Canonical public story
 - Object only: `kernel`, `image`, `cokernel`, `coimage`.
 - Object plus universal map: `kernel_with_inclusion`, `image_with_inclusion`,
   `cokernel_with_projection`, `coimage_with_projection`.
+- Selected coordinates: `propagate`, then optional `generated_submodule`.
 - Submodule bridge: `kernel_submodule`, `image_submodule`, then
   `quotient(S)` or `quotient_with_projection(S)`.
 - For exact sequences, prefer constructing with `short_exact_sequence(...)`;
@@ -4488,5 +4489,7 @@ function Base.show(io::IO, ::MIME"text/plain", sn::SnakeLemmaResult{K}) where {K
     println(io, "  maps: k1, k2, delta, c1, c2  (access as fields on the result)")
 end
 
+
+include("abelian_categories/propagation.jl")
 
 end

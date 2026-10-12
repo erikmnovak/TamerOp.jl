@@ -1,3 +1,8 @@
+include("visualization_makie_batches.jl")
+include("visualization_makie_annotations.jl")
+include("visualization_makie_retained.jl")
+include("visualization_makie_composition.jl")
+
 function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
     Viz = TO.Visualization
 
@@ -54,7 +59,7 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         return row
     end
 
-    _uses_axis3(spec) = any(layer -> layer isa Viz.Point3Layer || layer isa Viz.Segment3Layer,
+    _uses_axis3(spec) = get(Viz.visual_metadata(spec), :source_view_dimension, 0)==3 || any(layer -> layer isa Viz.Point3Layer || layer isa Viz.Segment3Layer || layer isa Viz.Polygon3Layer,
                             Viz.visual_layers(spec))
 
     function _legend_entries(spec)
@@ -89,8 +94,9 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         end
         get(spec.axes, :xticks, nothing) === nothing || (ax.xticks = spec.axes.xticks)
         get(spec.axes, :yticks, nothing) === nothing || (ax.yticks = spec.axes.yticks)
-        spec.axes.aspect === :equal && (ax.aspect = MakieMod.DataAspect())
-        spec.axes.aspect === :data && (ax.aspect = MakieMod.DataAspect())
+        if !_uses_axis3(spec) && spec.axes.aspect in (:equal, :data)
+            ax.aspect = MakieMod.DataAspect()
+        end
         return ax
     end
 
@@ -112,7 +118,7 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         return nothing
     end
 
-    function _render_matrix_panel!(grid, spec, style)
+    function _render_matrix_panel!(grid, spec, style; composition_cells=nothing)
         grid.tellheight[] = false
         grid.valign[] = :top
         layers = Viz.visual_layers(spec)
@@ -153,47 +159,100 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             end
             # Each coefficient remains text, including finite-field residues and
             # exact fractions. Layout performs no algebra or coefficient scaling.
-            table = MakieMod.GridLayout(grid[row, 1]; rowgap=style.gap * 2/3,
-                                        colgap=style.gap * 7/6,
-                                        halign=:center, valign=:top, tellwidth=false)
-            meta = Viz.visual_metadata(spec)
-            row_colors = get(meta, :row_colors, fill(Viz._VisualRole(:foreground), nr))
-            column_colors = get(meta, :column_colors, fill(Viz._VisualRole(:foreground), nc))
-            cell_colors = get(meta, :cell_colors, fill(Viz._VisualRole(:foreground), nr, nc))
-            row_roles = get(meta, :row_roles, nothing)
-            column_roles = get(meta, :column_roles, nothing)
-            cell_roles = get(meta, :cell_roles, nothing)
-            MakieMod.Label(table[1, 1], get(meta, :matrix_corner, "target / source");
-                           font=style.font, fontsize=_textsize(style, 11),
-                           color=_role_color(style, :muted))
-            for j in 1:nc
-                role = column_roles === nothing ? nothing : column_roles[j]
-                label = layer.column_labels[j] * (role === nothing ? "" : Viz._visual_role_label(role))
-                color = role === nothing ? _color(style, column_colors[j]) : _role_color(style, role)
-                MakieMod.Label(table[1, j + 1], label;
-                               font=style.font, fontsize=_textsize(style, 12), color)
-            end
-            entry_fontsize = _textsize(style, nc > 8 ? 12 : 14)
-            for i in 1:nr
-                role = row_roles === nothing ? nothing : row_roles[i]
-                label = layer.row_labels[i] * (role === nothing ? "" : Viz._visual_role_label(role))
-                color = role === nothing ? _color(style, row_colors[i]) : _role_color(style, role)
-                MakieMod.Label(table[i + 1, 1], label;
-                               font=style.font, fontsize=_textsize(style, 12), color)
-                for j in 1:nc
-                    color = cell_roles === nothing ? _color(style, cell_colors[i,j]) :
-                        _role_color(style, cell_roles[i,j])
-                    MakieMod.Label(table[i + 1, j + 1], layer.entries[i, j];
-                                   font=style.mono_font, fontsize=entry_fontsize, color)
-                end
-            end
+            _visual_matrix_table!(MakieMod, Viz, grid[row,1], layer, spec.metadata, style;
+                color=c->_color(style,c), role_color=r->_role_color(style,r),
+                textsize=s->_textsize(style,s), composition_cells)
             row += 1
         end
         return nothing
     end
 
-    function _draw_layers!(ax, spec; style=Viz.VisualStyle())
+    function _polygons!(ax, polygons, layer, style, draw)
+        isempty(polygons) && return nothing
+        options = (;color=(_color(style,layer.fill_color),layer.alpha),
+            strokecolor=_color(style,layer.stroke_color),
+            strokewidth=layer.linewidth * style.linewidth_scale)
+        # Makie's vector poly recipe paints all fills before all outlines. For
+        # overlapping stroked polygons that would uncover an earlier outline.
+        # Preserve the supplied order in that case; disjoint fibers batch fully.
+        if options.strokewidth > 0 && _visual_polygon_overlap(polygons)
+            for polygon in polygons
+                draw(:poly,ax, polygon; options...)
+            end
+        else
+            draw(:poly,ax, polygons; options...)
+        end
+        return nothing
+    end
+
+    function _draw_interval_bars!(ax, spec, style, draw)
+        spec.kind in (:barcode,:slice_barcode) || return false
+        haskey(spec.metadata,:interval_segments) || return false
+        layers = spec.layers
+        # Only the canonical horizontal strokes qualify. A guide that appends a
+        # comparison line keeps ordinary layer ordering instead of losing it.
+        segments = [s for l in layers if l isa Viz.SegmentLayer for s in l.segments]
+        Tuple(segments) == spec.metadata.interval_segments || return false
+        all(l -> l isa Union{Viz.SegmentLayer,Viz.PointLayer,Viz.TextLayer}, layers) || return false
+        all(l -> !(l isa Viz.SegmentLayer) || l.linestyle===:solid, layers) || return false
+        all(l -> !(l isa Viz.PointLayer) || (l.markerspace===:pixel && !(l.color isa AbstractVector)), layers) || return false
+        endpoints = get(spec.metadata,:barcode_endpoint_layers,(left=(),right=()))
+        linepoints = MakieMod.Point2d[]; linecolors = MakieMod.RGBAf[]; widths = Float64[]
+        points = MakieMod.Point2d[]; colors = MakieMod.RGBAf[]; sizes = Float64[]; markers = Symbol[]
+        labels = String[]; anchors = MakieMod.Point2d[]; textcolors = MakieMod.RGBAf[]
+        fontsizes = Float64[]; aligns = Tuple{Symbol,Symbol}[]; offsets = MakieMod.Vec2d[]
+        for (index,layer) in enumerate(layers)
+            if layer isa Viz.SegmentLayer
+                for s in layer.segments
+                    append!(linepoints,(to_point2((s[1],s[2])),to_point2((s[3],s[4]))))
+                    c = MakieMod.to_color((_color(style,layer.color),layer.alpha))
+                    w = layer.linewidth * style.linewidth_scale
+                    append!(linecolors,(c,c)); append!(widths,(w,w))
+                end
+            elseif layer isa Viz.PointLayer
+                for p in layer.points
+                    push!(points,to_point2(p));push!(colors,MakieMod.to_color((_color(style,layer.color),layer.alpha)))
+                    push!(sizes,layer.markersize*style.markersize_scale);push!(markers,Viz._visual_marker(layer.color))
+                end
+            else
+                horizontal = index in endpoints.left ? :left : index in endpoints.right ? :right : :center
+                alignment = horizontal===:center ? (:center,:center) : (horizontal,:bottom)
+                offset = horizontal===:center ? (0.,0.) : (0.,3style.linewidth_scale+_textsize(style,2))
+                for (label,anchor) in zip(layer.labels,layer.positions)
+                    push!(labels,label);push!(anchors,to_point2(anchor));push!(textcolors,MakieMod.to_color(_color(style,layer.color)))
+                    push!(fontsizes,_textsize(style,layer.textsize));push!(aligns,alignment);push!(offsets,MakieMod.Vec2d(offset))
+                end
+            end
+        end
+        # Endpoint marks are foreground decorations. Their order (outer disk,
+        # open center, selected mark) is retained within the scatter buffer.
+        isempty(linepoints) || draw(:linesegments,ax,linepoints;color=linecolors,linewidth=widths)
+        isempty(points) || draw(:scatter,ax,points;color=colors,markersize=sizes,marker=markers)
+        isempty(labels) || draw(:text,ax,anchors;text=labels,color=textcolors,font=style.font,
+            fontsize=fontsizes,align=aligns,offset=offsets)
+        return true
+    end
+
+    function _draw_layers!(ax, spec; style=Viz.VisualStyle(), text_halo=get(spec.metadata,:text_halo,false), sink=nothing)
+        function draw(kind, parent, args...; kwargs...)
+            if sink === nothing
+                return getproperty(MakieMod, Symbol(kind, :!))(parent,args...;kwargs...)
+            end
+            push!(sink,(;kind,args,kwargs=(;kwargs...)))
+            return length(sink)
+        end
         colorbars = NamedTuple[]
+        if spec.kind === :overlay
+            for child in spec.metadata.overlay_specs
+                append!(colorbars,_draw_layers!(ax,child;style,text_halo=true,sink))
+            end
+            sink === nothing && _apply_axis_limits!(ax,spec)
+            return colorbars
+        end
+        if !text_halo && _draw_interval_bars!(ax,spec,style,draw)
+            sink === nothing && _apply_axis_limits!(ax,spec)
+            return colorbars
+        end
         layers = Viz.visual_layers(spec)
         query_label_layer = get(Viz.visual_metadata(spec), :query_label_layer, nothing)
         annotation_scale = max(style.fontsize / 16, style.markersize_scale)
@@ -201,68 +260,109 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         barcode_endpoint_layers = get(Viz.visual_metadata(spec), :barcode_endpoint_layers, (left=(),right=()))
         interval_labels = String[]
         interval_anchors = NTuple{2,Float64}[]
+        skip_until = 0
         for (layer_index, layer) in enumerate(layers)
+            layer_index <= skip_until && continue
             if layer isa Viz.HeatmapLayer
-                hm = MakieMod.heatmap!(ax, layer.x, layer.y, permutedims(layer.values);
+                hm = draw(:heatmap,ax, layer.x, layer.y, permutedims(layer.values);
                                        colormap=Viz._visual_colormap(style, layer.colormap),
                                        colorrange=something(get(spec.metadata, :colorrange, nothing), MakieMod.Makie.automatic),
                                        nan_color=_role_color(style, :missing),
                                        alpha=layer.alpha)
                 layer.show_colorbar && push!(colorbars, (; plot=hm, label=layer.colorbar_label))
             elseif layer isa Viz.RectLayer
-                for rect in layer.rects
-                    poly = [to_point2((rect[1], rect[2])), to_point2((rect[3], rect[2])),
-                            to_point2((rect[3], rect[4])), to_point2((rect[1], rect[4]))]
-                    MakieMod.poly!(ax, poly;
-                                   color=(_color(style, layer.fill_color), layer.alpha),
-                                   strokecolor=_color(style, layer.stroke_color),
-                                   strokewidth=layer.linewidth * style.linewidth_scale)
-                end
+                polygons = [[to_point2((r[1], r[2])), to_point2((r[3], r[2])),
+                             to_point2((r[3], r[4])), to_point2((r[1], r[4]))] for r in layer.rects]
+                _polygons!(ax, polygons, layer, style, draw)
             elseif layer isa Viz.PolygonLayer
+                _polygons!(ax, [to_point2.(p) for p in layer.polygons], layer, style, draw)
+            elseif layer isa Viz.Polygon3Layer
+                points = MakieMod.Point3d[]
+                triangles = MakieMod.GeometryBasics.TriangleFace{Int}[]
                 for polygon in layer.polygons
-                    MakieMod.poly!(ax, to_point2.(polygon);
-                                   color=(_color(style, layer.fill_color), layer.alpha),
-                                   strokecolor=_color(style, layer.stroke_color),
-                                   strokewidth=layer.linewidth * style.linewidth_scale)
-                end
-            elseif layer isa Viz.SegmentLayer
-                for seg in layer.segments
-                    MakieMod.lines!(ax, [seg[1], seg[3]], [seg[2], seg[4]];
-                                    color=(_color(style, layer.color), layer.alpha),
-                                    linewidth=layer.linewidth * style.linewidth_scale,
-                                    linestyle=layer.linestyle)
-                end
-            elseif layer isa Viz.Segment3Layer
-                for seg in layer.segments
-                    MakieMod.lines!(ax, [seg[1], seg[4]], [seg[2], seg[5]], [seg[3], seg[6]];
-                                    color=(_color(style, layer.color), layer.alpha),
-                                    linewidth=layer.linewidth * style.linewidth_scale)
-                end
-            elseif layer isa Viz.PolylineLayer
-                for path in layer.paths
-                    xs = [p[1] for p in path]
-                    ys = [p[2] for p in path]
-                    MakieMod.lines!(ax, xs, ys; color=(_color(style, layer.color), layer.alpha),
-                                    linewidth=layer.linewidth * style.linewidth_scale)
-                    if layer.closed && !isempty(path)
-                        MakieMod.lines!(ax, [path[end][1], path[1][1]], [path[end][2], path[1][2]];
-                                        color=(_color(style, layer.color), layer.alpha),
-                                        linewidth=layer.linewidth * style.linewidth_scale)
+                    isempty(polygon) && continue
+                    # Triangulate in the plane with greatest projected area. Dropping
+                    # z unconditionally would erase vertical cubical faces.
+                    normal=zeros(3)
+                    origin=first(polygon)
+                    for i in 2:length(polygon)-1
+                        a=polygon[i].-origin;b=polygon[i+1].-origin
+                        normal .+= (a[2]*b[3]-a[3]*b[2],a[3]*b[1]-a[1]*b[3],a[1]*b[2]-a[2]*b[1])
                     end
+                    all(iszero,normal) && continue
+                    keep=filter(!=(argmax(abs.(normal))),1:3)
+                    projected=[MakieMod.Point2d(p[keep[1]],p[keep[2]]) for p in polygon]
+                    faces=MakieMod.GeometryBasics.earcut_triangulate([projected])
+                    offset = length(points)
+                    append!(points, MakieMod.Point3d.(polygon))
+                    append!(triangles, [MakieMod.GeometryBasics.TriangleFace{Int}(Tuple(convert.(Int,f) .+ offset)) for f in faces])
                 end
+                (isempty(triangles) && sink === nothing) || draw(:mesh,ax,
+                    MakieMod.GeometryBasics.Mesh(points, triangles);
+                    color=(_color(style,layer.color),layer.alpha))
+            elseif layer isa Viz.SegmentLayer
+                points = [to_point2(p) for s in layer.segments for p in ((s[1],s[2]),(s[3],s[4]))]
+                (isempty(points) && sink === nothing) || draw(:linesegments,ax, points;
+                    color=(_color(style, layer.color), layer.alpha),
+                    linewidth=layer.linewidth * style.linewidth_scale, linestyle=layer.linestyle)
+            elseif layer isa Viz.Segment3Layer
+                points = [MakieMod.Point3d(p) for s in layer.segments for p in ((s[1],s[2],s[3]),(s[4],s[5],s[6]))]
+                (isempty(points) && sink === nothing) || draw(:linesegments,ax, points;
+                    color=(_color(style, layer.color), layer.alpha),
+                    linewidth=layer.linewidth * style.linewidth_scale)
+            elseif layer isa Viz.PolylineLayer
+                points = MakieMod.Point2d[]
+                closing = MakieMod.Point2d[]
+                for path in layer.paths
+                    isempty(path) && continue
+                    isempty(points) || push!(points, MakieMod.Point2d(NaN, NaN))
+                    append!(points, to_point2.(path))
+                    layer.closed && append!(closing, (to_point2(last(path)), to_point2(first(path))))
+                end
+                options = (;color=(_color(style, layer.color), layer.alpha),
+                           linewidth=layer.linewidth * style.linewidth_scale)
+                (isempty(points) && sink === nothing) || draw(:lines,ax, points; options...)
+                (isempty(closing) && sink === nothing) || draw(:linesegments,ax, closing; options...)
             elseif layer isa Viz.PointLayer
-                isempty(layer.points) || begin
+                if spec.kind in (:persistence_diagram,:slice_diagram) &&
+                        layer.markerspace===:pixel && !(layer.color isa AbstractVector)
+                    # Consecutive canonical interval markers retain their exact
+                    # paint order in one scatter, including selected overlays.
+                    stop = layer_index
+                    while stop < length(layers)
+                        next = layers[stop+1]
+                        next isa Viz.PointLayer && next.markerspace===:pixel &&
+                            !(next.color isa AbstractVector) || break
+                        stop += 1
+                    end
+                    points = MakieMod.Point2d[]; colors = MakieMod.RGBAf[]
+                    sizes = Float64[]; markers = Symbol[]
+                    for index in layer_index:stop
+                        item = layers[index]
+                        for point in item.points
+                            push!(points,to_point2(point))
+                            push!(colors,MakieMod.to_color((_color(style,item.color),item.alpha)))
+                            push!(sizes,item.markersize*style.markersize_scale)
+                            push!(markers,Viz._visual_marker(item.color))
+                        end
+                    end
+                    (isempty(points) && sink === nothing) || draw(:scatter,ax,points;color=colors,markersize=sizes,marker=markers)
+                    skip_until = stop
+                    continue
+                end
+                (isempty(layer.points) && sink === nothing) || begin
                     # Data-space markers can encode geometric radii. Scaling
                     # their appearance would change the represented set.
                     markersize = layer.markersize * (layer.markerspace === :data ? 1 : style.markersize_scale)
                     kwargs = layer.color isa AbstractVector ?
                              (; color=layer.color, colormap=Viz._visual_colormap(style, layer.colormap),
+                                colorrange=something(get(spec.metadata, :point_colorrange, nothing), MakieMod.Makie.automatic),
                                 nan_color=_role_color(style, :missing), alpha=layer.alpha,
                                 markersize, markerspace=layer.markerspace) :
                              (; color=(_color(style, layer.color), layer.alpha), markersize,
                                 markerspace=layer.markerspace,
                                 marker=layer.markerspace === :data ? :circle : Viz._visual_marker(layer.color))
-                    plot = MakieMod.scatter!(ax,
+                    plot = draw(:scatter,ax,
                                       [p[1] for p in layer.points],
                                       [p[2] for p in layer.points];
                                       kwargs...)
@@ -271,19 +371,22 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                         push!(colorbars, (; plot, label))
                 end
             elseif layer isa Viz.Point3Layer
-                isempty(layer.points) || begin
+                (isempty(layer.points) && sink === nothing) || begin
                     kwargs = layer.color isa AbstractVector ?
                              (; color=layer.color, colormap=Viz._visual_colormap(style, layer.colormap),
+                                colorrange=something(get(spec.metadata, :point_colorrange, nothing), MakieMod.Makie.automatic),
                                 nan_color=_role_color(style, :missing), alpha=layer.alpha,
                                 markersize=layer.markersize * style.markersize_scale) :
                              (; color=(_color(style, layer.color), layer.alpha),
                                 markersize=layer.markersize * style.markersize_scale,
                                 marker=Viz._visual_marker(layer.color))
-                    MakieMod.scatter!(ax,
+                    plot = draw(:scatter,ax,
                                       [p[1] for p in layer.points],
                                       [p[2] for p in layer.points],
                                       [p[3] for p in layer.points];
                                       kwargs...)
+                    label = get(spec.metadata, :point_colorbar_label, "")
+                    layer.color isa AbstractVector && !isempty(label) && push!(colorbars, (;plot,label))
                 end
             elseif layer isa Viz.TextLayer
                 if layer_index in interval_annotation_layers
@@ -291,7 +394,10 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                     append!(interval_anchors, layer.positions)
                     continue
                 end
-                for (lbl, pos) in zip(layer.labels, layer.positions)
+                isempty(layer.labels) && sink === nothing && continue
+                alignments = Tuple{Symbol,Symbol}[]
+                offsets = MakieMod.Vec2d[]
+                for pos in layer.positions
                     # Pixel offsets separate query annotations from their markers
                     # without changing the mathematical positions in the spec.
                     text_options = if layer_index == query_label_layer
@@ -303,7 +409,17 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                     elseif spec.kind === :hasse
                         # Center multiline labels beside schematic vertices.
                         (; align=(:left, :center))
-                    elseif spec.kind in (:slice_diagram, :persistence_diagram)
+                    elseif spec.kind in (:source_chain_geometry, :component_geometry)
+                        # Source panels also appear beside coefficient tables.
+                        # Grow labels into the viewport without moving cells.
+                        middle = ((sum(spec.axes.xlimits)/2), (sum(spec.axes.ylimits)/2))
+                        horizontal = pos[1] > middle[1] ? :right : pos[1] < middle[1] ? :left : :center
+                        vertical = pos[2] > middle[2] ? :top : pos[2] < middle[2] ? :bottom : spec.kind === :component_geometry ? :bottom : :center
+                        gap = spec.kind === :component_geometry ? 10 : 5
+                        (; align=(horizontal,vertical),
+                            offset=((horizontal===:right ? -gap : horizontal===:left ? gap : 0),
+                                    (vertical===:top ? -gap : vertical===:bottom ? gap : 0)) .* annotation_scale)
+                    elseif spec.kind in (:slice_diagram, :persistence_diagram, :collection_matrix)
                         (; align=(:left, :bottom), offset=(10, 10) .* annotation_scale)
                     elseif spec.kind in (:slice_barcode, :barcode)
                         # Endpoint labels grow inward and above the bar, leaving
@@ -317,54 +433,53 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                     else
                         NamedTuple()
                     end
-                    MakieMod.text!(ax, lbl; position=(pos[1], pos[2]), color=_color(style, layer.color),
-                                   font=style.font, fontsize=_textsize(style, layer.textsize), text_options...)
+                    push!(alignments, get(text_options, :align, (:left, :bottom)))
+                    push!(offsets, MakieMod.Vec2d(get(text_options, :offset, (0,0))))
+                end
+                positions = to_point2.(layer.positions)
+                if text_halo && nameof(MakieMod) === :WGLMakie
+                    # WGL's shader accepts a uniform stroke width and paints its
+                    # stroke outside each glyph. Per-string stroke-width arrays
+                    # construct a scene but fail when WGL serializes it.
+                    draw(:text,ax, positions; text=layer.labels,
+                        color=_color(style,layer.color),
+                        strokecolor=_role_color(style,:background), strokewidth=1.,
+                        font=style.font, fontsize=_textsize(style,layer.textsize),
+                        align=alignments, offset=offsets)
+                elseif text_halo
+                    # Interleave each halo and glyph, retaining painter order even
+                    # for overlapping labels. No separate scene per string.
+                    background = _role_color(style, :background)
+                    draw(:text,ax, repeat(positions; inner=2);
+                        text=repeat(layer.labels; inner=2),
+                        color=repeat([background, _color(style,layer.color)], length(positions)),
+                        strokecolor=background, strokewidth=repeat([1.,0.],length(positions)),
+                        font=style.font, fontsize=_textsize(style,layer.textsize),
+                        align=repeat(alignments;inner=2), offset=repeat(offsets;inner=2))
+                else
+                    draw(:text,ax, positions; text=layer.labels, color=_color(style,layer.color),
+                        font=style.font, fontsize=_textsize(style,layer.textsize),
+                        align=alignments, offset=offsets)
                 end
             elseif layer isa Viz.BarcodeLayer
+                points = MakieMod.Point2d[]
                 y = layer.ystart
                 for (iv, mult) in zip(layer.intervals, layer.multiplicities)
                     for _ in 1:max(mult, 1)
-                        MakieMod.lines!(ax, [iv[1], iv[2]], [y, y];
-                                        color=_color(style, layer.color), linewidth=layer.linewidth * style.linewidth_scale)
+                        append!(points, (to_point2((iv[1],y)), to_point2((iv[2],y))))
                         y += layer.ystep
                     end
                 end
+                (isempty(points) && sink === nothing) || draw(:linesegments,ax, points;
+                    color=_color(style,layer.color), linewidth=layer.linewidth * style.linewidth_scale)
             else
                 error("Unsupported visualization layer $(typeof(layer)) for Makie rendering.")
             end
         end
-        if !isempty(interval_labels)
-            anchors = to_point2.(interval_anchors)
-            options = (; text=interval_labels, color=_role_color(style, :foreground),
-                font=style.font, fontsize=_textsize(style, 12), align=(:left, :bottom),
-                justification=:left, linewidth=style.linewidth_scale,
-                shrink=(4, 8) .* annotation_scale)
-            # Native layout supplies measured, separated labels. Its corner
-            # correction can overwrite one axis when both need clipping; apply
-            # the two pixel bounds independently before displaying the result.
-            optimizer = MakieMod.annotation!(ax, anchors; options..., visible=false)
-            offsets = MakieMod.lift(ax.scene, optimizer.offsets, optimizer.text_bbs,
-                                   MakieMod.viewport(ax.scene); ignore_equal_values=true) do proposed, boxes, viewport
-                extent = MakieMod.widths(viewport)
-                map(proposed, boxes) do offset, box
-                    lo, hi = minimum(box), maximum(box)
-                    corrected = ntuple(2) do k
-                        lower, upper = 2.0-lo[k], Float64(extent[k])-2.0-hi[k]
-                        all(isfinite, (offset[k], lower, upper)) || return 0.0
-                        # A not-yet-laid-out or impossibly narrow viewport is
-                        # centered until the next resize supplies enough space.
-                        lower <= upper ? clamp(Float64(offset[k]), lower, upper) : lower/2+upper/2
-                    end
-                    MakieMod.Vec2d(corrected)
-                end
-            end
-            # Finite relative-pixel offsets use Makie's explicit placement path;
-            # no second optimization or feedback loop changes these positions.
-            # Targets, interval metadata, and coordinate-based picking stay exact.
-            MakieMod.annotation!(ax, offsets, anchors; options..., labelspace=:relative_pixel)
-        end
-        _apply_axis_limits!(ax, spec)
-        if spec.kind in (:slice_diagram, :persistence_diagram)
+        # Establish the final limits and tick layout before optimizing labels.
+        # Updating them afterward repeats the same annotation work.
+        sink === nothing && _apply_axis_limits!(ax, spec)
+        if sink === nothing && spec.kind in (:slice_diagram, :persistence_diagram, :collection_matrix)
             # Infinity lanes can be closer than two horizontal labels are wide.
             # Measure the unrotated glyphs, so deciding their orientation never
             # depends on the rotation being updated. Keep every tick and its
@@ -382,6 +497,18 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                 rotation = crowded ? pi/2 : 0.0
                 ax.xticklabelrotation[] == rotation || (ax.xticklabelrotation[] = rotation)
                 return nothing
+            end
+        end
+        if !isempty(interval_labels)
+            anchors = to_point2.(interval_anchors)
+            options = (; text=interval_labels, color=_role_color(style, :foreground),
+                font=style.font, fontsize=_textsize(style, 12), align=(:left, :bottom),
+                justification=:left, linewidth=style.linewidth_scale,
+                shrink=(4, 8) .* annotation_scale)
+            if sink === nothing
+                _visual_interval_annotations!(MakieMod, ax, anchors; options...)
+            else
+                push!(sink,(;kind=:interval_annotations,args=(anchors,),kwargs=options))
             end
         end
         return colorbars
@@ -446,7 +573,12 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             xticklabelcolor=foreground, yticklabelcolor=foreground,
             backgroundcolor=_role_color(style, :background))
         if _uses_axis3(spec)
-            return MakieMod.Axis3(figslot; common...,
+            # Plots inherit the scene's clipping planes when they are created.
+            # Establish the final data box/aspect before adding cells: changing
+            # the aspect afterward can leave inherited planes cutting the data.
+            aspect_options=spec.axes.aspect in (:equal,:data) ? (;aspect=:data) : (;)
+            return MakieMod.Axis3(figslot; common...,aspect_options...,
+                limits=(spec.axes.xlimits,spec.axes.ylimits,get(spec.axes,:zlimits,nothing)),
                 zlabel=get(spec.axes, :zlabel, "z"), zlabelfont=style.font,
                 zlabelsize=style.fontsize, zlabelcolor=foreground,
                 zticklabelfont=style.font, zticklabelsize=_textsize(style, 12),
@@ -478,10 +610,10 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             ticklabelcolor=_role_color(style, :foreground), spinewidth=style.linewidth_scale)
     end
 
-    function _render_spec_into_grid!(fig, grid, spec; style=Viz.VisualStyle())
+    function _render_spec_into_grid!(fig, grid, spec; style=Viz.VisualStyle(), composition_cells=nothing)
         panel_style = get(Viz.visual_metadata(spec), :panel_style, nothing)
         if panel_style === :matrix || any(layer -> layer isa Viz.MatrixLayer, Viz.visual_layers(spec))
-            result = _render_matrix_panel!(grid, spec, style)
+            result = _render_matrix_panel!(grid, spec, style; composition_cells)
             _style_grid!(grid, style)
             return result
         elseif panel_style === :text_only
@@ -509,54 +641,6 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         return ax
     end
 
-    function _render_slice_viewer(spec; figure=nothing, style=Viz.VisualStyle())
-        volume = get(spec.metadata, :volume, nothing)
-        volume === nothing && return nothing
-        view_dims = Tuple(get(spec.metadata, :view_dims, (1, 2)))
-        fixed = Dict{Int,Int}(get(spec.metadata, :fixed_indices, Dict{Int,Int}()))
-        control_dims = sort!(collect(setdiff(1:ndims(volume), collect(view_dims))))
-        isempty(control_dims) && return nothing
-        fig = figure === nothing ? MakieMod.Figure(;
-            fontsize=style.fontsize, figure_padding=style.padding,
-            backgroundcolor=_role_color(style, :background)) : figure
-        grid = _style_grid!(MakieMod.GridLayout(), style)
-        fig[1, 1:3] = grid
-        plot_row = _panel_heading!(grid, spec, style)
-        ax = _make_axis(grid[plot_row, 1], spec; style, headings=false)
-        current = copy(fixed)
-        # The core stores rows=y, columns=x. Makie needs rows=x, columns=y;
-        # use the same slice helper for initial state and every slider update.
-        zobs = MakieMod.Observable(permutedims(Viz._image_slice_values(volume, view_dims, current)))
-        hm = MakieMod.heatmap!(ax,
-                               1:size(zobs[], 1),
-                               1:size(zobs[], 2),
-                               zobs;
-                               colormap=Viz._visual_colormap(style, get(spec.metadata, :colormap, :magma)),
-                               colorrange=something(get(spec.metadata, :colorrange, nothing), MakieMod.Makie.automatic),
-                               nan_color=_role_color(style, :missing),
-                               alpha=1.0)
-        _apply_axis_limits!(ax, spec)
-        colorbar_label = get(spec.metadata, :colorbar_label, "intensity")
-        isempty(colorbar_label) || _colorbar!(grid[plot_row, 2], hm, colorbar_label, style)
-        for (row, dim) in enumerate(control_dims)
-            MakieMod.Label(fig[row + 1, 1], "slice dim $dim";
-                font=style.font, fontsize=style.fontsize,
-                color=_role_color(style, :foreground), tellwidth=false)
-            slider = MakieMod.Makie.Slider(fig[row + 1, 2];
-                                     range=1:size(volume, dim),
-                                     startvalue=get(current, dim, cld(size(volume, dim), 2)))
-            MakieMod.Label(fig[row + 1, 3], MakieMod.lift(v -> string(Int(round(v))), slider.value);
-                font=style.mono_font, fontsize=style.fontsize,
-                color=_role_color(style, :foreground))
-            MakieMod.on(slider.value) do v
-                current[dim] = Int(round(v))
-                zobs[] = permutedims(Viz._image_slice_values(volume, view_dims, current))
-            end
-        end
-        _style_grid!(grid, style)
-        return _style_figure!(fig, style)
-    end
-
     function render_spec(spec; display::Symbol=:inline, figure=nothing, size=nothing,
                          style=Viz.VisualStyle())
         spec isa Viz.VisualizationSpec || throw(ArgumentError("render_spec expected a VisualizationSpec, got $(typeof(spec))."))
@@ -568,11 +652,6 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             fig_size === nothing ? MakieMod.Figure(; options...) : MakieMod.Figure(; options..., size=fig_size)
         else
             figure
-        end
-        nameof(MakieMod) === :WGLMakie &&
-            get(Viz.visual_interaction(spec), :notebook, :summary_card) === :widget_viewer && begin
-            widget_fig = _render_slice_viewer(spec; figure=fig, style)
-            widget_fig === nothing || return widget_fig
         end
         panels = Viz.visual_panels(spec)
         positions = get(Viz.visual_metadata(spec), :panel_positions, nothing)
@@ -602,6 +681,7 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                 color=_role_color(style, :muted), tellwidth=false, word_wrap=true)
             first_panel_row += 1
         end
+        composition_handles = NamedTuple[]
         for (idx, panel) in enumerate(panels)
             rows, cols = if positions === nothing
                 row, col = div(idx - 1, ncols) + 1, mod(idx - 1, ncols) + 1
@@ -611,7 +691,9 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
             end
             figure_rows = (first_panel_row + first(rows) - 1):(first_panel_row + last(rows) - 1)
             grid = fig[figure_rows, cols] = MakieMod.GridLayout()
-            _render_spec_into_grid!(fig, grid, panel; style)
+            cells = Dict{Tuple{Int,Int},Any}()
+            axis = _render_spec_into_grid!(fig, grid, panel; style, composition_cells=cells)
+            push!(composition_handles,(;axis,grid,cells))
         end
         weights = get(Viz.visual_metadata(spec), :panel_row_weights, nothing)
         if weights !== nothing
@@ -633,12 +715,17 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         elseif legend_position !== :none
             _render_legend!(fig, fig[last_panel_row + 1, 1:ncols], spec, style)
         end
-        return _style_figure!(fig, style)
+        _style_figure!(fig, style)
+        spec.kind === :composition && _render_visual_composition!(TO,MakieMod,fig,spec,composition_handles,style)
+        return fig
     end
 
     save_spec = if allow_save
         function(path::AbstractString, spec; kwargs...)
             spec isa Viz.VisualizationSpec || throw(ArgumentError("save_spec expected a VisualizationSpec, got $(typeof(spec))."))
+            if spec.kind === :composition && lowercase(splitext(path)[2]) == ".html"
+                return _save_composition_html(TO,MakieMod,path,spec;kwargs...)
+            end
             fig = render_spec(spec; kwargs...)
             MakieMod.save(path, fig)
             return path
@@ -647,7 +734,15 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
         nothing
     end
 
-    return (; render=render_spec, save=save_spec,
+    function plan(spec;style=Viz.VisualStyle())
+        commands=NamedTuple[]
+        colorbars=_draw_layers!(nothing,spec;style,sink=commands)
+        return (;commands,colorbars)
+    end
+
+    return (; render=render_spec, save=save_spec, plan,
+              heading=_panel_heading!, legend=_render_legend!, colorbar=_colorbar!,
+              apply_limits=_apply_axis_limits!, style_grid=_style_grid!,
               make_axis=_make_axis, draw_layers=_draw_layers!,
               render_panel=_render_spec_into_grid!, style_figure=_style_figure!)
 end

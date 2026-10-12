@@ -1,7 +1,7 @@
 # Finite-poset modules: schematic covers, selected stalks/maps, and encoding panels.
 
 available_visuals(::AbstractPoset) = (:hasse,)
-available_visuals(::Modules.PModule) = (:hasse, :module_inspector, :rank_section)
+available_visuals(::Modules.PModule) = (:hasse, :module_inspector, :rank_section, :generalized_rank)
 
 _inspection_poset(P::AbstractPoset) = P
 _inspection_poset(M::Modules.PModule) = M.Q
@@ -27,9 +27,11 @@ function _inspection_field_label(field)
 end
 
 _visual_request_keywords(::Union{AbstractPoset,Modules.PModule}, kind::Symbol) =
+    kind === :generalized_rank ? _REGION_RANK_KEYWORDS :
     kind === :rank_section ? (:source, :target, :vertex, :matrix_limit) :
     kind === :module_inspector ? (:vertex, :pair, :matrix_limit) : (:vertex, :pair)
 function _visual_request_keywords(enc::EncodingResult, kind::Symbol)
+    kind === :generalized_rank && return _REGION_RANK_KEYWORDS
     kind === :rank_section && return (:source, :target, :vertex, :point, :box, :matrix_limit)
     kind === :presentation_inspector && return _presentation_request_keywords(enc)
     kind === :hasse && return (:vertex, :pair)
@@ -73,11 +75,13 @@ function _check_module_selection!(issues, obj, kind; kwargs...)
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, obj::Union{AbstractPoset,Modules.PModule}, kind::Symbol; kwargs...)
+    kind === :generalized_rank && return _check_region_request!(issues, obj; kwargs...)
     kind === :rank_section && return _check_rank_section!(issues, obj; kwargs...)
     return _check_module_selection!(issues, obj, kind; kwargs...)
 end
 
 function _append_visual_request_issues!(issues::Vector{String}, enc::EncodingResult, kind::Symbol; kwargs...)
+    kind === :generalized_rank && return _check_region_request!(issues, enc; kwargs...)
     kind === :rank_section && return _check_rank_section!(issues, enc; kwargs...)
     kind === :presentation_inspector && return _check_presentation_selection!(issues, enc; kwargs...)
     if kind in (:hasse, :module_inspector)
@@ -92,14 +96,23 @@ function _visual_spec(P::AbstractPoset, kind::Symbol; vertex=nothing, pair=nothi
 end
 
 function _visual_spec(M::Modules.PModule, kind::Symbol; kwargs...)
+    kind === :generalized_rank && return _generalized_rank_spec(M; kwargs...)
     kind === :rank_section && return _rank_section_spec(M; kwargs...)
     return _module_visual_spec(M, kind; kwargs...)
 end
 
 # Ambient order must be tested before passing to finite labels: even equal
 # labels can come from incomparable original parameters.
+_inspection_parameter_orientation(pi) = (1, 1)
+function _inspection_parameter_orientation(pi::GridEncodingMap)
+    # The classifier changes coordinate signs; the product separately records
+    # the order of its index axes. Two reversals cancel in ambient coordinates.
+    return pi.P isa ProductOfChainsPoset ?
+        ntuple(i -> pi.orientation[i] * pi.P.orientation[i], length(pi.orientation)) :
+        pi.orientation
+end
 function _inspection_parameter_relation(pi, x, y)
-    orientation = pi isa GridEncodingMap ? pi.orientation : (1, 1)
+    orientation = _inspection_parameter_orientation(pi)
     xy = all(orientation[i] == 1 ? x[i] <= y[i] : x[i] >= y[i] for i in 1:2)
     yx = all(orientation[i] == 1 ? y[i] <= x[i] : y[i] >= x[i] for i in 1:2)
     return xy ? (yx ? :equal : :comparable) : (yx ? :reverse_comparable : :incomparable)

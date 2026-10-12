@@ -1,0 +1,67 @@
+{
+  "upstream_commit": "01add51ff64aaf40889483260cc5c3b7d0f2a1e7",
+  "compiler": "g++ (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0",
+  "flags": [
+    "-std=c++11",
+    "-O3",
+    "-DNDEBUG",
+    "-DUSE_ROBINHOOD_HASHMAP"
+  ],
+  "f2_specialized": true,
+  "odd_fields_macro": "USE_COEFFICIENTS",
+  "binaries": {
+    "ripser-f2": "785501976acc959737f2e4d9587b3d1a8927ac1c1b630e63c42071bdfcfe7788",
+    "ripser-coeff": "b9c4fb7475259d3be22212b0e935ba47f2be12c442753b06d0448442cc4513cc"
+  },
+  "cpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           46 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  12\nOn-line CPU(s) list:                     0-11\nVendor ID:                               GenuineIntel\nModel name:                              13th Gen Intel(R) Core(TM) i7-1365U\nCPU family:                              6\nModel:                                   186\nThread(s) per core:                      2\nCore(s) per socket:                      10\nSocket(s):                               1\nStepping:                                3\nCPU max MHz:                             5200.0000\nCPU min MHz:                             400.0000\nBogoMIPS:                                5376.00\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush dts acpi mmx fxsr sse sse2 ss ht tm pbe syscall nx pdpe1gb rdtscp lm constant_tsc art arch_perfmon pebs bts rep_good nopl xtopology nonstop_tsc cpuid aperfmperf tsc_known_freq pni pclmulqdq dtes64 monitor ds_cpl vmx smx est tm2 ssse3 sdbg fma cx16 xtpr pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand lahf_lm abm 3dnowprefetch cpuid_fault epb ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid rdseed adx smap clflushopt clwb intel_pt sha_ni xsaveopt xsavec xgetbv1 xsaves split_lock_detect user_shstk avx_vnni dtherm ida arat pln pts hwp hwp_notify hwp_act_window hwp_epp hwp_pkg_req hfi vnmi umip pku ospke waitpkg gfni vaes vpclmulqdq tme rdpid movdiri movdir64b fsrm md_clear serialize pconfig arch_lbr ibt flush_l1d arch_capabilities ibpb_exit_to_user\nVirtualization:                          VT-x\nL1d cache:                               352 KiB (10 instances)\nL1i cache:                               576 KiB (10 instances)\nL2 cache:                                6.5 MiB (4 instances)\nL3 cache:                                12 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-11\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Reg file data sampling:    Mitigation; Clear Register File\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI BHI_DIS_S\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n",
+  "os": "Linux The-Factotum 6.8.0-138-generic #138~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Fri Aug  7 13:43:15 UTC  x86_64 x86_64 x86_64 GNU/Linux\n",
+  "ram_bytes": 33284526080,
+  "julia": "1.12.1",
+  "threads": 1,
+  "cpu_affinity": [
+    0
+  ],
+  "load_one_min_range": [
+    1.5927734375,
+    18.1083984375
+  ],
+  "julia_load_seconds": [
+    5.33804339,
+    3.308718227,
+    4.228586369,
+    3.673206828,
+    3.959669579,
+    3.939829356,
+    3.692985088,
+    2.40388117,
+    2.387252958,
+    2.4350262,
+    4.754286929,
+    3.560229047,
+    5.591242284,
+    5.221686719,
+    5.917892773,
+    3.950255263,
+    5.09015291,
+    6.007479889,
+    2.962864588,
+    3.511521446,
+    2.196976282,
+    2.994995625,
+    2.214970244,
+    2.268229811,
+    2.224280147,
+    2.237359163,
+    2.147881345,
+    2.141010594,
+    2.53640157,
+    2.13505458
+  ],
+  "host_policy": "No exclusive machine reservation or new pause confirmation; final sizing observed load near 1-2. Serial workers on CPU 0; all timing variation and host activity retained.",
+  "robinhood_commit": "7b00237399cec62ee5795f9013cf5df8de596e69",
+  "julia_flags": [
+    "--heap-size-hint=4G"
+  ],
+  "harness_python": "3.12.3 (main, May 27 2024, 15:49:41) [GCC 11.4.0]",
+  "numpy": "2.5.3"
+}

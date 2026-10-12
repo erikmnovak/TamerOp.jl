@@ -11,6 +11,8 @@ using LinearAlgebra
 using SparseArrays
 using JSON3
 using Dates
+import Statistics, Random
+import ..OrdinaryPersistence
 using ..ExactReals: AlgebraicReal
 
 using ..CoreModules: QQ, QQField, AbstractCoeffField, coeff_type, coerce,
@@ -8381,5 +8383,7 @@ function matching_distance(encA::EncodingResult, encB::EncodingResult;
         throw(ArgumentError("matching_distance: unknown method=$(method). Supported: :auto, :approx, :sampled_2d, :exact_2d"))
     end
 end
+
+include("featurizers/ensembles.jl")
 
 end # module Featurizers

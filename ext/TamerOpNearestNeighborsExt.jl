@@ -186,7 +186,7 @@ function _knn_graph_edges(points, k::Int; backend::Symbol=:auto, approx_candidat
     return DI._finalize_edge_pairs_edges_only(edge_keys, edge_count)
 end
 
-function _radius_graph(points, r::Float64; backend::Symbol=:auto, approx_candidates::Int=0)
+function _radius_graph(points, r::Float64; backend::Symbol=:auto, approx_candidates::Int=0,max_edges::Int=typemax(Int))
     if backend == :bruteforce || backend == :approx
         return nothing
     end
@@ -194,22 +194,25 @@ function _radius_graph(points, r::Float64; backend::Symbol=:auto, approx_candida
     n > 0 || return NTuple{2,Int}[], Float64[]
     X = _points_to_matrix(points)
     tree = _build_exact_tree(X)
-    edge_keys = UInt64[]
+    edges = NTuple{2,Int}[]
     edge_vals = Float64[]
-    sizehint!(edge_keys, min(max(0, 6 * n), 250_000))
-    sizehint!(edge_vals, min(max(0, 6 * n), 250_000))
+    sizehint!(edges, min(max(0, 6 * n), 250_000,max_edges))
+    sizehint!(edge_vals, min(max(0, 6 * n), 250_000,max_edges))
     @inbounds for i in 1:n
         neigh = inrange(tree, view(X, :, i), r, false)
+        sort!(neigh)
         for j in neigh
             j <= i && continue
             d_ij = DI._euclidean_distance(points[i], points[j])
             if d_ij <= r
-                push!(edge_keys, DI._pack_edge_key(i, j))
+                length(edges)<max_edges || throw(ArgumentError("Radius graph exceeds max_graph_edges=$max_edges."))
+                push!(edges, (i, j))
                 push!(edge_vals, d_ij)
             end
         end
     end
-    return DI._finalize_edge_pairs(edge_keys, edge_vals, length(edge_keys))
+    # i increases and each row is sorted; j>i guarantees unique canonical edges.
+    return edges, edge_vals
 end
 
 function _radius_graph_edges(points, r::Float64; backend::Symbol=:auto, approx_candidates::Int=0)

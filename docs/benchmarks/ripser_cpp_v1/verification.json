@@ -1,0 +1,10 @@
+{
+  "performance_requests": 10,
+  "accepted_samples": 120,
+  "rejected_compilation_samples": 0,
+  "successful_controls": 6,
+  "retained_preflight_limitations": 1,
+  "comparison": "Exact complete interval multisets after unique decoding of printed dyadic grades",
+  "source_hashes_verified": true,
+  "statistical_scope": "Descriptive fixed-suite results, no population-wide inference"
+}

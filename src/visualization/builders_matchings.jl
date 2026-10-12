@@ -110,6 +110,7 @@ function _matching_spec(w,context;pair=nothing,max_pairs=100)
     point(p) = (coord(p[1]),coord(p[2]))
     diagram = AbstractVisualizationLayer[SegmentLayer([(low,low,high,high)],_VisualRole(:muted),0.7,1.,:dash)]
     bars,costs = AbstractVisualizationLayer[],AbstractVisualizationLayer[]
+    selected_points = NTuple{2,Float64}[]
     pick_diagram,pick_bars = NamedTuple[],NamedTuple[]
     costmax = maximum((Float64(r.cost) for r in records if isfinite(r.cost));init=0.)
     isfinite(costmax) || throw(ArgumentError("Matching costs exceed display coordinates."))
@@ -131,7 +132,7 @@ function _matching_spec(w,context;pair=nothing,max_pairs=100)
                 isfinite(endpoint) || push!(bars,TextLayer([endpoint < 0 ? "-inf" : "+inf"],
                     [(x,Float64(row)+shift)],_VisualRole(role),11.))
             end
-            selected == id && push!(diagram,PointLayer([pos],_VisualRole(:selected),0.45,20.))
+            selected == id && push!(selected_points,pos)
         end
         if !r.essential || !r.diagonal
             start = pa === nothing ? ((pb[1]+pb[2])/2,(pb[1]+pb[2])/2) : pa
@@ -147,6 +148,7 @@ function _matching_spec(w,context;pair=nothing,max_pairs=100)
         ncodeunits(label)>14 && (label="~"*string(round(Float64(r.cost);sigdigits=5)))
         push!(costs,TextLayer([label],[(c,Float64(row)+0.22)],_VisualRole(:foreground),11.))
     end
+    push!(diagram,PointLayer(selected_points,_VisualRole(:selected),0.45,20.))
     multiplicity_labels=Dict{Any,Vector{String}}()
     for (points,role,name) in ((w.points_a,:source,"A"),(w.points_b,:target,"B"))
         counts=Dict{Any,Int}()

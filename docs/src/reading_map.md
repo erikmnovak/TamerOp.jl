@@ -25,7 +25,8 @@ question developed in the lessons on tameness.
 
 Lesson cards open pages on this site, including the ring and square inspection
 notebooks. On a narrow screen, scroll sideways or use the linked outline below
-the map.
+the map. The focused summands diagram continues from the same inspected
+finite module into an optional algebraic question.
 
 The groups below the lessons collect guides for further questions about data,
 algebra, figures and saving your work. Links that open repository documents are

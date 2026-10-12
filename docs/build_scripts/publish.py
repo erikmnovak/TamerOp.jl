@@ -229,6 +229,7 @@ def publish(julia: str, reuse_executed: bool = False) -> None:
         raise RuntimeError("Instantiate docs/Project.toml first; see docs/README.md.")
     config = tomllib.loads((DOCS / "publication.toml").read_text())
     package_files = [ROOT / "Project.toml", *sorted((ROOT / "src").rglob("*.jl")),
+                     *sorted((ROOT / "src").rglob("*.bin")),
                      *sorted((ROOT / "ext").rglob("*.jl"))]
     source_hashes = {p.relative_to(ROOT).as_posix(): sha256(p) for p in package_files}
     manifest_hash = sha256(manifest)

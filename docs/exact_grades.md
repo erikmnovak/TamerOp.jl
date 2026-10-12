@@ -110,6 +110,6 @@ coordinates; save its filtration specification when you also need to preserve
 the construction's geometric interpretation.
 
 Exact algebraic arithmetic costs more than floating arithmetic. It supplies a
-correctness guarantee rather than a speed claim. The [multicover guide](multicover.md)
+correctness guarantee rather than a speed claim. The [multicover guide](tutorials/multicover.ipynb)
 describes bounded-depth models, incremental enumeration and the explicit exact
 backend for degenerate inputs.

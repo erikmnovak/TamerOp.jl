@@ -1,0 +1,1494 @@
+[
+  {
+    "case": "2d_V_noise_calibration",
+    "shape": [
+      4096,
+      4096
+    ],
+    "pattern": "noise",
+    "convention": "V",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "2d_V_noise_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 26.234453850003774
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "2d_V_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 3.314726528,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 1420765936,
+            "gc_seconds": 0.341933488,
+            "input_bytes": 134217728,
+            "result_bytes": 109438744,
+            "reset_verified": true,
+            "input_sha256": "80580f3abdae3c73b36e2c55c22b89a5b6eda661556331969e166c74c6bd92b5",
+            "output": "a1.json",
+            "output_sha256": "0495b339679159aa654bc2e09885595495fae9e2419999067982d9ead07f7a77",
+            "intervals": 4441090.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_V_noise_calibration",
+            "seconds": 9.696099248,
+            "compile_seconds": 6.338629585,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "2d_V_noise_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 14.222421159000078
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "2d_V_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 4.264416309000808,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 134217728,
+            "result_bytes": 319758608,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "80580f3abdae3c73b36e2c55c22b89a5b6eda661556331969e166c74c6bd92b5",
+            "output": "a1.json",
+            "output_sha256": "6dc805ae9a631c38323c4a59c3f00d94f489ae968e9feebae6c75c144770c894",
+            "intervals": 4441090
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_V_noise_calibration",
+            "seconds": 4.278778113999579
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "2d_T_noise_calibration",
+    "shape": [
+      4096,
+      4096
+    ],
+    "pattern": "noise",
+    "convention": "T",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "2d_T_noise_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 27.456460291999974
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "2d_T_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 3.304873094,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 1421243280,
+            "gc_seconds": 0.061188603,
+            "input_bytes": 134217728,
+            "result_bytes": 109438744,
+            "reset_verified": true,
+            "input_sha256": "80580f3abdae3c73b36e2c55c22b89a5b6eda661556331969e166c74c6bd92b5",
+            "output": "a1.json",
+            "output_sha256": "c5ec23ceb33355a2f0f71f68472aa8f286f6c3b9e584c8ccc94d9707b5f5a958",
+            "intervals": 4438201.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_T_noise_calibration",
+            "seconds": 10.10039484,
+            "compile_seconds": 6.48682996,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "2d_T_noise_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 14.329738992004422
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "2d_T_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 4.239925124995352,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 134217728,
+            "result_bytes": 319550600,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "80580f3abdae3c73b36e2c55c22b89a5b6eda661556331969e166c74c6bd92b5",
+            "output": "a1.json",
+            "output_sha256": "39d7004e6ed12790a5e02777a76f58d8ac23b53786c39a7b2e1c8e783852af94",
+            "intervals": 4438201
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_T_noise_calibration",
+            "seconds": 4.253190638999513
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "2d_V_binary_calibration",
+    "shape": [
+      4096,
+      4096
+    ],
+    "pattern": "binary",
+    "convention": "V",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "2d_V_binary_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 24.20691830499709
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "2d_V_binary_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 1.738563029,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 1142983688,
+            "gc_seconds": 0.013011122,
+            "input_bytes": 134217728,
+            "result_bytes": 24954504,
+            "reset_verified": true,
+            "input_sha256": "7ff799d77f3cffa3de34a7f9fffe682c28214f65fe2d323185aad21264fe6483",
+            "output": "a1.json",
+            "output_sha256": "fe076f87d02f9e24d78a093a6c1500509ca8d2ccdd9b06e8089865e5d306d940",
+            "intervals": 1156994.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_V_binary_calibration",
+            "seconds": 8.544977283,
+            "compile_seconds": 6.655688887,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "2d_V_binary_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 7.989003369002603
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "2d_V_binary_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 3.043967921003059,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 134217728,
+            "result_bytes": 83303696,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "7ff799d77f3cffa3de34a7f9fffe682c28214f65fe2d323185aad21264fe6483",
+            "output": "a1.json",
+            "output_sha256": "708dffba0cb8af722ef800d0ce4d835ec827763f5c5c22952ee96d446212a981",
+            "intervals": 1156994
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_V_binary_calibration",
+            "seconds": 3.0471701369970106
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "2d_T_binary_calibration",
+    "shape": [
+      4096,
+      4096
+    ],
+    "pattern": "binary",
+    "convention": "T",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "2d_T_binary_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 24.502474900997186
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "2d_T_binary_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 1.854032663,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 1143509912,
+            "gc_seconds": 0.013013675,
+            "input_bytes": 134217728,
+            "result_bytes": 24954504,
+            "reset_verified": true,
+            "input_sha256": "7ff799d77f3cffa3de34a7f9fffe682c28214f65fe2d323185aad21264fe6483",
+            "output": "a1.json",
+            "output_sha256": "410b37592bd086ac4fedc67c867fd75d07a2fa2f1fa11ba70aeca1000580aa70",
+            "intervals": 1159855.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_T_binary_calibration",
+            "seconds": 8.677808252,
+            "compile_seconds": 6.702453614,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "2d_T_binary_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 7.9036414950023754
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "2d_T_binary_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 2.96648044000176,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 134217728,
+            "result_bytes": 83509688,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "7ff799d77f3cffa3de34a7f9fffe682c28214f65fe2d323185aad21264fe6483",
+            "output": "a1.json",
+            "output_sha256": "5e3ee8783f85d4f9d7c1864f83b58e552300fa6f297ea909c3209d2bded5c6d5",
+            "intervals": 1159855
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_T_binary_calibration",
+            "seconds": 2.9917583240021486
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "2d_V_smooth_calibration",
+    "shape": [
+      6144,
+      6144
+    ],
+    "pattern": "smooth",
+    "convention": "V",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "2d_V_smooth_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 41.84558886299783
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "2d_V_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 9.488997787,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 2434536736,
+            "gc_seconds": 0.682480159,
+            "input_bytes": 301989888,
+            "result_bytes": 488,
+            "reset_verified": true,
+            "input_sha256": "685ef598fbb6436a3ea5f06fd8ece96aecae72aee2cbc024710e31e3b293ff31",
+            "output": "a1.json",
+            "output_sha256": "d0ef15b9948ed021ce21ccb6d0b4189740e7a31e990f129c0313acd9da8d9872",
+            "intervals": 1.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_V_smooth_calibration",
+            "seconds": 16.256002908,
+            "compile_seconds": 6.506290453,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "2d_V_smooth_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 19.2093230390019
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "2d_V_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 8.600874427997041,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 301989888,
+            "result_bytes": 200,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "685ef598fbb6436a3ea5f06fd8ece96aecae72aee2cbc024710e31e3b293ff31",
+            "output": "a1.json",
+            "output_sha256": "af51a7c40dd7d0200de5eca2cc56de2dd5cc6a449daa0f4d08f74364f3899731",
+            "intervals": 1
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_V_smooth_calibration",
+            "seconds": 9.214631886999996
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "2d_T_smooth_calibration",
+    "shape": [
+      6144,
+      6144
+    ],
+    "pattern": "smooth",
+    "convention": "T",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "2d_T_smooth_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 41.26437287999579
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "2d_T_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 8.905209152,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 2435327376,
+            "gc_seconds": 0.015982916,
+            "input_bytes": 301989888,
+            "result_bytes": 488,
+            "reset_verified": true,
+            "input_sha256": "685ef598fbb6436a3ea5f06fd8ece96aecae72aee2cbc024710e31e3b293ff31",
+            "output": "a1.json",
+            "output_sha256": "d0ef15b9948ed021ce21ccb6d0b4189740e7a31e990f129c0313acd9da8d9872",
+            "intervals": 1.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_T_smooth_calibration",
+            "seconds": 16.880437818,
+            "compile_seconds": 6.519706384,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "2d_T_smooth_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 19.000383868005883
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "2d_T_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 8.701258369001152,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 301989888,
+            "result_bytes": 200,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "685ef598fbb6436a3ea5f06fd8ece96aecae72aee2cbc024710e31e3b293ff31",
+            "output": "a1.json",
+            "output_sha256": "af51a7c40dd7d0200de5eca2cc56de2dd5cc6a449daa0f4d08f74364f3899731",
+            "intervals": 1
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "2d_T_smooth_calibration",
+            "seconds": 8.890991774002032
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "3d_V_noise_calibration",
+    "shape": [
+      160,
+      160,
+      160
+    ],
+    "pattern": "noise",
+    "convention": "V",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_V_noise_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 25.991419552003208
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_V_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 3.463934285,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 1127113296,
+            "gc_seconds": 0.323060195,
+            "input_bytes": 32768000,
+            "result_bytes": 24692008,
+            "reset_verified": true,
+            "input_sha256": "fcd75dcb80cda9c8cc0fb091f1433e1bc797e084c54f9216622ad73258f7de76",
+            "output": "a1.json",
+            "output_sha256": "d360d10ad0248c3f6b8a60b3e2c0b278f377255b0ef68b6e60c37d8c75bb5850",
+            "intervals": 1116559.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_noise_calibration",
+            "seconds": 10.794190489,
+            "compile_seconds": 7.216281518,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_V_noise_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 25.23069577500428
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "3d_V_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 11.66482502699364,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 32768000,
+            "result_bytes": 80392376,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "fcd75dcb80cda9c8cc0fb091f1433e1bc797e084c54f9216622ad73258f7de76",
+            "output": "a1.json",
+            "output_sha256": "a3c27789dad1a49c29ad0d3559af29b2689595191fb33581fe4a67e7aff0f9f6",
+            "intervals": 1116559
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_noise_calibration",
+            "seconds": 11.999603204996674
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "3d_T_noise_calibration",
+    "shape": [
+      160,
+      160,
+      160
+    ],
+    "pattern": "noise",
+    "convention": "T",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_T_noise_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 28.503337376001582
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_T_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 4.256706515,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 1229475992,
+            "gc_seconds": 0.319849018,
+            "input_bytes": 32768000,
+            "result_bytes": 25140152,
+            "reset_verified": true,
+            "input_sha256": "fcd75dcb80cda9c8cc0fb091f1433e1bc797e084c54f9216622ad73258f7de76",
+            "output": "a1.json",
+            "output_sha256": "2ddfb0b80e3ecb46aef3450a09b2799ce950712c32e45981707a26a17f7994aa",
+            "intervals": 1095889.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_T_noise_calibration",
+            "seconds": 12.359350306,
+            "compile_seconds": 7.614377277,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_T_noise_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 32.40057578199776
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "3d_T_noise_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 14.468220523995114,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 32768000,
+            "result_bytes": 78904136,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "fcd75dcb80cda9c8cc0fb091f1433e1bc797e084c54f9216622ad73258f7de76",
+            "output": "a1.json",
+            "output_sha256": "e3c4ee40dd96996ff70ffb6d9b90aecb85aef2f7df5e112f5c57a270dead5abd",
+            "intervals": 1095889
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_T_noise_calibration",
+            "seconds": 16.360862133995397
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "3d_V_binary_calibration",
+    "shape": [
+      160,
+      160,
+      160
+    ],
+    "pattern": "binary",
+    "convention": "V",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_V_binary_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 243.85911338799633
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_V_binary_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 112.556554548,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 4300745304,
+            "gc_seconds": 1.629428841,
+            "input_bytes": 32768000,
+            "result_bytes": 9340184,
+            "reset_verified": true,
+            "input_sha256": "9cac2fee91a83dc22d27b26bb63e2a40857e3260d63068407680d590b1f0dc42",
+            "output": "a1.json",
+            "output_sha256": "aafebbc5dafb42f09613af13fc47d628a4d36ab513401e820f3afaf25ffcbf2a",
+            "intervals": 338692.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_binary_calibration",
+            "seconds": 119.340744811,
+            "compile_seconds": 7.863282281,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_V_binary_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 30.291037586997845
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "3d_V_binary_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 14.611077865003608,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 32768000,
+            "result_bytes": 24385952,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "9cac2fee91a83dc22d27b26bb63e2a40857e3260d63068407680d590b1f0dc42",
+            "output": "a1.json",
+            "output_sha256": "90f5062888ce31d594dd2f0bd5ee43275bcb6d905f3f21745afee4232c93bd15",
+            "intervals": 338692
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_binary_calibration",
+            "seconds": 14.934039933999884
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "3d_T_binary_calibration",
+    "shape": [
+      160,
+      160,
+      160
+    ],
+    "pattern": "binary",
+    "convention": "T",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_T_binary_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 25.68152241200005
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_T_binary_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 1.306998324,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 918335880,
+            "gc_seconds": 0.017708626,
+            "input_bytes": 32768000,
+            "result_bytes": 9340184,
+            "reset_verified": true,
+            "input_sha256": "9cac2fee91a83dc22d27b26bb63e2a40857e3260d63068407680d590b1f0dc42",
+            "output": "a1.json",
+            "output_sha256": "b774ccd4a6b5d2dcc4f10a018ad0237ed292b0b334a67c10f35f4d72fe0b7ffe",
+            "intervals": 340304.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_T_binary_calibration",
+            "seconds": 10.278119031,
+            "compile_seconds": 8.467311599,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_T_binary_calibration",
+          "tool": "cubicalripser",
+          "complete": false,
+          "reason": "phase_timeout",
+          "returncode": -15,
+          "seconds": 180.74000322099891
+        },
+        "samples": [],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [],
+        "last_phase": "warm"
+      }
+    }
+  },
+  {
+    "case": "3d_V_smooth_calibration",
+    "shape": [
+      256,
+      256,
+      256
+    ],
+    "pattern": "smooth",
+    "convention": "V",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_V_smooth_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 34.85373938099656
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_V_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 5.717761494,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 3367317688,
+            "gc_seconds": 0.027315488,
+            "input_bytes": 134217728,
+            "result_bytes": 568,
+            "reset_verified": true,
+            "input_sha256": "4f893eff156b4394f9f67e10e4a7cf2d8655cf51578097931f4f35866f5be212",
+            "output": "a1.json",
+            "output_sha256": "d0ef15b9948ed021ce21ccb6d0b4189740e7a31e990f129c0313acd9da8d9872",
+            "intervals": 1.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_smooth_calibration",
+            "seconds": 15.621700009,
+            "compile_seconds": 8.430963512,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_V_smooth_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 29.993089162002434
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "3d_V_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 14.27666781199514,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 134217728,
+            "result_bytes": 200,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "4f893eff156b4394f9f67e10e4a7cf2d8655cf51578097931f4f35866f5be212",
+            "output": "a1.json",
+            "output_sha256": "af51a7c40dd7d0200de5eca2cc56de2dd5cc6a449daa0f4d08f74364f3899731",
+            "intervals": 1
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_smooth_calibration",
+            "seconds": 14.943329394001921
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "3d_T_smooth_calibration",
+    "shape": [
+      256,
+      256,
+      256
+    ],
+    "pattern": "smooth",
+    "convention": "T",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_T_smooth_calibration",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 33.80729913400137
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_T_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 5.728396434,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 3402276032,
+            "gc_seconds": 0.027677216,
+            "input_bytes": 134217728,
+            "result_bytes": 568,
+            "reset_verified": true,
+            "input_sha256": "4f893eff156b4394f9f67e10e4a7cf2d8655cf51578097931f4f35866f5be212",
+            "output": "a1.json",
+            "output_sha256": "d0ef15b9948ed021ce21ccb6d0b4189740e7a31e990f129c0313acd9da8d9872",
+            "intervals": 1.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_T_smooth_calibration",
+            "seconds": 14.804138108,
+            "compile_seconds": 7.698475251,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_T_smooth_calibration",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 27.460628868997446
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "3d_T_smooth_calibration",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 13.44692126600421,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 134217728,
+            "result_bytes": 200,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "4f893eff156b4394f9f67e10e4a7cf2d8655cf51578097931f4f35866f5be212",
+            "output": "a1.json",
+            "output_sha256": "af51a7c40dd7d0200de5eca2cc56de2dd5cc6a449daa0f4d08f74364f3899731",
+            "intervals": 1
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_T_smooth_calibration",
+            "seconds": 13.269092345995887
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "3d_V_binary_adjustment",
+    "shape": [
+      96,
+      96,
+      96
+    ],
+    "pattern": "binary",
+    "convention": "V",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_V_binary_adjustment",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 30.693189255005564
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_V_binary_adjustment",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 5.778243391,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 385691272,
+            "gc_seconds": 0.013376655,
+            "input_bytes": 7077888,
+            "result_bytes": 2001416,
+            "reset_verified": true,
+            "input_sha256": "c4fdd63bcdcc1882165ebcd482adadd70cebb3732b0997e9724ab3f23289d9be",
+            "output": "a1.json",
+            "output_sha256": "e525b9a86cbfdc387d6f5d8dda450bbfb56d8995b164ed688f8ce6ed5fdbb769",
+            "intervals": 72683.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_binary_adjustment",
+            "seconds": 13.676938981,
+            "compile_seconds": 7.614733892,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_V_binary_adjustment",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 6.1115016719995765
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "3d_V_binary_adjustment",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 2.855817767995177,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 7077888,
+            "result_bytes": 5233304,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "c4fdd63bcdcc1882165ebcd482adadd70cebb3732b0997e9724ab3f23289d9be",
+            "output": "a1.json",
+            "output_sha256": "3e88fb0d19f091f1a0203eeaa8b56b0906c7eb878b3608ccd6deafd21814f2ca",
+            "intervals": 72683
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_V_binary_adjustment",
+            "seconds": 2.917280932000722
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  },
+  {
+    "case": "3d_T_binary_adjustment",
+    "shape": [
+      96,
+      96,
+      96
+    ],
+    "pattern": "binary",
+    "convention": "T",
+    "tools": {
+      "tamerop": {
+        "completion": {
+          "case": "3d_T_binary_adjustment",
+          "tool": "tamerop",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 20.765513807004027
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "tamerop",
+            "case": "3d_T_binary_adjustment",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 0.246534875,
+            "compile_seconds": 0.0,
+            "recompile_seconds": 0.0,
+            "allocation_bytes": 196633744,
+            "gc_seconds": 0.007886926,
+            "input_bytes": 7077888,
+            "result_bytes": 2001480,
+            "reset_verified": true,
+            "input_sha256": "c4fdd63bcdcc1882165ebcd482adadd70cebb3732b0997e9724ab3f23289d9be",
+            "output": "a1.json",
+            "output_sha256": "b9dc25b860ee0b7d54183f821bd97f1551db42346d534d188d09324ba8eba15d",
+            "intervals": 72912.0
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_T_binary_adjustment",
+            "seconds": 8.52035545,
+            "compile_seconds": 8.184616836,
+            "recompile_seconds": 0.0
+          }
+        ],
+        "last_phase": "verify"
+      },
+      "cubicalripser": {
+        "completion": {
+          "case": "3d_T_binary_adjustment",
+          "tool": "cubicalripser",
+          "complete": true,
+          "reason": null,
+          "returncode": 0,
+          "seconds": 59.266682848006894
+        },
+        "samples": [
+          {
+            "kind": "sample",
+            "tool": "cubicalripser",
+            "case": "3d_T_binary_adjustment",
+            "sample": 1,
+            "attempt": 1,
+            "accepted": true,
+            "seconds": 27.89912189899769,
+            "compile_seconds": null,
+            "recompile_seconds": null,
+            "allocation_bytes": null,
+            "gc_seconds": null,
+            "input_bytes": 7077888,
+            "result_bytes": 5249792,
+            "native_coordinate_columns": 6,
+            "reset_verified": true,
+            "input_sha256": "c4fdd63bcdcc1882165ebcd482adadd70cebb3732b0997e9724ab3f23289d9be",
+            "output": "a1.json",
+            "output_sha256": "7da40876fdcd752d7d670edd3fe8a43a23839f02e524dc8acbfbcba122fd6a7b",
+            "intervals": 72912
+          }
+        ],
+        "limits": {
+          "rss_bytes": 8589934592,
+          "available_bytes": 2147483648,
+          "phase_seconds": 180,
+          "worker_seconds": 1800,
+          "total_seconds": 10800
+        },
+        "warmups": [
+          {
+            "kind": "warmup",
+            "case": "3d_T_binary_adjustment",
+            "seconds": 31.020275790004234
+          }
+        ],
+        "last_phase": "verify"
+      }
+    }
+  }
+]

@@ -40,6 +40,10 @@ function representatives end
 function coordinates end
 function image_basis end
 function describe end
+import ..AbelianCategories
+describe(r::AbelianCategories.VectorPropagation) = AbelianCategories.propagation_summary(r)
+dimensions(r::AbelianCategories.VectorPropagation) = copy(r.image_dimensions)
+
 function degree_range end
 function source end
 function target end
@@ -676,7 +680,8 @@ end
         residual = norm(M)
         return isfinite(residual) && residual <= field.atol + field.rtol * scale
     end
-    return nnz(M) == 0
+    # Sparse multiplication can retain explicit zeros after cancellation.
+    return all(iszero, nonzeros(M))
 end
 
 @inline function _validation_error(fn::AbstractString, issues::Vector{String})
@@ -5526,6 +5531,7 @@ describe(ss::SpectralSequence{K}) where {K} = (
     kind=:spectral_sequence,
     field=ss.DC.field,
     first=ss.first,
+    bidegree_ranges=(a=(ss.DC.amin, ss.DC.amax), b=(ss.DC.bmin, ss.DC.bmax)),
     p_range=(ss.pmin, ss.pmax),
     total_degree_range=(ss.Tot.tmin, ss.Tot.tmax),
     convergence_page=_cached_convergence_page(ss),

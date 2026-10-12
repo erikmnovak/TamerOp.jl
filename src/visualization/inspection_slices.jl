@@ -5,7 +5,7 @@
 function _inspection_slice_capability(obj, geometry_available)
     geometry_available || return (false, "A slice requires a supported planar encoding.")
     pi = _inspection_classifier(encoding_map(obj))
-    if pi isa GridEncodingMap && any(!=(1), pi.orientation)
+    if pi isa GridEncodingMap && any(!=(1), _inspection_parameter_orientation(pi))
         return (false, "Linked slices currently require positively oriented grid axes.")
     end
     return (true, "")

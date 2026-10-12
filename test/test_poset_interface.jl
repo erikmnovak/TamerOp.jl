@@ -1543,13 +1543,13 @@ with_fields(FIELDS_FULL) do field
         point_PU = [PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(-Matrix{QQ}(I, dimension, dimension), zeros(QQ, dimension))))]
         point_PD = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(Matrix{QQ}(I, dimension, dimension), zeros(QQ, dimension))))]
         point_F = PLP.PLFringe(point_PU, point_PD, ones(Int, 1, 1))
-        @test !WF.supports_pl_backend(point_U, point_D)
-        @test WF.choose_pl_backend(point_F) == :pl
-        @test_throws ArgumentError PLB.encode_fringe_boxes(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(field=field))
-        @test_throws ErrorException TamerOp.encode(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(backend=:pl_backend, field=field))
+        @test WF.supports_pl_backend(point_U, point_D)
+        @test WF.choose_pl_backend(point_F) == :pl_backend
+        @test PLB.check_box_encoding_map(last(PLB.encode_fringe_boxes(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(field=field)))).valid
+        @test TamerOp.encode(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(backend=:pl_backend, field=field)).backend == :pl_backend
         for enc in (TamerOp.encode(point_U, point_D, ones(K, 1, 1), OPT.EncodingOptions(field=field)),
                     TamerOp.encode(point_F, OPT.EncodingOptions(field=field)))
-            @test enc.backend == :pl
+            @test enc.backend == :pl_backend
             M = RES.encoding_module(enc)
             pi = RES.encoding_map(enc)
             labels = [EC.locate(pi, fill(x, dimension)) for x in (-1, 0, 1)]
@@ -1568,10 +1568,10 @@ with_fields(FIELDS_FULL) do field
     segment_PU = [PLP.PLUpset(PLP.poly_union(PLP.make_hpoly(-Matrix{QQ}(I, 2, 2), QQ[0, 0])))]
     segment_PD = [PLP.PLDownset(PLP.poly_union(PLP.make_hpoly(Matrix{QQ}(I, 2, 2), QQ[0, 1])))]
     segment_F = PLP.PLFringe(segment_PU, segment_PD, ones(Int, 1, 1))
-    @test !WF.supports_pl_backend(segment_U, segment_D)
+    @test WF.supports_pl_backend(segment_U, segment_D)
     for enc in (TamerOp.encode(segment_U, segment_D, ones(K, 1, 1), OPT.EncodingOptions(field=field)),
                 TamerOp.encode(segment_F, OPT.EncodingOptions(field=field)))
-        @test enc.backend == :pl
+        @test enc.backend == :pl_backend
         M = RES.encoding_module(enc)
         pi = RES.encoding_map(enc)
         labels = [EC.locate(pi, x) for x in ([-1, 0], [0, 0], [0, 1], [1, 1], [0, -1], [0, 2])]
@@ -1603,11 +1603,11 @@ with_fields(FIELDS_FULL) do field
     for backend in (:auto, :pl), enc in (
         TamerOp.encode(tiny_U, tiny_D, Matrix{K}(I, 2, 2), OPT.EncodingOptions(backend=backend, field=field)),
         TamerOp.encode(tiny_F, OPT.EncodingOptions(backend=backend, field=field)))
-        @test enc.backend == :pl
+        @test enc.backend == (backend == :auto ? :pl_backend : :pl)
         @test enc.opts.strict_eps === nothing
         @test RES.provenance(enc).approximation.strict_eps === nothing
         @test RES.provenance(enc).approximation.effective_strict_eps === nothing
-        @test RES.provenance(enc).approximation.feasibility == :exact_rational
+        @test RES.provenance(enc).approximation.feasibility == (backend == :auto ? :not_applicable : :exact_rational)
         M = RES.encoding_module(enc)
         pi = RES.encoding_map(enc)
         for mode in (:fast, :verified)

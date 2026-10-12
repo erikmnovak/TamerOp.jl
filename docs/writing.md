@@ -732,3 +732,14 @@ Review related pages together for notation and continuity. Passing examples
 and complete API listings are useful checks, but neither establishes that
 the writing teaches its intended reader. Ask a reader with the stated
 prerequisites to explain the result in their own words.
+
+## Describe the actual display contract
+
+When teaching a visualization, identify the mathematical object and the display
+path the reader is using. Static figures, WGL scene navigation, live Julia
+selection and offline selection among saved states have different capabilities.
+Use the [support matrix](visualization_support.md) before promising controls or
+frontends. A successful notebook execution or static publication does not verify
+an embedded live notebook client. Keep test coverage, implementation dates and
+backlog status in contributor guidance; retain concise operational requirements
+beside the action they affect.

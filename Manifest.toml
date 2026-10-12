@@ -2,7 +2,7 @@
 
 julia_version = "1.12.1"
 manifest_format = "2.0"
-project_hash = "9529244a10492b5818c3fc29e53cbcd7e8fe1d12"
+project_hash = "4601ad878d229cd837a68521fff3ce50977f733c"
 
 [[deps.AbstractAlgebra]]
 deps = ["LinearAlgebra", "MacroTools", "Preferences", "Random", "RandomExtensions", "SparseArrays"]
@@ -410,7 +410,7 @@ uuid = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 version = "1.0.3"
 
 [[deps.TamerOp]]
-deps = ["CDDLib", "Dates", "JSON3", "LinearAlgebra", "Logging", "Nemo", "Polyhedra", "PrecompileTools", "Random", "SparseArrays", "Statistics", "TOML", "UUIDs"]
+deps = ["Base64", "CDDLib", "Dates", "JSON3", "LinearAlgebra", "Logging", "Nemo", "Polyhedra", "PrecompileTools", "Random", "SHA", "SparseArrays", "Statistics", "TOML", "UUIDs"]
 path = "."
 uuid = "40830518-3340-46e0-bdcb-56edef4036ff"
 version = "0.1.0"

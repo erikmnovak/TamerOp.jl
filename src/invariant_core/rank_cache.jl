@@ -26,6 +26,28 @@ end
     return memo
 end
 
+# An all-pairs rank traversal completes one source before moving to the next.
+# Keep only the most recently computed source map at each target: paths with
+# the same source still share their prefixes, without retaining n^2 matrices.
+# Source stamps also make changing rows constant-time (no n-element clear).
+struct _RankRowMemo{K}
+    sources::Vector{Int}
+    maps::Vector{AbstractMatrix{K}}
+end
+
+_RankRowMemo(::Type{K}, n::Int) where {K} =
+    _RankRowMemo{K}(zeros(Int, n), Vector{AbstractMatrix{K}}(undef, n))
+
+@inline _memo_get(memo::_RankRowMemo, n::Int, u::Int, v::Int) =
+    memo.sources[v] == u ? memo.maps[v] : nothing
+
+@inline function _memo_set!(memo::_RankRowMemo{K}, n::Int, u::Int, v::Int,
+                            value::AbstractMatrix{K}) where {K}
+    memo.maps[v] = value
+    memo.sources[v] = u
+    return value
+end
+
 @inline function _grid_cache_index(p::NTuple{N,Int}, dims::NTuple{N,Int}) where {N}
     idx = 1
     stride = 1

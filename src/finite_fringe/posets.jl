@@ -742,20 +742,24 @@ leq_row(P::FinitePoset, i::Int) = P._leq[i, :]
 leq_col(P::FinitePoset, j::Int) = P._leq[:, j]
 
 """
-    ProductOfChainsPoset(sizes)
+    ProductOfChainsPoset(sizes; orientation=ntuple(_ -> 1, length(sizes)))
 
 Poset on a product of chains with sizes given by `sizes`.
 Vertex indices use mixed radix ordering with the first axis varying fastest.
+Each orientation is `+1` (increasing index order) or `-1` (decreasing).
+Reversing an axis changes the order, not the vertex labels or storage size.
 """
 struct ProductOfChainsPoset{N} <: AbstractPoset
     sizes::NTuple{N,Int}
     strides::NTuple{N,Int}
+    orientation::NTuple{N,Int}
     cache::PosetCache
 end
 
 @inline function _fringe_describe(P::ProductOfChainsPoset)
     return (kind=:product_of_chains_poset,
             sizes=P.sizes,
+            orientation=P.orientation,
             nvertices=nvertices(P))
 end
 
@@ -768,14 +772,19 @@ function _poset_strides(sizes::NTuple{N,Int}) where {N}
     return ntuple(i -> strides[i], N)
 end
 
-ProductOfChainsPoset(sizes::NTuple{N,Int}) where {N} =
-    ProductOfChainsPoset{N}(sizes, _poset_strides(sizes), PosetCache())
+function ProductOfChainsPoset(sizes::NTuple{N,Int};
+                              orientation::NTuple{N,Int}=ntuple(_ -> 1, N)) where {N}
+    all(o -> o == 1 || o == -1, orientation) ||
+        throw(ArgumentError("ProductOfChainsPoset: orientations must be +1 or -1"))
+    return ProductOfChainsPoset{N}(sizes, _poset_strides(sizes), orientation, PosetCache())
+end
 
 ProductOfChainsPoset(sizes::NTuple{N,Int}, strides::NTuple{N,Int}) where {N} =
-    ProductOfChainsPoset{N}(sizes, strides, PosetCache())
+    ProductOfChainsPoset{N}(sizes, strides, ntuple(_ -> 1, N), PosetCache())
 
-ProductOfChainsPoset(sizes::AbstractVector{<:Integer}) =
-    ProductOfChainsPoset(ntuple(i -> Int(sizes[i]), length(sizes)))
+ProductOfChainsPoset(sizes::AbstractVector{<:Integer};
+                    orientation=ntuple(_ -> 1, length(sizes))) =
+    ProductOfChainsPoset(ntuple(i -> Int(sizes[i]), length(sizes)); orientation=Tuple(orientation))
 @inline _updown_cache_skip_auto(::ProductOfChainsPoset) = true
 
 function nvertices(P::ProductOfChainsPoset)
@@ -802,7 +811,7 @@ end
     @inbounds for k in 1:N
         ci = _coord_at(i, P.sizes[k], P.strides[k])
         cj = _coord_at(j, P.sizes[k], P.strides[k])
-        if ci > cj
+        if P.orientation[k] == 1 ? ci > cj : ci < cj
             return false
         end
     end
@@ -812,14 +821,18 @@ end
 function upset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
     cached = _cached_upset_indices(P, i)
     cached === nothing || return IndicesView(cached)
-    ranges = ntuple(k -> _coord_at(i, P.sizes[k], P.strides[k]):P.sizes[k], N)
+    ranges = ntuple(k -> P.orientation[k] == 1 ?
+        (_coord_at(i, P.sizes[k], P.strides[k]):P.sizes[k]) :
+        (1:_coord_at(i, P.sizes[k], P.strides[k])), N)
     return ProductIndexIter(CartesianIndices(ranges), P.strides)
 end
 
 function downset_indices(P::ProductOfChainsPoset{N}, i::Int) where {N}
     cached = _cached_downset_indices(P, i)
     cached === nothing || return IndicesView(cached)
-    ranges = ntuple(k -> 1:_coord_at(i, P.sizes[k], P.strides[k]), N)
+    ranges = ntuple(k -> P.orientation[k] == 1 ?
+        (1:_coord_at(i, P.sizes[k], P.strides[k])) :
+        (_coord_at(i, P.sizes[k], P.strides[k]):P.sizes[k]), N)
     return ProductIndexIter(CartesianIndices(ranges), P.strides)
 end
 
@@ -871,9 +884,9 @@ nvertices(P::GridPoset) = nvertices(ProductOfChainsPoset(P.sizes))
 end
 
 upset_indices(P::GridPoset{N}, i::Int) where {N} =
-    upset_indices(ProductOfChainsPoset(P.sizes, P.strides, P.cache), i)
+    upset_indices(ProductOfChainsPoset(P.sizes, P.strides, ntuple(_ -> 1, N), P.cache), i)
 downset_indices(P::GridPoset{N}, i::Int) where {N} =
-    downset_indices(ProductOfChainsPoset(P.sizes, P.strides, P.cache), i)
+    downset_indices(ProductOfChainsPoset(P.sizes, P.strides, ntuple(_ -> 1, N), P.cache), i)
 
 """
     ProductPoset(P1, P2)
@@ -1076,9 +1089,11 @@ function check_poset(P::ProductOfChainsPoset; throw::Bool=false)
     issues = String[]
     all(>(0), P.sizes) || push!(issues, "all chain sizes must be positive")
     P.strides == _poset_strides(P.sizes) || push!(issues, "stored strides are inconsistent with sizes")
+    all(o -> o == 1 || o == -1, P.orientation) || push!(issues, "orientations must be +1 or -1")
     report = (kind=:product_of_chains_poset,
               valid=isempty(issues),
               sizes=P.sizes,
+              orientation=P.orientation,
               nvertices=nvertices(P),
               issues=issues)
     if throw && !report.valid
@@ -1168,12 +1183,14 @@ end
 function Base.show(io::IO, P::ProductOfChainsPoset)
     d = _fringe_describe(P)
     print(io, "ProductOfChainsPoset(axes=", repr(d.sizes),
+          ", orientation=", repr(d.orientation),
           ", nvertices=", d.nvertices, ")")
 end
 
 function Base.show(io::IO, ::MIME"text/plain", P::ProductOfChainsPoset)
     d = _fringe_describe(P)
     print(io, "ProductOfChainsPoset\n  axes: ", repr(d.sizes),
+          "\n  orientation: ", repr(d.orientation),
           "\n  nvertices: ", d.nvertices,
           "\n  model: finite product of chains")
 end
@@ -1403,14 +1420,9 @@ function cover_edges(P::ProductOfChainsPoset{N};
         @inbounds for idx in 1:n
             _index_to_coords!(coords, idx, P.sizes, P.strides)
             for k in 1:N
-                if coords[k] < P.sizes[k]
-                    coords[k] += 1
-                    lin = 1
-                    for t in 1:N
-                        lin += (coords[t] - 1) * P.strides[t]
-                    end
-                    push!(edges, (idx, lin))
-                    coords[k] -= 1
+                step = P.orientation[k]
+                if step == 1 ? coords[k] < P.sizes[k] : coords[k] > 1
+                    push!(edges, (idx, idx + step * P.strides[k]))
                 end
             end
         end
@@ -1421,7 +1433,7 @@ end
 function cover_edges(P::GridPoset{N};
                      cached::Bool=true) where {N}
     return _cover_edges_cached_or_build!(P, cached) do
-        cover_edges(ProductOfChainsPoset(P.sizes, P.strides, P.cache); cached=true)
+        cover_edges(ProductOfChainsPoset(P.sizes, P.strides, ntuple(_ -> 1, N), P.cache); cached=true)
     end
 end
 

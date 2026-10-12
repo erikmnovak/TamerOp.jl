@@ -191,8 +191,10 @@ background, outer padding and panel spacing along with the new content.
 keywords belong to `visual_spec`; arbitrary Makie keywords are not forwarded.
 Cairo produces static views. WGL supports live linked inspection sessions,
 including selection and hover readouts, and the volume slider while Julia runs.
-A linked inspector returns a browser application. Use
-`inspection_snapshot(session)` for its ordinary static figure specification.
+A linked inspector or live volume slice viewer returns a browser application.
+Separate volume renders have independent fixed indices. For an inspection
+session, use `inspection_snapshot(session)` for its static figure specification.
+For a volume, use `kind=:image` with the selected `slice_indices`.
 """
 function render(spec::VisualizationSpec; backend::Symbol=:auto, display::Symbol=:inline,
                 figure=nothing, size=nothing, style=VisualStyle(), kwargs...)
@@ -232,6 +234,12 @@ function _save_visual_internal(path::AbstractString, spec::VisualizationSpec;
     if format === :html && (get(spec.interaction, :requires_live_julia, false) ||
                             get(spec.interaction, :notebook, nothing) === :widget_viewer)
         throw(ArgumentError("This view uses Julia-side widget callbacks and cannot be exported as a working offline HTML widget. Export kind=:image for the selected slice, or use visualize(...; backend=:wglmakie) in a live Julia session."))
+    end
+    if format === :html && spec.kind === :composition
+        backend in (:auto,:cairomakie) || throw(ArgumentError("Composed HTML is a responsive fixed SVG; use CairoMakie for export, or visualize with WGLMakie for a live figure."))
+        chosen = _resolve_visual_backend(:cairomakie; for_save=true)
+        saved = Base.invokelatest(_VISUAL_SAVERS[chosen],path,spec;figure,size,style)
+        return (;path=String(saved),backend=chosen,format,kind=visual_kind(spec))
     end
     chosen = if format === :html
         backend in (:auto, :wglmakie) ||
@@ -290,6 +298,11 @@ function save_visual(outdir::AbstractString,
                      kwargs...)
     _check_existing_visual_kind(spec, kind, cache)
     _check_visual_render_options(; kwargs...)
+    if spec.kind === :composition && backend === :auto &&
+            (format === :html || (format === :auto && prefer === :interactive))
+        backend=:cairomakie
+        format=:html
+    end
     target = _choose_visual_export_target(outdir, stem; prefer=prefer, format=format, backend=backend)
     saved = _save_visual_internal(target.path, spec; backend=target.backend, kwargs...)
     return VisualExportResult(saved.path, saved.backend, saved.format, saved.kind, target.stem)

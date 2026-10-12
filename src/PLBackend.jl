@@ -261,6 +261,13 @@ function _coords_from_generators(Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset
     @inbounds for i in 1:n
         sort!(coords[i])
         unique!(coords[i])
+        # Separate a shared closed birth/death wall into two events: enter
+        # the birth, then leave the death. The intervening zero-width cell
+        # is the wall itself. Products retain all face and corner signatures.
+        births = Set(U.ell[i] for U in Ups)
+        deaths = Set(D.u[i] for D in Downs)
+        shared = intersect(births, deaths)
+        isempty(shared) || (coords[i] = [x for x in coords[i] for _ in 1:(x in shared ? 2 : 1)])
     end
 
     return ntuple(i -> coords[i], n)
@@ -334,7 +341,7 @@ function _coord_flags(coords::NTuple{N,Vector{Float64}}, Ups::Vector{BoxUpset}, 
 
     @inbounds for U in Ups
         for i in 1:N
-            j = idx[i][U.ell[i]]
+            j = searchsortedfirst(coords[i], U.ell[i])
             flags[i][j] |= 0x01
         end
     end
@@ -353,8 +360,9 @@ end
 Backend structure describing the region decomposition induced by axis-aligned
 box generators `Ups` and `Downs`.
 
-The full-dimensional cells are determined by `coords[i]`, the sorted unique split
-coordinates along axis `i`. Each cell has a constant membership signature
+The cells are determined by `coords[i]`, the sorted split coordinates along axis
+`i`. A shared birth/death coordinate occurs twice, retaining the singleton
+between those two events. Each cell has a constant membership signature
 (y,z) with respect to `Ups` and `Downs` (using the signature convention in
 `_signature` below).
 
@@ -367,15 +375,14 @@ For fast point location, we precompute:
 The `cell_to_region` table is exact for interior points. For points lying exactly
 on split coordinates, `locate` applies a cheap correction based on whether the
 split came from an upset lower bound (>=) or a downset upper bound (<=).
-The constructor rejects shared birth/death thresholds: their additional boundary
-strata require the general polyhedral encoder selected by `backend=:auto`.
+Products of singleton cells and intervals retain lower-dimensional strata.
 """
 struct PLEncodingMapBoxes{N,MY,MZ} <: AbstractPLikeEncodingMap
     n::Int
     coords::NTuple{N,Vector{Float64}}
     sig_y::Vector{BitVector}
     sig_z::Vector{BitVector}
-    reps::Vector{NTuple{N,Float64}}
+    reps::Vector{NTuple{N,QQ}}
     Ups::Vector{BoxUpset}
     Downs::Vector{BoxDownset}
 
@@ -406,7 +413,7 @@ N(pi::PLEncodingMapBoxes) = length(pi.reps)
 dimension(pi::PLEncodingMapBoxes) = pi.n
 representatives(pi::PLEncodingMapBoxes) = pi.reps
 
-function _signature(x::Vector{Float64}, Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
+function _signature(x::AbstractVector{<:Real}, Ups::Vector{BoxUpset}, Downs::Vector{BoxDownset})
     y = BitVector(undef, length(Ups))
     z = BitVector(undef, length(Downs))
     for i in 1:length(Ups)
@@ -470,7 +477,7 @@ without reading raw fields.
 """
     nregions(pi) -> Int
 
-Return the number of encoded full-dimensional regions carried by a box backend
+Return the number of encoded regions (including boundary strata) carried by a box backend
 encoding object.
 
 This is the preferred cheap scalar accessor when you only need the size of the
@@ -537,11 +544,10 @@ used by the box backend locator.
 Return all stored region representatives, or the representative for region `r`,
 of a box backend encoding object.
 
-These stored Float64 samples are useful for display and ordinary inspection.
-They are approximate: a cell between adjacent Float64 splits has no Float64
-interior witness, so a stored sample can round onto a boundary. Use
-[`region_signature`](@ref) to inspect the exact membership pattern and `locate`
-on the original query coordinates when boundary membership matters.
+These exact rational witnesses lie in their regions, including open intervals
+between adjacent Float64 thresholds and zero-volume boundary strata. Converting
+them to floating point for display may move them onto a different boundary;
+retain the exact coordinates for mathematical queries.
 """
 @inline region_representatives(pi::PLEncodingMapBoxes) = pi.reps
 @inline region_representatives(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = region_representatives(enc.pi)
@@ -572,7 +578,8 @@ end
 """
     cell_shape(pi) -> Vector{Int}
 
-Return the slab-cell grid shape used by the box backend direct lookup table.
+Return the cell grid shape, including singleton cells at shared thresholds,
+used by the box backend direct lookup table.
 """
 @inline cell_shape(pi::PLEncodingMapBoxes) = pi.cell_shape
 @inline cell_shape(enc::CompiledEncoding{<:PLEncodingMapBoxes}) = cell_shape(enc.pi)
@@ -618,28 +625,19 @@ wrappers.
     return j
 end
 
-@inline function _cell_index_and_ambiguous(pi::PLEncodingMapBoxes, x)
+@inline function _cell_index(pi::PLEncodingMapBoxes{N}, x) where {N}
     lin = 1
-    ambiguous = false
-    @inbounds for i in 1:pi.n
+    @inbounds for i in 1:N
         ci = pi.coords[i]
         s = _slab_index(ci, x[i], pi.axis_is_uniform[i], pi.axis_min[i], pi.axis_step[i])
-
-        # Boundary correction: if x[i] is exactly a split coordinate, decide whether
-        # it belongs to the cell on the left (<= boundary from a downset u) or
-        # to the cell on the right (>= boundary from an upset ell).
-        if 1 <= s <= length(ci) && x[i] == ci[s]
-            flag = pi.coord_flags[i][s]
-            if flag == 0x02
-                s -= 1               # u-only: treat equality as "left"
-            elseif flag == 0x03
-                ambiguous = true     # both ell and u: fall back to signature
-            end
+        # At a repeated wall, the final event is the death. Equality belongs
+        # immediately before it: the retained singleton cell.
+        if 1 <= s <= length(ci) && x[i] == ci[s] && pi.coord_flags[i][s] == 0x02
+            s -= 1
         end
-
         lin += s * pi.cell_strides[i]
     end
-    return lin, ambiguous
+    return lin
 end
 
 @inline function _sigkey(pi::PLEncodingMapBoxes{N,MY,MZ}, x) where {N,MY,MZ}
@@ -663,23 +661,15 @@ lookup:
    <= for downset bounds).
 3. Do a single array lookup in `pi.cell_to_region`.
 
-If a coordinate lies on an "ambiguous" split value that appears as both an upset
-and a downset boundary, the cell choice is not well-defined; in that case we
-compute the packed signature key and fall back to `pi.sig_to_region`.
-
-Returns `0` only in the ambiguous-boundary fallback when the signature does not
-match any full-dimensional region (a measure-zero situation).
+Shared closed birth/death walls have their own cells, so boundary queries use
+that same direct table and retain every realized signature.
 """
 function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::AbstractVector{<:Real}; mode::Symbol=:fast) where {N,MY,MZ}
     _ = validate_pl_mode(mode)
     length(x) == pi.n || error("locate: expected x of length $(pi.n), got $(length(x))")
     isempty(pi.cell_to_region) && error("locate: missing cell_to_region table; construct via encode_fringe_boxes")
 
-    lin, ambiguous = _cell_index_and_ambiguous(pi, x)
-    if !ambiguous
-        return pi.cell_to_region[lin]
-    end
-    return get(pi.sig_to_region, _sigkey(pi, x), 0)
+    return pi.cell_to_region[_cell_index(pi, x)]
 end
 
 # Allocation-free tuple dispatch for point location.
@@ -690,36 +680,7 @@ function locate(pi::PLEncodingMapBoxes{N,MY,MZ}, x::NTuple{N,T}; mode::Symbol=:f
     N == pi.n || error("locate: expected x of length $(pi.n), got $N")
     isempty(pi.cell_to_region) && error("locate: missing cell_to_region table; construct via encode_fringe_boxes")
 
-    lin = 1
-    ambiguous = false
-
-    @inbounds for i in 1:N
-        ci = pi.coords[i]
-        xi = x[i]
-
-        s = _slab_index(ci, xi, pi.axis_is_uniform[i], pi.axis_min[i], pi.axis_step[i])
-
-        # Boundary correction: if xi is exactly a split coordinate, decide whether
-        # it belongs to the cell on the left (<= boundary from a downset u) or
-        # to the cell on the right (>= boundary from an upset ell).
-        if 1 <= s <= length(ci) && xi == ci[s]
-            flag = pi.coord_flags[i][s]
-            if flag == 0x02
-                s -= 1               # u-only: treat equality as "left"
-            elseif flag == 0x03
-                ambiguous = true     # both ell and u: fall back to signature
-            end
-        end
-
-        lin += s * pi.cell_strides[i]
-    end
-
-    if !ambiguous
-        return pi.cell_to_region[lin]
-    end
-
-    # Only for measure-zero ambiguous boundary points:
-    return get(pi.sig_to_region, _sigkey(pi, x), 0)
+    return pi.cell_to_region[_cell_index(pi, x)]
 end
 
 function locate_many!(
@@ -736,23 +697,7 @@ function locate_many!(
     isempty(pi.cell_to_region) && error("locate_many!: missing cell_to_region table; construct via encode_fringe_boxes")
 
     @inbounds for j in 1:size(X, 2)
-        lin = 1
-        ambiguous = false
-        for i in 1:N
-            ci = pi.coords[i]
-            xi = X[i, j]
-            s = _slab_index(ci, xi, pi.axis_is_uniform[i], pi.axis_min[i], pi.axis_step[i])
-            if 1 <= s <= length(ci) && xi == ci[s]
-                flag = pi.coord_flags[i][s]
-                if flag == 0x02
-                    s -= 1
-                elseif flag == 0x03
-                    ambiguous = true
-                end
-            end
-            lin += s * pi.cell_strides[i]
-        end
-        dest[j] = ambiguous ? get(pi.sig_to_region, _sigkey(pi, view(X, :, j)), 0) : pi.cell_to_region[lin]
+        dest[j] = pi.cell_to_region[_cell_index(pi, view(X, :, j))]
     end
     return dest
 end
@@ -988,7 +933,7 @@ box `box=(a,b)`.
 
 - If `box === nothing`, the returned bounds may contain `-Inf` or `Inf` in
   unbounded directions.
-- Return `nothing` if the intersection is empty (or has zero volume).
+- Return `nothing` if the intersection is empty; retain zero-volume strata.
 """
 function region_bbox(
     pi::PLEncodingMapBoxes,
@@ -996,87 +941,10 @@ function region_bbox(
     box::Union{Nothing,Tuple{AbstractVector{<:Real},AbstractVector{<:Real}}}=nothing,
     strict::Bool=true
 )
-    nregions = length(pi.sig_y)
-    (1 <= r <= nregions) || error("region_bbox: region index out of range")
-    isempty(pi.cell_to_region) && error("region_bbox: missing cell_to_region table; construct via encode_fringe_boxes")
-
-    # Ambient box (possibly infinite).
-    a = fill(-Inf, pi.n)
-    b = fill(Inf,  pi.n)
-    if box !== nothing
-        a_in, b_in = box
-        length(a_in) == pi.n || error("region_bbox: box lower corner has wrong dimension")
-        length(b_in) == pi.n || error("region_bbox: box upper corner has wrong dimension")
-        @inbounds for i in 1:pi.n
-            a[i] = float(a_in[i])
-            b[i] = float(b_in[i])
-            a[i] <= b[i] || error("region_bbox: box must satisfy a[i] <= b[i] for all i")
-        end
-    end
-
-    # Restrict to cells that could intersect the query box.
-    slo = Vector{Int}(undef, pi.n)
-    shi = Vector{Int}(undef, pi.n)
-    shape_sub = Vector{Int}(undef, pi.n)
-    @inbounds for i in 1:pi.n
-        ci = pi.coords[i]
-        lo = searchsortedlast(ci, a[i])
-        hi = searchsortedlast(ci, b[i])
-        if lo < 0
-            lo = 0
-        elseif lo > length(ci)
-            lo = length(ci)
-        end
-        if hi < 0
-            hi = 0
-        elseif hi > length(ci)
-            hi = length(ci)
-        end
-        slo[i] = lo
-        shi[i] = hi
-        shape_sub[i] = hi - lo + 1
-    end
-
-    lo_out = fill(Inf,  pi.n)
-    hi_out = fill(-Inf, pi.n)
-    hit = false
-
-    sidx = Vector{Int}(undef, pi.n)
-
-    @inbounds for I in CartesianIndices(Tuple(shape_sub))
-        lin = 1
-        for i in 1:pi.n
-            s = slo[i] + (I[i] - 1)
-            sidx[i] = s
-            lin += s * pi.cell_strides[i]
-        end
-
-        t = pi.cell_to_region[lin]
-        if t == 0
-            strict && error("region_bbox: encountered a cell with unknown region")
-            continue
-        end
-        t == r || continue
-
-        ok = true
-        for i in 1:pi.n
-            lb, ub = _slab_interval_axis(sidx[i], pi.coords[i])
-            lo_i = max(a[i], lb)
-            hi_i = min(b[i], ub)
-            if hi_i <= lo_i
-                ok = false
-                break
-            end
-            lo_out[i] = min(lo_out[i], lo_i)
-            hi_out[i] = max(hi_out[i], hi_i)
-        end
-        if ok
-            hit = true
-        end
-    end
-
-    hit || return nothing
-    return (lo_out, hi_out)
+    window = box === nothing ? (fill(-Inf, pi.n), fill(Inf, pi.n)) : box
+    lows, highs = _cells_in_region_in_box(pi, r, window; strict=strict, finite=false)
+    isempty(lows) && return nothing
+    return (reduce((a,b) -> min.(a,b), lows), reduce((a,b) -> max.(a,b), highs))
 end
 
 # ------------------------------------------------------------------------------
@@ -1104,27 +972,18 @@ end
 
 # Representative coordinate for a 1D axis-slab cell.
 # `cj` is a 0-based slab index in 0:length(s).
-@inline function _cell_rep_axis(s::Vector{Float64}, cj::Int)::Float64
-    isempty(s) && return 0.0
+@inline function _cell_rep_axis(s::Vector{Float64}, cj::Int)::QQ
+    isempty(s) && return QQ(0)
     if cj == 0
-        x = s[1] - 1.0
-        return x < s[1] ? x : prevfloat(s[1])
+        return QQ(s[1]) - 1
     elseif cj == length(s)
-        x = s[end] + 1.0
-        return x > s[end] ? x : nextfloat(s[end])
+        return QQ(s[end]) + 1
     else
-        a, b = s[cj], s[cj + 1]
-        x = (a + b) / 2.0
-        isfinite(x) || (x = a / 2.0 + b / 2.0)
-        a < x < b && return x
-        neighbor = nextfloat(a)
-        # Adjacent floating-point splits have no Float64 interior witness.
-        # Stored representatives are approximate; classification uses signatures.
-        return neighbor < b ? neighbor : x
+        return (QQ(s[cj]) + QQ(s[cj + 1])) / 2
     end
 end
 
-# Stored Float64 sample of a cell; idx0 contains zero-based slab indices.
+# Exact witness of a cell; idx0 contains zero-based cell indices.
 function _cell_rep_axis(coords::NTuple{N,Vector{Float64}}, idx0::NTuple{N,Int}) where {N}
     return [_cell_rep_axis(coords[j], idx0[j]) for j in 1:N]
 end
@@ -1132,83 +991,44 @@ end
 # Collect all region-cells (axis-aligned boxes) inside a given finite `box`.
 # Returns two vectors of length ncells: lows[k], highs[k] are the lo/hi corners.
 function _cells_in_region_in_box(pi::PLEncodingMapBoxes, r::Integer, box;
-    strict::Bool=true)
-
+                                 strict::Bool=true, finite::Bool=true)
     box === nothing && error("_cells_in_region_in_box: box=(a,b) is required")
-    a_box, b_box = box
+    a, b = box
     n = pi.n
-    length(a_box) == n || error("_cells_in_region_in_box: box dimension mismatch")
-    length(b_box) == n || error("_cells_in_region_in_box: box dimension mismatch")
-    if !(all(isfinite, a_box) && all(isfinite, b_box))
-        error("_cells_in_region_in_box: requires a finite box")
-    end
-    isempty(pi.cell_to_region) && error("_cells_in_region_in_box: missing cell_to_region table")
-
-    nregions = length(pi.sig_y)
-    (1 <= r <= nregions) || error("_cells_in_region_in_box: region index out of range")
-
-    # Restrict to slabs that could intersect the query box.
-    slo = Vector{Int}(undef, n)
-    shi = Vector{Int}(undef, n)
-    shape_sub = Vector{Int}(undef, n)
-    @inbounds for i in 1:n
-        ci = pi.coords[i]
-        lo = searchsortedlast(ci, float(a_box[i]))
-        hi = searchsortedlast(ci, float(b_box[i]))
-        if lo < 0
-            lo = 0
-        elseif lo > length(ci)
-            lo = length(ci)
-        end
-        if hi < 0
-            hi = 0
-        elseif hi > length(ci)
-            hi = length(ci)
-        end
-        slo[i] = lo
-        shi[i] = hi
-        shape_sub[i] = hi - lo + 1
-    end
-
-    lows = Vector{Vector{Float64}}()
-    highs = Vector{Vector{Float64}}()
-
-    sidx = Vector{Int}(undef, n)
-
-    @inbounds for I in CartesianIndices(Tuple(shape_sub))
-        lin = 1
-        for i in 1:n
-            s = slo[i] + (I[i] - 1)
-            sidx[i] = s
-            lin += s * pi.cell_strides[i]
-        end
-
-        t = pi.cell_to_region[lin]
-        if t == 0
-            strict && error("_cells_in_region_in_box: encountered a cell with unknown region")
-            continue
-        end
-        t == r || continue
-
-        lo = Vector{Float64}(undef, n)
-        hi = Vector{Float64}(undef, n)
+    length(a) == length(b) == n || throw(DimensionMismatch("box dimension mismatch"))
+    all(a .<= b) || throw(ArgumentError("box lower bounds must not exceed upper bounds"))
+    finite && !(all(isfinite,a) && all(isfinite,b)) &&
+        throw(ArgumentError("a finite box is required"))
+    1 <= r <= nregions(pi) || throw(BoundsError(pi.reps, r))
+    isempty(pi.cell_to_region) && error("missing cell_to_region table")
+    # Include cells meeting either endpoint. Membership below distinguishes a
+    # closed stratum from a closure-only contact with an excluded open endpoint.
+    ranges = ntuple(j -> max(0,searchsortedfirst(pi.coords[j],a[j])-1):
+                           min(length(pi.coords[j]),searchsortedlast(pi.coords[j],b[j])), n)
+    lows, highs = Vector{Float64}[], Vector{Float64}[]
+    for I in CartesianIndices(ranges)
+        lin = 1 + sum(I[j] * pi.cell_strides[j] for j in 1:n)
+        rid = pi.cell_to_region[lin]
+        rid == 0 && strict && error("unknown cell_to_region entry")
+        rid == r || continue
+        lo, hi = Vector{Float64}(undef,n), Vector{Float64}(undef,n)
         ok = true
         for j in 1:n
-            a_s, b_s = _slab_interval_axis(sidx[j], pi.coords[j])
-            lo_j = max(float(a_box[j]), a_s)
-            hi_j = min(float(b_box[j]), b_s)
-            if hi_j <= lo_j
+            s = I[j]
+            lb, ub = _slab_interval_axis(s,pi.coords[j])
+            l, h = max(a[j],lb), min(b[j],ub)
+            if h < l || (h == l &&
+                ((l == lb && s > 0 && pi.coord_flags[j][s] != 0x01) ||
+                 (h == ub && s < length(pi.coords[j]) && pi.coord_flags[j][s+1] != 0x02)))
                 ok = false
                 break
             end
-            lo[j] = lo_j
-            hi[j] = hi_j
+            lo[j], hi[j] = l, h
         end
         ok || continue
-        push!(lows, lo)
-        push!(highs, hi)
+        push!(lows,lo)
+        push!(highs,hi)
     end
-
     return lows, highs
 end
 
@@ -1297,7 +1117,9 @@ function region_circumradius(pi::PLEncodingMapBoxes, r::Integer; box=nothing,
     # Choose center.
     c = nothing
     if center === :bbox
-        lo, hi = region_bbox(pi, r; box=box, strict=strict)
+        bb = region_bbox(pi, r; box=box, strict=strict)
+        bb === nothing && return 0.0
+        lo, hi = bb
         c = (lo .+ hi) ./ 2.0
     elseif center === :centroid
         c = region_centroid(pi, r; box=box, strict=strict)
@@ -1375,6 +1197,8 @@ Important: This backend can represent nonconvex unions, so the planar Cauchy for
 (perimeter/pi) is not generally valid. Therefore:
 - `method=:auto` defaults to `:cells` (direction sampling with exact per-direction width)
 - `method=:cauchy` is available only if the user *knows* the region is convex in 2D.
+  For a segment, it uses twice its length divided by pi; its geometric
+  boundary measure counts the segment once, unlike the limiting perimeter.
 
 `method=:cells`:
 - Sample directions u.
@@ -1402,7 +1226,11 @@ function region_mean_width(pi::PLEncodingMapBoxes, r::Integer; box=nothing,
 
     if method === :cauchy
         n == 2 || error("region_mean_width(method=:cauchy) requires n==2, got n=$n")
-        return region_boundary_measure(pi, r; box=box, strict=strict) / Base.MathConstants.pi
+        lows, highs = _cells_in_region_in_box(pi, r, box; strict=strict)
+        isempty(lows) && return 0.0
+        has_area = any(all(hi .> lo) for (lo,hi) in zip(lows,highs))
+        factor = has_area ? 1 : 2
+        return factor * region_boundary_measure(pi, r; box=box, strict=strict) / Base.MathConstants.pi
     elseif method !== :cells
         error("region_mean_width: unknown method=$method (use :auto, :cells, :cauchy)")
     end
@@ -1454,6 +1282,9 @@ query `box=(a,b)`.
 
 This backend computes these quantities exactly by integrating over the union of
 axis-aligned grid cells that make up the region within the box.
+For a zero-volume region, integrate the cells of greatest intrinsic dimension:
+length for segments, area for faces, and counting measure for isolated points.
+The returned coordinates and moments use floating-point arithmetic.
 
 Returns a named tuple with fields:
 
@@ -1598,7 +1429,9 @@ function region_principal_directions(pi::PLEncodingMapBoxes, r::Integer;
     end
 
     if V <= 0
-        # Empty intersection. Use a clamped representative as a benign mean.
+        # Ambient volume can vanish on a nonempty face. Normalize intrinsic
+        # measure on its highest-dimensional cells instead of discarding it.
+        lows, highs = _cells_in_region_in_box(pi,r,box;strict=strict)
         mu = Vector{Float64}(undef, n)
         rep = pi.reps[r]
         @inbounds for i in 1:n
@@ -1610,6 +1443,32 @@ function region_principal_directions(pi::PLEncodingMapBoxes, r::Integer;
         cov = zeros(Float64, n, n)
         evals = zeros(Float64, n)
         evecs = Matrix{Float64}(I, n, n)
+        if !isempty(lows)
+            dims = [count(>(0),hi .- lo) for (lo,hi) in zip(lows,highs)]
+            d = maximum(dims)
+            mass = 0.0
+            fill!(mu,0.0)
+            for (k,(lo,hi)) in enumerate(zip(lows,highs))
+                dims[k] == d || continue
+                lengths = hi .- lo
+                weight = prod(filter(>(0),lengths);init=1.0)
+                center = (lo .+ hi) ./ 2
+                delta = center .- mu
+                nextmass = mass + weight
+                cov .+= (weight * mass / nextmass) .* (delta * delta')
+                for j in 1:n
+                    cov[j,j] += weight * lengths[j]^2 / 12
+                end
+                mu .+= (weight / nextmass) .* delta
+                mass = nextmass
+            end
+            cov ./= mass
+            E = eigen(Symmetric(cov))
+            order = sortperm(E.values;rev=true)
+            evals, evecs = E.values[order], E.vectors[:,order]
+            n_used = count(==(d),dims)
+            n_checked = length(lows)
+        end
 
         if !return_info
             return (mean=mu, cov=cov, evals=evals, evecs=evecs,
@@ -1642,6 +1501,42 @@ function region_principal_directions(pi::PLEncodingMapBoxes, r::Integer;
 end
 
 
+# Enumerate each geometric (n-1)-patch once, using exact points for classifier
+# queries. A shared wall is one geometric face even though it has two events
+# in the cell table. Higher-codimension patches have zero (n-1)-measure.
+function _foreach_box_face(f::F, pi::PLEncodingMapBoxes, box; strict::Bool=true) where {F}
+    box === nothing && throw(ArgumentError("a finite box=(a,b) is required"))
+    a,b = box
+    n = pi.n
+    length(a) == length(b) == n || throw(DimensionMismatch("box dimension mismatch"))
+    all(isfinite,a) && all(isfinite,b) && all(a .<= b) ||
+        throw(ArgumentError("box bounds must be finite and ordered"))
+    walls = [sort!(unique(QQ[QQ(a[j]); [QQ(x) for x in pi.coords[j] if a[j] < x < b[j]]; QQ(b[j])])) for j in 1:n]
+    for axis in 1:n
+        shape = ntuple(j -> j == axis ? 1 : length(walls[j])-1,n)
+        for I in CartesianIndices(shape), k in eachindex(walls[axis])
+            point = QQ[j == axis ? walls[j][k] : (walls[j][I[j]] + walls[j][I[j]+1])/2 for j in 1:n]
+            measure = Float64(prod((walls[j][I[j]+1]-walls[j][I[j]] for j in 1:n if j != axis); init=QQ(1)))
+            measure > 0 || continue
+            at = locate(pi,point)
+            left = 0
+            right = 0
+            if k > 1
+                point[axis] = (walls[axis][k-1]+walls[axis][k])/2
+                left = locate(pi,point)
+            end
+            if k < length(walls[axis])
+                point[axis] = (walls[axis][k]+walls[axis][k+1])/2
+                right = locate(pi,point)
+            end
+            point[axis] = walls[axis][k]
+            strict && at == 0 && error("unknown face region")
+            f(axis,point,measure,left,at,right,k == 1 || k == length(walls[axis]))
+        end
+    end
+    return nothing
+end
+
 """
     region_adjacency(pi::PLEncodingMapBoxes; box, strict=true) -> Dict{Tuple{Int,Int},Float64}
 
@@ -1655,116 +1550,19 @@ This implementation uses the precomputed dense cell table (`pi.cell_to_region`)
 and does *not* recompute signatures per cell.
 """
 function region_adjacency(pi::PLEncodingMapBoxes;
-    box, strict::Bool=true, mode::Symbol=:fast)
+    box=nothing, strict::Bool=true, mode::Symbol=:fast)
     _ = validate_pl_mode(mode)
-
-    box === nothing && error("region_adjacency: box=(a,b) is required")
-    a_in, b_in = box
-    n = pi.n
-    length(a_in) == n || error("region_adjacency: a has length $(length(a_in)) but n=$n")
-    length(b_in) == n || error("region_adjacency: b has length $(length(b_in)) but n=$n")
-
-    isempty(pi.cell_to_region) && error("region_adjacency: missing cell_to_region table; construct via encode_fringe_boxes")
-
-    a = Vector{Float64}(undef, n)
-    b = Vector{Float64}(undef, n)
-    @inbounds for i in 1:n
-        ai = float(a_in[i])
-        bi = float(b_in[i])
-        ai <= bi || error("region_adjacency: require a[i] <= b[i] for all i")
-        a[i] = ai
-        b[i] = bi
-    end
-
-    # Slab index ranges per axis that could intersect box.
-    slo = Vector{Int}(undef, n)
-    shi = Vector{Int}(undef, n)
-    shape_sub = Vector{Int}(undef, n)
-    @inbounds for i in 1:n
-        ci = pi.coords[i]
-        Li = length(ci)
-        lo = searchsortedlast(ci, a[i])
-        hi = searchsortedlast(ci, b[i])
-        lo < 0 && (lo = 0)
-        hi < 0 && (hi = 0)
-        lo > Li && (lo = Li)
-        hi > Li && (hi = Li)
-        slo[i] = lo
-        shi[i] = hi
-        shape_sub[i] = hi - lo + 1
-    end
-
-    sidx = Vector{Int}(undef, n)
-    lens = Vector{Float64}(undef, n)
-    strides = pi.cell_strides
     edges = Dict{Tuple{Int,Int},Float64}()
-
-    @inbounds for I in CartesianIndices(Tuple(shape_sub))
-        lin = 1
-        vol = 1.0
-
-        # Compute linear index + intersection side lengths for this cell.
-        for i in 1:n
-            s = slo[i] + (I[i] - 1)
-            sidx[i] = s
-            lin += s * strides[i]
-
-            lb, ub = _slab_interval_axis(s, pi.coords[i])
-            lo = max(a[i], lb)
-            hi = min(b[i], ub)
-            len = hi - lo
-            if len <= 0.0
-                vol = 0.0
-                break
-            end
-            lens[i] = len
-            vol *= len
-        end
-
-        vol == 0.0 && continue
-
-        t = pi.cell_to_region[lin]
-        if t == 0
-            strict && error("region_adjacency: cell has unknown region id (0)")
-            continue
-        end
-
-        # Check +direction neighbors only (count each interface once).
-        for j in 1:n
-            cj = pi.coords[j]
-            Lj = length(cj)
-            sj = sidx[j]
-            sj < Lj || continue
-
-            # Neighbor cell across axis j.
-            lin2 = lin + strides[j]
-
-            # Make sure neighbor cell has positive length inside the box.
-            lb2, ub2 = _slab_interval_axis(sj + 1, cj)
-            lo2 = max(a[j], lb2)
-            hi2 = min(b[j], ub2)
-            if hi2 - lo2 <= 0.0
-                continue
-            end
-
-            t2 = pi.cell_to_region[lin2]
-            if t2 == 0
-                strict && error("region_adjacency: neighbor cell has unknown region id (0)")
-                continue
-            end
-
-            t == t2 && continue
-
-            # Face measure is product of lengths in all other axes.
-            face = vol / lens[j]
-
-            u = min(t, t2)
-            v = max(t, t2)
-            key = (u, v)
-            edges[key] = get(edges, key, 0.0) + face
+    _foreach_box_face(pi, box; strict=strict) do axis, point, measure, left, at, right, box_face
+        # All three closures meet at this patch, including a distinct retained
+        # face label between the two full-dimensional neighbors.
+        ids = unique((left,at,right))
+        for i in eachindex(ids), j in (i+1):length(ids)
+            u,v = minmax(ids[i],ids[j])
+            u == 0 && continue
+            edges[(u,v)] = get(edges,(u,v),0.0) + measure
         end
     end
-
     return edges
 end
 
@@ -1777,129 +1575,16 @@ The region is a union of axis-aligned grid cells. The boundary measure is the
 (n-1)-dimensional measure of the boundary of `(region r) cap box`. In 2D this is a
 perimeter, in 3D a surface area, etc.
 """
-function region_boundary_measure(pi::PLEncodingMapBoxes, r::Integer; box=nothing, strict::Bool=true, mode::Symbol=:fast)
+function region_boundary_measure(pi::PLEncodingMapBoxes, r::Integer;
+    box=nothing, strict::Bool=true, mode::Symbol=:fast)
     _ = validate_pl_mode(mode)
-    box === nothing && error("region_boundary_measure: please provide box=(a,b)")
-    a_in, b_in = box
-    n = pi.n
-    length(a_in) == n || error("region_boundary_measure: expected length(a)==$n")
-    length(b_in) == n || error("region_boundary_measure: expected length(b)==$n")
-
-    a = Vector{Float64}(undef, n)
-    b = Vector{Float64}(undef, n)
-    @inbounds for i in 1:n
-        a[i] = float(a_in[i])
-        b[i] = float(b_in[i])
-        (isfinite(a[i]) && isfinite(b[i])) || error("region_boundary_measure: box bounds must be finite")
-        a[i] <= b[i] || error("region_boundary_measure: expected a[i] <= b[i]")
-    end
-
-    R = length(pi.sig_y)
-    (1 <= r <= R) || error("region_boundary_measure: region index out of range")
-    isempty(pi.cell_to_region) && error("region_boundary_measure: missing cell_to_region table; construct via encode_fringe_boxes")
-
-    # Restrict to the slab subgrid that can intersect the box.
-    slo = Vector{Int}(undef, n)
-    shi = Vector{Int}(undef, n)
-    shape_sub = Vector{Int}(undef, n)
-    @inbounds for i in 1:n
-        ci = pi.coords[i]
-        lo = searchsortedlast(ci, a[i])
-        hi = searchsortedlast(ci, b[i])
-        lo = max(0, min(lo, length(ci)))
-        hi = max(0, min(hi, length(ci)))
-        slo[i] = lo
-        shi[i] = hi
-        shape_sub[i] = hi - lo + 1
-    end
-
-    # Tolerance for detecting faces that lie on the box boundary.
-    scale = 0.0
-    @inbounds for i in 1:n
-        scale = max(scale, abs(a[i]))
-        scale = max(scale, abs(b[i]))
-    end
-    tol = 1e-12 * max(1.0, scale)
-
-    idx0 = Vector{Int}(undef, n)
-    slab_lo = Vector{Float64}(undef, n)
-    slab_hi = Vector{Float64}(undef, n)
-    lens = Vector{Float64}(undef, n)
-
+    1 <= r <= nregions(pi) || throw(BoundsError(pi.reps,r))
     total = 0.0
-    strides = pi.cell_strides
-
-    @inbounds for I in CartesianIndices(Tuple(shape_sub))
-        lin = 1
-        vol = 1.0
-        ok = true
-
-        for j in 1:n
-            s = slo[j] + (I[j] - 1)
-            idx0[j] = s
-            lo0, hi0 = _slab_interval_axis(s, pi.coords[j])
-            slab_lo[j] = lo0
-            slab_hi[j] = hi0
-            lo = max(a[j], lo0)
-            hi = min(b[j], hi0)
-            len = hi - lo
-            if len <= 0
-                ok = false
-                break
-            end
-            lens[j] = len
-            vol *= len
-            lin += s * strides[j]
-        end
-        ok || continue
-
-        t = pi.cell_to_region[lin]
-        if t == 0
-            strict && error("region_boundary_measure: unknown cell_to_region entry at lin=$lin")
-            continue
-        end
-        t == r || continue
-
-        for j in 1:n
-            face = vol / lens[j]
-
-            # Faces on the box boundary.
-            lo = max(a[j], slab_lo[j])
-            hi = min(b[j], slab_hi[j])
-            if abs(lo - a[j]) <= tol
-                total += face
-            end
-            if abs(hi - b[j]) <= tol
-                total += face
-            end
-
-            # Internal faces across grid hyperplanes.
-            if idx0[j] > 0
-                bd = slab_lo[j]
-                if isfinite(bd) && (bd > a[j] + tol) && (bd < b[j] - tol)
-                    t2 = pi.cell_to_region[lin - strides[j]]
-                    if t2 == 0
-                        strict && error("region_boundary_measure: unknown neighbor cell at lin=$(lin - strides[j])")
-                    elseif t2 != r
-                        total += face
-                    end
-                end
-            end
-
-            if idx0[j] < length(pi.coords[j])
-                bd = slab_hi[j]
-                if isfinite(bd) && (bd > a[j] + tol) && (bd < b[j] - tol)
-                    t2 = pi.cell_to_region[lin + strides[j]]
-                    if t2 == 0
-                        strict && error("region_boundary_measure: unknown neighbor cell at lin=$(lin + strides[j])")
-                    elseif t2 != r
-                        total += face
-                    end
-                end
-            end
+    _foreach_box_face(pi, box; strict=strict) do axis, point, measure, left, at, right, box_face
+        if r in (left,at,right) && !(left == at == right == r)
+            total += measure
         end
     end
-
     return total
 end
 
@@ -1912,153 +1597,34 @@ Return a diagnostic decomposition of the boundary of `(region r) cap box`.
 Each entry has fields:
 
 - `measure`  : (n-1)-dimensional measure of the face patch
-- `normal`   : outward unit normal (axis-aligned)
+- `normal`   : outward unit normal, or zero when there is no unique outward side
 - `point`    : a representative point on the patch (midpoint)
 - `neighbor` : adjacent region id, or 0 for box boundary faces
-- `kind`     : `:internal` or `:box`
+- `kind`     : `:internal`, `:box`, or `:stratum` for an isolated face;
+  a stratum has no single neighboring side (`neighbor=0`)
 
 This is intended for debugging/visualization; it may return many small patches.
 """
-function region_boundary_measure_breakdown(pi::PLEncodingMapBoxes, r::Integer; box=nothing, strict::Bool=true, mode::Symbol=:fast)
+function region_boundary_measure_breakdown(pi::PLEncodingMapBoxes, r::Integer;
+    box=nothing, strict::Bool=true, mode::Symbol=:fast)
     _ = validate_pl_mode(mode)
-    box === nothing && error("region_boundary_measure_breakdown: please provide box=(a,b)")
-    a_in, b_in = box
-    n = pi.n
-    length(a_in) == n || error("region_boundary_measure_breakdown: expected length(a)==$n")
-    length(b_in) == n || error("region_boundary_measure_breakdown: expected length(b)==$n")
-
-    a = Vector{Float64}(undef, n)
-    b = Vector{Float64}(undef, n)
-    @inbounds for i in 1:n
-        a[i] = float(a_in[i])
-        b[i] = float(b_in[i])
-        (isfinite(a[i]) && isfinite(b[i])) || error("region_boundary_measure_breakdown: box bounds must be finite")
-        a[i] <= b[i] || error("region_boundary_measure_breakdown: expected a[i] <= b[i]")
-    end
-
-    R = length(pi.sig_y)
-    (1 <= r <= R) || error("region_boundary_measure_breakdown: region index out of range")
-    isempty(pi.cell_to_region) && error("region_boundary_measure_breakdown: missing cell_to_region table; construct via encode_fringe_boxes")
-
-    slo = Vector{Int}(undef, n)
-    shi = Vector{Int}(undef, n)
-    shape_sub = Vector{Int}(undef, n)
-    @inbounds for i in 1:n
-        ci = pi.coords[i]
-        lo = searchsortedlast(ci, a[i])
-        hi = searchsortedlast(ci, b[i])
-        lo = max(0, min(lo, length(ci)))
-        hi = max(0, min(hi, length(ci)))
-        slo[i] = lo
-        shi[i] = hi
-        shape_sub[i] = hi - lo + 1
-    end
-
-    scale = 0.0
-    @inbounds for i in 1:n
-        scale = max(scale, abs(a[i]))
-        scale = max(scale, abs(b[i]))
-    end
-    tol = 1e-12 * max(1.0, scale)
-
-    idx0 = Vector{Int}(undef, n)
-    slab_lo = Vector{Float64}(undef, n)
-    slab_hi = Vector{Float64}(undef, n)
-    lens = Vector{Float64}(undef, n)
-    mids = Vector{Float64}(undef, n)
-
-    strides = pi.cell_strides
-
-    pieces = Vector{NamedTuple}()
-
-    @inbounds for I in CartesianIndices(Tuple(shape_sub))
-        lin = 1
-        vol = 1.0
-        ok = true
-
-        for j in 1:n
-            s = slo[j] + (I[j] - 1)
-            idx0[j] = s
-            lo0, hi0 = _slab_interval_axis(s, pi.coords[j])
-            slab_lo[j] = lo0
-            slab_hi[j] = hi0
-            lo = max(a[j], lo0)
-            hi = min(b[j], hi0)
-            len = hi - lo
-            if len <= 0
-                ok = false
-                break
-            end
-            lens[j] = len
-            mids[j] = 0.5 * (lo + hi)
-            vol *= len
-            lin += s * strides[j]
+    1 <= r <= nregions(pi) || throw(BoundsError(pi.reps,r))
+    pieces = NamedTuple[]
+    _foreach_box_face(pi, box; strict=strict) do axis, point, measure, left, at, right, box_face
+        r in (left,at,right) && !(left == at == right == r) || return
+        normal = zeros(Float64,pi.n)
+        stratum = left != r && right != r
+        neighbor = 0
+        if left == r && right != r
+            normal[axis] = 1.0
+            neighbor = at == r ? right : at
+        elseif right == r && left != r
+            normal[axis] = -1.0
+            neighbor = at == r ? left : at
         end
-        ok || continue
-
-        t = pi.cell_to_region[lin]
-        if t == 0
-            strict && error("region_boundary_measure_breakdown: unknown cell_to_region entry at lin=$lin")
-            continue
-        end
-        t == r || continue
-
-        for j in 1:n
-            face = vol / lens[j]
-
-            # Box boundary faces.
-            lo = max(a[j], slab_lo[j])
-            hi = min(b[j], slab_hi[j])
-            if abs(lo - a[j]) <= tol
-                normal = zeros(Float64, n)
-                normal[j] = -1.0
-                point = copy(mids)
-                point[j] = lo
-                push!(pieces, (measure=face, normal=normal, point=point, neighbor=0, kind=:box))
-            end
-            if abs(hi - b[j]) <= tol
-                normal = zeros(Float64, n)
-                normal[j] = 1.0
-                point = copy(mids)
-                point[j] = hi
-                push!(pieces, (measure=face, normal=normal, point=point, neighbor=0, kind=:box))
-            end
-
-            # Internal faces across grid hyperplanes.
-            if idx0[j] > 0
-                bd = slab_lo[j]
-                if isfinite(bd) && (bd > a[j] + tol) && (bd < b[j] - tol)
-                    t2 = pi.cell_to_region[lin - strides[j]]
-                    if t2 == 0
-                        strict && error("region_boundary_measure_breakdown: unknown neighbor cell at lin=$(lin - strides[j])")
-                    elseif t2 != r
-                        normal = zeros(Float64, n)
-                        normal[j] = -1.0
-                        point = copy(mids)
-                        point[j] = bd
-                        push!(pieces, (measure=face, normal=normal, point=point, neighbor=t2, kind=:internal))
-                    end
-                end
-            end
-
-            if idx0[j] < length(pi.coords[j])
-                bd = slab_hi[j]
-                if isfinite(bd) && (bd > a[j] + tol) && (bd < b[j] - tol)
-                    t2 = pi.cell_to_region[lin + strides[j]]
-                    if t2 == 0
-                        strict && error("region_boundary_measure_breakdown: unknown neighbor cell at lin=$(lin + strides[j])")
-                    elseif t2 != r
-                        normal = zeros(Float64, n)
-                        normal[j] = 1.0
-                        point = copy(mids)
-                        point[j] = bd
-                        push!(pieces, (measure=face, normal=normal, point=point, neighbor=t2, kind=:internal))
-                    end
-                end
-            end
-        end
+        kind = stratum ? :stratum : box_face ? :box : :internal
+        push!(pieces,(measure=measure,normal=normal,point=Float64.(point),neighbor=neighbor,kind=kind))
     end
-
     return pieces
 end
 
@@ -2162,10 +1728,9 @@ Returns
 `opts.field` selects the output coefficient field. `poset_kind` defaults to
 `opts.poset_kind`; an explicit keyword overrides it. A non-`nothing`
 `opts.strict_eps` is rejected because this backend uses closed boxes.
-A coordinate shared by a birth and death threshold on the same axis is rejected:
-its lower-dimensional boundary classes need the general polyhedral encoder.
-Use the high-level `encode` workflow with `backend=:auto` or `:pl` for those
-inputs; `:auto` preserves them by selecting `:pl`.
+Shared birth/death thresholds retain singleton cells; their products represent
+all realized faces and corners. The cell budget includes these extra strata.
+Representatives are exact rationals relative to the stored Float64 thresholds.
 """
 function encode_fringe_boxes(Ups::Vector{BoxUpset},
                              Downs::Vector{BoxDownset},
@@ -2204,8 +1769,6 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     n_cells <= max_regions || error("Too many grid cells (>$max_regions); increase opts.max_regions or reduce splits")
 
     coord_flags = _coord_flags(coords, Ups, Downs)
-    any(flags -> any(==(0x03), flags), coord_flags) &&
-        throw(ArgumentError("encode_fringe_boxes cannot represent shared birth/death boundaries. Use the encode workflow with backend=:auto or :pl to preserve lower-dimensional classes."))
     axis_is_uniform, axis_step, axis_min = _axis_meta(coords)
 
     # Deduplicate cells by packed (y,z) signature.
@@ -2216,7 +1779,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
 
     sig_y = BitVector[]
     sig_z = BitVector[]
-    reps = Vector{NTuple{n,Float64}}()
+    reps = Vector{NTuple{n,QQ}}()
 
     # Precompute generator-threshold crossing events per axis boundary.
     # When a slab index on axis `j` increments from `s` to `s+1`, only generators
@@ -2238,7 +1801,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     end
     @inbounds for d in 1:r
         for j in 1:n
-            t = searchsortedfirst(coords[j], Downs[d].u[j])
+            t = searchsortedlast(coords[j], Downs[d].u[j])
             push!(down_events[j][t], d)
         end
     end
@@ -2264,9 +1827,10 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
     # 0-based slab indices for current cell. Traversal uses axis-1-fast odometer order,
     # matching Julia's column-major linearization of the Cartesian grid.
     idx0 = zeros(Int, n)
-    x = Vector{Float64}(undef, n)
+    axis_reps = [[_cell_rep_axis(coords[j], s) for s in 0:length(coords[j])] for j in 1:n]
+    x = Vector{QQ}(undef, n)
     @inbounds for j in 1:n
-        x[j] = _cell_rep_axis(coords[j], 0)
+        x[j] = axis_reps[j][1]
     end
 
     @inline function _apply_axis_inc!(axis::Int, boundary::Int)
@@ -2335,7 +1899,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
                 boundary = idx0[axis]
                 _apply_axis_inc!(axis, boundary)
                 idx0[axis] = boundary + 1
-                x[axis] = _cell_rep_axis(coords[axis], idx0[axis])
+                x[axis] = axis_reps[axis][idx0[axis] + 1]
                 break
             end
 
@@ -2345,7 +1909,7 @@ function encode_fringe_boxes(Ups::Vector{BoxUpset},
                 _apply_axis_dec!(axis, boundary)
                 idx0[axis] -= 1
             end
-            x[axis] = _cell_rep_axis(coords[axis], 0)
+            x[axis] = axis_reps[axis][1]
             axis += 1
             axis <= n || error("encode_fringe_boxes: internal cell traversal overflow")
         end
@@ -2555,7 +2119,7 @@ function check_box_encoding_map(pi_or_enc; throw::Bool=false)
         axis = pi.coords[i]
         all(isfinite, axis) || push!(issues, "axis $i coordinates must be finite.")
         issorted(axis) || push!(issues, "axis $i coordinates must be sorted.")
-        allunique(axis) || push!(issues, "axis $i coordinates must be unique.")
+
     end
 
     expected_shape = [length(axis) + 1 for axis in pi.coords]
@@ -2591,6 +2155,21 @@ function check_box_encoding_map(pi_or_enc; throw::Bool=false)
             push!(issues, "coord_flags[$i] has length $(length(pi.coord_flags[i])), expected $(length(pi.coords[i])).")
     end
 
+    if isempty(issues)
+        expected_coords = _coords_from_generators(pi.Ups, pi.Downs)
+        pi.coords == expected_coords || push!(issues, "axis events disagree with generator thresholds and strata")
+        pi.coord_flags == _coord_flags(pi.coords, pi.Ups, pi.Downs) ||
+            push!(issues, "boundary flags disagree with generator events")
+        uniform, step, origin = _axis_meta(pi.coords)
+        (pi.axis_is_uniform == uniform && pi.axis_step == step && pi.axis_min == origin) ||
+            push!(issues, "axis lookup metadata disagrees with coordinates")
+        for (rid, x) in enumerate(pi.reps)
+            key = _sigkey(pi,x)
+            (get(pi.sig_to_region,key,0) == rid && locate(pi,x) == rid &&
+             _signature(collect(x),pi.Ups,pi.Downs) == (pi.sig_y[rid],pi.sig_z[rid])) ||
+                push!(issues, "representative $rid does not certify its stored region")
+        end
+    end
     valid = isempty(issues)
     throw && !valid && _throw_invalid_plbackend(:check_box_encoding_map, issues)
     return _box_issue_report(:box_encoding_map, valid;

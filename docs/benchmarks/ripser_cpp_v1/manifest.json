@@ -1,0 +1,176 @@
+{
+  "schema": 1,
+  "status": "frozen_confirmation_per_case_process",
+  "date": "2026-10-06",
+  "frozen_utc": "2026-10-06T04:17:02.589224+00:00",
+  "cases": [
+    {
+      "id": "circle_1280_f2",
+      "family": "circle",
+      "n": 1280,
+      "prime": 2,
+      "degree": 1,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/circle_1280_f2.txt",
+      "sha256": "1b86d6ede977c5066fc6ad0f145231f1fb7638d3d37441a3ca91a4bbc3bb6f0d",
+      "edges": 818560,
+      "control": false
+    },
+    {
+      "id": "circle_1408_f2",
+      "family": "circle",
+      "n": 1408,
+      "prime": 2,
+      "degree": 1,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/circle_1408_f2.txt",
+      "sha256": "c185afbfe1eccae0e48d44fcf5049cd02e42198aaa932c1f7874ea61abcff8ec",
+      "edges": 990528,
+      "control": false
+    },
+    {
+      "id": "planar_1024_f2",
+      "family": "planar",
+      "n": 1024,
+      "prime": 2,
+      "degree": 2,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/planar_1024_f2.txt",
+      "sha256": "9ec458dd3c3c2e19bc1d0d09985a8077ad8a400b222e81d6d852c06920e86657",
+      "edges": 523776,
+      "control": false
+    },
+    {
+      "id": "planar_1152_f2",
+      "family": "planar",
+      "n": 1152,
+      "prime": 2,
+      "degree": 2,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/planar_1152_f2.txt",
+      "sha256": "a06eae1910c1cdafcef3d4b09c094ae9b58af87622308257d24758b01cafdec3",
+      "edges": 662976,
+      "control": false
+    },
+    {
+      "id": "planar_1024_f101",
+      "family": "planar",
+      "n": 1024,
+      "prime": 101,
+      "degree": 2,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/planar_1024_f101.txt",
+      "sha256": "9ec458dd3c3c2e19bc1d0d09985a8077ad8a400b222e81d6d852c06920e86657",
+      "edges": 523776,
+      "control": false
+    },
+    {
+      "id": "planar_1152_f101",
+      "family": "planar",
+      "n": 1152,
+      "prime": 101,
+      "degree": 2,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/planar_1152_f101.txt",
+      "sha256": "a06eae1910c1cdafcef3d4b09c094ae9b58af87622308257d24758b01cafdec3",
+      "edges": 662976,
+      "control": false
+    },
+    {
+      "id": "sphere_448_f3",
+      "family": "sphere",
+      "n": 448,
+      "prime": 3,
+      "degree": 2,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/sphere_448_f3.txt",
+      "sha256": "dd5d7841cca335d5f552c01f6b220816608b0b59d037696302e24679783f38e7",
+      "edges": 100128,
+      "control": false
+    },
+    {
+      "id": "sphere_512_f3",
+      "family": "sphere",
+      "n": 512,
+      "prime": 3,
+      "degree": 2,
+      "format": "lower-distance",
+      "threshold": null,
+      "input": "inputs/sphere_512_f3.txt",
+      "sha256": "dc08062dcc56479ed98fa2acb2894a0713fb0f671e0a4d78c4cf03e9f2e08825",
+      "edges": 130816,
+      "control": false
+    },
+    {
+      "id": "sparse_sphere_640_f2",
+      "family": "sparse_sphere",
+      "n": 640,
+      "prime": 2,
+      "degree": 2,
+      "format": "sparse",
+      "threshold": 1.5,
+      "input": "inputs/sparse_sphere_640_f2.txt",
+      "sha256": "c9743fb3ca6a2ffe43815fdf845f9b7fd2c11c2f8a0c7833f162273ad90f017f",
+      "edges": 114771,
+      "control": false
+    },
+    {
+      "id": "sparse_sphere_704_f2",
+      "family": "sparse_sphere",
+      "n": 704,
+      "prime": 2,
+      "degree": 2,
+      "format": "sparse",
+      "threshold": 1.5,
+      "input": "inputs/sparse_sphere_704_f2.txt",
+      "sha256": "78393cceb48f972180c31602070219023f4f2d36e66dfaab44d6a6f0aa8b616b",
+      "edges": 138956,
+      "control": false
+    }
+  ],
+  "passes": 3,
+  "samples": 2,
+  "limits": {
+    "query_seconds": 240,
+    "julia_warm_and_startup_seconds": 600,
+    "worker_rss_bytes": 6442450944
+  },
+  "host_policy": "No exclusive machine reservation or new pause confirmation; final sizing observed load near 1-2. Serial workers on CPU 0; all timing variation and host activity retained.",
+  "primary": "Input file to full barcode, directly timed including native construction and output. C++ CLI startup included; Julia startup and compilation separate.",
+  "comparison": "TamerOp frozen Ripser.py-v1 candidate versus original C++ Ripser, not Ripser.py.",
+  "fields": [
+    2,
+    3,
+    101
+  ],
+  "practical_band": [
+    0.9090909090909091,
+    1.1
+  ],
+  "statistics": "Three paired process passes with two accepted samples each; medians per process, median of process medians for times, geometric mean of paired-process ratios; descriptive min/max ranges.",
+  "source_policy": "No library edits or competitor modifications during study.",
+  "known_preflight_limitation": "Unfiltered sparse CLI does not apply threshold to H0 edges; failing control retained. Timed sparse graphs are prefiltered identically.",
+  "pilot": [
+    9.882305464008823,
+    27.61826665099943,
+    27.09577351299231,
+    7.206698957001208,
+    26.064442525996128,
+    49.33002764299454,
+    34.232783813000424
+  ],
+  "protocol_revision": 3,
+  "julia_flags": [
+    "--heap-size-hint=4G"
+  ],
+  "refrozen_utc": "2026-10-06T04:59:09.943519+00:00",
+  "runtime_revision": "Both initial shared-session attempts exceeded 6 GiB. An isolated planar1152 F2 probe with a 4 GiB heap hint completed below 5 GiB. Preserve both attempts and restart all unchanged cases in independent case processes with the same heap hint and guard. No source changes or case exclusions.",
+  "process_policy": "Three passes, one fresh Julia process per case per pass (30 workers), discarded full-case warmup then two fresh computations; C++ remains fresh per invocation. Normal package precompilation completed before final launch."
+}

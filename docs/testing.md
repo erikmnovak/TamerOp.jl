@@ -32,6 +32,22 @@ julia --project=. test/runtests.jl --file=test_invariants.jl --prefix=A54
 julia --project=. docs/examples/generalized_rank.jl
 ```
 
+The region explorer adds independent interval-summand barcode oracles over QQ,
+F2, F3 and F5, transactional selection tests, nonuniform-coordinate native
+rendering, and real browser entry, pointer, linked-client and teardown checks:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization_a54.jl --prefix="A54 visual"
+julia --project=docs docs/build_scripts/check_generalized_rank.jl --record --recipe
+julia --project=docs docs/build_scripts/check_generalized_rank.jl --main-path
+cd test/browser
+npx playwright test generalized-rank.spec.mjs
+```
+
+The native renderer testset needs CairoMakie and WGLMakie loaded; use the
+extension lane described below. Standalone browser checks do not qualify a
+notebook frontend.
+
 Repeat `--file` to select several owner files and `--prefix` to select several
 families. Names are case sensitive. Unknown files, arguments, fields and unmatched
 prefixes fail. Prefixes match the runtime testset description, including field
@@ -46,6 +62,59 @@ fields. The runner prints the selected fields and Julia thread counts.
 `test/prelude.jl` owns shared imports, field definitions, aliases and fixtures.
 `test/test_contracts.jl` owns source/API guards. All tests use the same prelude;
 do not copy it or extract it by parsing `runtests.jl`.
+
+## Visualization acceptance contracts
+
+The [support matrix](visualization_support.md) separates supported display paths
+from the evidence for them. A36 (mathematical coordinates) and A37 (advertised
+interaction) are standing requirements for changes, not features deferred until
+all possible frontends exist. Run the affected independent oracles and actual
+renderers; live controls additionally need real browser input and cleanup checks.
+Shared renderer changes also run `test_visualization_a38.jl` through this lane.
+Its structural budgets include recipe children and check that adding primitives
+does not add one plot per primitive, while independent coordinates, path breaks, literal coefficients,
+matrix spacing and painting-order cases protect the represented data. Diagram
+annotation checks include actual glyph bounds and bounded connector plot trees.
+Retained inspector checks assert plot and canvas identity during compatible
+updates, correct structural fallback, exact selected values and observer cleanup. Native scene
+construction alone cannot certify a backend's serialization: keep halo labels
+and other nondefault attributes in the actual export/browser fixtures. Timing
+thresholds are kept out of CI: performance studies measure construction, native
+updates and export separately, with allocations and retained objects distinct
+from process RSS. Keep recipe display limits explicit; a batching optimization
+must not silently discard labels, multiplicities, source identities or queries.
+Check that Tab and Shift+Tab can leave plots and reach later controls, including
+after a figure rebuild. A canvas must not trap focus or require a mouse click
+to escape it.
+At narrow widths, scientific labels must remain readable and wide charts must
+remain reachable by keyboard and pointer. Check the figure region separately
+from page overflow; shrinking a whole figure can hide a readability failure.
+
+```sh
+python test/visualization_contracts.py
+python -m unittest discover -s test -p 'test_visualization_contracts.py'
+python test/visualization_contracts.py --run-native
+```
+
+The last command uses the prepared `test/browser` graphics environment and
+requires CairoMakie and WGLMakie. It selects every native owner recorded in the
+matrix, including the split interval and newer inspector files. The dedicated
+Visualization CI workflow runs this selection and the live/no-server browser
+lanes on each push and pull request. Dependency absence, missing export fixtures
+and unassigned source files/tests fail this acceptance lane. Reviewers must also
+identify new recipes inside existing source files. The optional local
+core-only suite may still skip renderer tests when graphics are not installed.
+Making this job a branch-protection merge requirement is a repository setting;
+the workflow itself cannot enforce that setting.
+Both browser lanes require every collected scenario to expect and achieve a
+pass. Runtime skips, missing results and successful retries after a failure do
+not count as acceptance; the shared reporter makes them fail the run.
+
+Maintain the matrix when adding capabilities. Native callbacks, serialized
+markup, standalone Chromium and named notebook hosts establish different facts.
+IJulia/Jupyter, Pluto and VS Code live notebook qualification remains explicit
+follow-up work; static published notebooks do not establish it. Keep historical
+acceptance counts tied to their dates rather than treating them as current scope.
 
 ## Optional dependencies
 
@@ -173,8 +242,9 @@ strokes. Its 2 October owner-file run passed 1,228/1,228 native assertions. Thes
 native results overlap earlier checks and must not be summed into a new total;
 they are also separate from the five browser scenarios.
 
-The maintained [browser suite](../test/browser/README.md) now contains five
-scenarios. The three additional scenarios reproduce the two-square examples
+The original five-scenario [browser acceptance](../test/browser/README.md)
+listed below is historical; the support matrix names the current family coverage.
+Its three square scenarios reproduce the two-square examples
 from the earlier manual acceptance, using the finite encoding of
 `k_[0,2]^2` plus `k_[1,3]^2` over the rational numbers:
 
@@ -692,3 +762,291 @@ one versus the exact interior optimum `5/4`, reset and close.
 The recipe is canonical in `docs/tutorials/distance_witness.ipynb` and executes
 through the publication workflow; static output does not establish live
 notebook-frontend compatibility.
+
+### Spectral-page inspection
+
+`test/runtests.jl --file=test_visualization_a42d.jl --prefix=A42d` exercises
+staircase bicomplexes with known higher differentials: earlier pages agree but
+`d_2` or `d_3` is nonzero. It checks full- and rank-one maps, kernel/image
+quotients, zero and uncomputed terms, cropped targets, horizontal-first and Tor
+indexing, field parity, supplied structure matrices and session recovery.
+Require both Makie extensions to exercise native rendering and PNG/SVG/PDF
+exports. `test/browser/spectral.spec.mjs` covers the `/spectral` fixture through
+actual page controls, unknown-to-computed transitions, pointer selection,
+linked viewers, hover without computation, narrow keyboard scrolling and close.
+The canonical guide is `docs/tutorials/complexes.ipynb`; its static publication
+and standalone-browser checks do not certify a live notebook frontend.
+
+## Signed observables and cancellation
+
+`test/test_visualization_a86.jl` checks all comparable pairs of a small module
+against its actual structure-map ranks, cumulative point sums, and declared
+interval-family generalized ranks. It includes inclusive and half-open endpoint
+oracles, irregular rational axes, infinite deaths, smoothing at equality,
+negative coefficients, large exact cancellations, direct-query mismatches,
+display budgets and transactional session updates. Optional Cairo/WGL checks
+exercise exports and native controls; require both extensions for renderer
+acceptance. The existing A81 signed-density test remains the regression for
+older recipes and unsupported-dimensional discovery.
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization_a86.jl \
+  --require-extension=TamerOpCairoMakieExt --require-extension=TamerOpWGLMakieExt
+```
+
+`docs/build_scripts/check_signed_views.jl` executes and optionally records the
+canonical usage notebook; gallery output comes from those same cells.
+`test/browser/signed.spec.mjs` separately checks real Chromium input and linked
+view lifecycle. Mathematical tests, native callback tests, reviewed figures
+and browser interaction are distinct pieces of evidence.
+
+### Filtered-complex geometry
+
+Run `test/runtests.jl --file=test_visualization_a92.jl --prefix=A92` with the
+CairoMakie and WGLMakie extension requirements when validating native rendering.
+The owner checks exact before/after activity, signed triangle boundaries,
+multicritical unions, source identities, image input conventions, superlevel
+and periodic cells, active-volume versus displayed-skeleton counts, budgets,
+transactional selection and disposal. It compares ordinary cubical diagrams
+with the geometry-bearing complex to prevent a plausible picture of a different
+cell model. The maintained `test/browser/complex.spec.mjs` scenarios exercise
+actual parameter edits, picking, boundary controls, linked viewers, invalid
+edits, narrow keyboard scrolling, 3D display and cleanup.
+
+
+### Verified source representatives
+
+Run `test/runtests.jl --file=test_source_representatives.jl` for original
+boundary equations, filtered contractions, contravariant lifts, prime fields,
+multicritical activity, periodic cubical geometry, owned source round-trips and
+bounded weighted-support optimization against independent enumeration. Ordinary
+persistence and A41 interval-session tests cover the unchanged default path;
+A92 tests cover the shared geometry owner. `test/browser/source.spec.mjs` checks
+actual pointer/keyboard selection and source-overlay lifecycle. Execute the
+canonical source-cell notebook with `docs/build_scripts/check_source_cells.jl`;
+`--record --gallery=PATH` retains its outputs and review figures.
+
+### Chains, classes and connecting maps
+
+`test/runtests.jl --file=test_visualization_a89.jl --prefix=A89` checks selected
+vectors against explicit kernels/images, original-basis boundary witnesses,
+field-dependent quotients, coordinate changes, source activity and cone/snake
+connecting maps. Module-stalk and supplied-homotopy fixtures check induced
+classes rather than only matching dimensions. Native lanes require CairoMakie
+and WGLMakie explicitly; the maintained `test/browser/chains.spec.mjs` scenarios
+exercise actual degree/arrow selection, vector input, recovery and lifecycle.
+`docs/build_scripts/check_complexes.jl --record` executes the canonical complex
+guide, including its spectral continuation, and saves actual figure outputs.
+
+## Refinement and transport inspection
+
+Run `test/runtests.jl --file=test_visualization_a88.jl` for finite-source
+realization, exact/numerical comparison equations, incompatible endpoints,
+zero maps, category counterexamples, transactional selection and renderer/export
+checks. Optional CairoMakie/WGLMakie imports enable native figure and control
+checks. `test/browser/transport.spec.mjs` checks actual canvas selection,
+multiple preimages, exact parameter controls, square matrices, linked viewers,
+failed-update rollback and cleanup in Chromium. The canonical guide executor is
+`docs/build_scripts/check_compare_encodings.jl --record --gallery=PATH`.
+
+The A104 selected-vector suite is `test/test_propagation.jl`. It checks exact
+image columns, independent square-support oracles, fields, coordinate changes,
+submodule and quotient equations, explicit source-cycle bases and native
+exports. Execute the canonical guide with
+`docs/build_scripts/check_generated_submodules.jl --record`; an optional
+`--gallery=PATH` writes derived PNG/SVG figures from the same cells.
+
+### H0 component histories
+
+Run `test/runtests.jl --file=test_visualization_a91.jl` for independent graph
+connectivity and persistence-reduction oracles, exact event endpoints, ties,
+zero-length bars, superlevels, mixed orientations, multicritical slices and
+original memberships through a genuine reduction. Invalid incidence and
+non-equivalent split maps must fail. The same file covers bounded static views,
+transactional sessions and optional Cairo/WGL rendering and exports.
+`test/browser/components.spec.mjs` exercises actual bars, source vertices and
+merge nodes, rational input, rollback, linked views, narrow keyboard scrolling
+and cleanup. `check_source_cells.jl` executes the component continuation in the
+canonical guide; no separate tutorial source is maintained.
+
+### Derived classes and products
+
+The focused `test_visualization_a90.jl` suite checks finite-category Ext/Tor
+views against the signed diamond relation and noncommutative matrix products,
+including zero groups, canonical model choices, representative equations,
+budgets, changes of basis and invalid Tor descent. With CairoMakie installed
+it also exports PNG/SVG/PDF; WGLMakie, when available, renders the same four
+static kinds. Execute the guide in the documentation environment:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization_a90.jl
+julia --project=docs docs/build_scripts/check_derived.jl --record --gallery=PATH
+julia --project=docs docs/build_scripts/check_derived.jl --main-path
+```
+
+The gallery comes from the canonical guide's cells. `--main-path` skips the
+optional export, checking that the main calculation does not depend on it.
+
+### Figure composition
+
+Run `test/runtests.jl --file=test_visualization_a102.jl` through the normal
+package environment, with CairoMakie available for native attachment and
+PNG/SVG/PDF/HTML coverage. The focused oracles cover exact member/source links,
+coordinate incompatibility, named target retention, independent scalar ranges,
+shared axes, literal matrix anchors and malformed/omitted targets. The canonical
+composition notebook is executed by `docs/build_scripts/check_compose_figures.jl`.
+The maintained `test/browser/composition.spec.mjs` checks real WGL axis changes,
+pan/resize, a narrow view and self-contained offline HTML. Set
+`TAMEROP_COMPOSITION_HTML` to a generated composed HTML figure for the offline
+scenario; an omitted path is reported as a skip, not acceptance evidence.
+
+### Field, degree and construction comparisons
+
+Run the comparison owner through the canonical runner:
+
+```sh
+julia --project=. test/runtests.jl --file=test_visualization_a94.jl
+```
+
+Its independent fixtures use a determinant of minus two across characteristics,
+explicit invertible basis changes satisfying a commuting equation, exact grid
+queries (including points closer than display precision), reversed parameter
+order, a cellular differential of two, ordinary open/closed endpoints and cutoff
+coverage. A numerical diagonal distinguishes exact rank from tolerance-sensitive
+rank. Session checks cover transactional rejection, bounded row reuse and release;
+a lazy encoding separates dimensions from the first materialized map.
+
+The canonical comparison notebook checks the visible interpretation and exports
+its actual PNG/SVG results through `check_comparisons.jl`. Its main path also
+runs with optional style/export cells skipped. The two Chromium scenarios in
+`test/browser/comparison.spec.mjs` cover live pointer and linked-view behavior;
+they do not certify every notebook frontend or browser engine.
+
+## Geometric construction inspection
+
+`test/test_visualization_a93.jl` compares geometric inspection with independently
+known source membership and homology events: two-site contact and terminal
+caps, a square loop ending at exact physical radius `sqrt(2)`, repeated indexed
+sites, empty windows, lifted coordinates and spatial sections. Native and flag
+barcodes agree on a small triangle across all depths. Core constructions retain
+their numerical grades and selected-neighbour-depth semantics. Display budgets,
+coefficient fields, censored radius caps and failed-selection rollback are
+checked separately.
+
+`docs/build_scripts/check_multicover.jl` executes the canonical notebook and can
+record its outputs and derive a PNG/SVG gallery. Review the figure's actual
+cells, skeleton/projection labels, source sampling, exact-versus-drawing radius
+semantics and barcode endpoints. `test/browser/geometric.spec.mjs` exercises
+parameter controls and real cell picks against the local Julia server, including
+linked viewers, invalid-depth recovery, narrow screens and close/disconnect.
+This standalone browser check is separate from notebook frontend acceptance.
+
+## Collections of supplied features and distances
+
+`test/test_visualization_a98.jl` checks sample/column identities against
+asymmetric feature fixtures, exact rational readouts, symmetric masks and
+infinite distances, indefinite kernels, budgets, FeatureSet metadata and
+transactional selection. A direct one-interval bottleneck oracle checks the
+three-sample guide's distance table. Pair opening, explicitly computed pairs,
+listener failures, nested sample views and closing are tested independently.
+
+`docs/build_scripts/check_comparisons.jl` executes the canonical guide, records
+static outputs and derives its PNG/SVG gallery. Run the main path separately
+with `--main-path` to check independence from optional styling/export cells.
+`test/browser/collection.spec.mjs` uses real pointer events and controls to
+check matrix and embedding selection, feature definitions, retained sample
+views, supplied A85 witnesses, linked viewers, invalid-input recovery and
+narrow-screen/close/disconnect behavior. This standalone Chromium check does
+not certify every notebook frontend or browser engine.
+
+### Saved mathematical views
+
+Use the focused owners `test_visual_session_codec.jl`,
+`test_visualization_a100.jl`, `test_visual_session_composition.jl` and
+`test_visual_session_boundaries.jl` for exact values, owned source coordinates,
+identity changes, relative resources, malformed records, hidden matrix entries,
+cleared selections and archived correspondences. They need no plotting backend.
+`test_visual_session_exports.jl` exercises real Cairo SVG/PNG/PDF/HTML and the
+reopenable image records; require `TamerOpCairoMakieExt` for that lane.
+
+The executable guide checker derives its examples and images from
+`tutorials/live_inspection.ipynb`:
+
+```sh
+julia --project=docs docs/build_scripts/check_live_inspection.jl --record --recipe
+julia --project=docs docs/build_scripts/check_live_inspection.jl --main-path
+```
+
+The separate offline browser lane in `test/browser/portable-session.config.mjs`
+runs after its Julia producer exits. It verifies file relocation, selected
+states, downloads, keyboard access, narrow layout and absence of network calls.
+The browser README gives the producer and test commands. Save/load in another
+fresh Julia process additionally checks that owned source identity and exact
+coordinate data survive process-local caches and object identities.
+
+### Finite authoring and path witnesses
+
+Run `test/test_visualization_a99.jl` with `test/test_contracts.jl` for exact
+path enumeration, arbitrary DAG labels, unequal-length routes, fields,
+transactional edits, zero-dimensional matrices, fringe support conditions,
+history and executable-code/saved-draft round trips. Load CairoMakie and
+WGLMakie explicitly for the native graphics lane; a dependency skip does not
+qualify editor rendering. `test/browser/editor.spec.mjs` exercises actual
+keyboard input, failed-path readouts, invalid-input recovery, downloads,
+linked viewers, narrow layout and teardown for both input families. The
+canonical notebook and its recipe are executed by
+`docs/build_scripts/check_presentations.jl`, including optional/main-only
+runs. Live notebook hosts retain their separate acceptance boundary.
+
+## Relative persistence of filtered pairs
+
+The A118 blocks in `test_ordinary_persistence.jl` construct quotient complexes
+independently at each scale and compare every queried persistent-map rank to
+BigInt modular elimination. They cover the segment/endpoints and disk/boundary
+examples, delayed subcomplex entry, empty/equal pairs, randomized skeletons
+with changed chain bases, both parameter orders, exact grades, odd-prime signs
+and overflow-sensitive coefficients. They also check actual quotient
+differentials, chain maps, homology bases, all three exact-sequence maps,
+exactness and naturality; matching interval counts alone is insufficient.
+
+```sh
+julia --startup-file=no --project=. test/runtests.jl \
+  --file=test_ordinary_persistence.jl --prefix=A118
+```
+
+Run `julia --project=. docs/build_scripts/check_relative_pair.jl` to execute
+the canonical boundary recipe and check its displayed conclusions, including
+the public basis accessor and the existing barcode/diagram specifications.
+
+The related A112, A116 and A117 blocks retain prime-field reduction, saved
+result and cohomology coverage. A118's result carries the ordinary diagram
+contract but no retained artificial cone representatives. Its explicit
+quotient bases are scale-specific and must not be interpreted as a canonical
+barcode-member matching. Future extensions must preserve this distinction
+and test their actual induced maps, including the connecting sign over an
+odd prime.
+
+
+## Exact interval summands
+
+The interval-decomposition owner has independent interval-sum and chain-rank
+oracles, exhaustive tiny prime-field splitting checks, non-interval branching
+residuals, basis/label changes and thin-cycle field-dependent obstructions.
+Retained maps are checked for naturality, both retractions, orthogonal mixed
+composites and complete identity reconstruction. Empty modules/families,
+invalid intervals, malformed results and exhausted search bounds have separate
+negative and boundary cases.
+
+```sh
+julia --project=. test/runtests.jl --file=test_interval_decompositions.jl --file=test_contracts.jl
+julia --project=docs docs/build_scripts/check_decomposition.jl --record
+julia --project=docs docs/build_scripts/check_decomposition.jl --main-path
+```
+
+The guide checker executes the canonical notebook and can derive a local
+figure gallery with `--gallery=PATH`. It checks the square's known summands,
+a selected retraction and reconstruction, the three-line residual, finite
+encoding forwarding and budgets. Existing module and morphism views display
+the computed data; this introduces no new live visualization family. The
+focused mathematical map shares canonical node identities, route validation
+and the accessible outline with the introductory map.

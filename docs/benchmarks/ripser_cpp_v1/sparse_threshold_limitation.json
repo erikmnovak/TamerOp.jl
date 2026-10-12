@@ -1,0 +1,101 @@
+{
+  "case": {
+    "id": "truncated_4_f2",
+    "family": "truncated",
+    "n": 4,
+    "prime": 2,
+    "degree": 1,
+    "format": "sparse",
+    "threshold": 1.0,
+    "input": "inputs/truncated_4_f2.txt",
+    "sha256": "ce29788dba423e1879eeff18b0880dcd1a4547a1c33125d232a86d6f9d7e92ea",
+    "edges": 3,
+    "control": true,
+    "expected": [
+      [
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          1.0
+        ],
+        [
+          0.0,
+          null
+        ],
+        [
+          0.0,
+          null
+        ]
+      ],
+      []
+    ]
+  },
+  "expected": [
+    [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        null
+      ],
+      [
+        0.0,
+        null
+      ]
+    ],
+    []
+  ],
+  "tamerop": [
+    [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        null
+      ],
+      [
+        0.0,
+        null
+      ]
+    ],
+    []
+  ],
+  "cpp": [
+    [
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        0.0,
+        2.0
+      ],
+      [
+        0.0,
+        null
+      ]
+    ],
+    []
+  ],
+  "scope": "Sparse inputs in timed suite are prefiltered identically before either tool. Original failing control retained; no speed ratio for incorrect output.",
+  "source": "ripser<sparse_distance_matrix>::get_edges does not filter edges at threshold"
+}

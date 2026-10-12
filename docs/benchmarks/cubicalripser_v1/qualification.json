@@ -1,0 +1,1224 @@
+{
+  "schema_version": 1,
+  "run": "runs/0001_qualification",
+  "manifest_sha256": "bdf1779161504b00efc20bd65a80fcda8850b847f811646eae05cfa47475d2cf",
+  "candidate_manifest_sha256": "1e54de027c56398fe7f15ca693e178c662c07414c418d81365483517b5f6b902",
+  "environment_sha256": "08345d3b54640435a5bbd65af811bd52f09fbce9e005f54201423c7a2677a191",
+  "worker_hashes": {
+    "julia_worker.jl": "d0338176a0e9e5efd874da9ace8e9bae8592de8a17f128b8f6d37a346f21176c",
+    "python_worker.py": "877f4c8cc64ddafdf1a624c78e8ea84eedf174394496ec307e1da9a7f67a1248",
+    "mathematics.py": "e7b6e3227b7aa2a6c55fdade8be13cdb9ad2cf5d7215e63223f673ebeb5d705b",
+    "fixtures.py": "290360c598e80fc291815453f5632b472131fa67b030fc2dc7dccf6f0cf88b73",
+    "protocol.py": "9650c34a9ab83a844475cb23225895badf815905329bab061bfda415f64383c3"
+  },
+  "protocol_errors": [],
+  "cases": [
+    {
+      "case": "qualification_line_V_sublevel",
+      "lane": [
+        1,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_line_V_superlevel",
+      "lane": [
+        1,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_line_T_sublevel",
+      "lane": [
+        1,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_line_T_superlevel",
+      "lane": [
+        1,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_one_V_sublevel",
+      "lane": [
+        1,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_one_V_superlevel",
+      "lane": [
+        1,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_one_T_sublevel",
+      "lane": [
+        1,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_one_T_superlevel",
+      "lane": [
+        1,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_V_sublevel",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_V_superlevel",
+      "lane": [
+        2,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_T_sublevel",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_T_superlevel",
+      "lane": [
+        2,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_diagonal_V_sublevel",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_diagonal_V_superlevel",
+      "lane": [
+        2,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_diagonal_T_sublevel",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_diagonal_T_superlevel",
+      "lane": [
+        2,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_asymmetric_V_sublevel",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_asymmetric_V_superlevel",
+      "lane": [
+        2,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_asymmetric_T_sublevel",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_asymmetric_T_superlevel",
+      "lane": [
+        2,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_flat_V_sublevel",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "cubicalripser: cross-tool/trial barcode mismatch"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_flat_V_superlevel",
+      "lane": [
+        2,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "cubicalripser: cross-tool/trial barcode mismatch"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_flat_T_sublevel",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_flat_T_superlevel",
+      "lane": [
+        2,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_V_sublevel",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_V_superlevel",
+      "lane": [
+        3,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_T_sublevel",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_T_superlevel",
+      "lane": [
+        3,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_V_sublevel",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_V_superlevel",
+      "lane": [
+        3,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_T_sublevel",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_T_superlevel",
+      "lane": [
+        3,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_V_sublevel",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_V_superlevel",
+      "lane": [
+        3,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_T_sublevel",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_T_superlevel",
+      "lane": [
+        3,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_rotated_V_sublevel",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_rotated_V_superlevel",
+      "lane": [
+        3,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_rotated_T_sublevel",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_thin_rotated_T_superlevel",
+      "lane": [
+        3,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_point3_V_sublevel",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_point3_V_superlevel",
+      "lane": [
+        3,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_point3_T_sublevel",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_point3_T_superlevel",
+      "lane": [
+        3,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_shell_V_sublevel",
+      "lane": [
+        4,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_shell_V_superlevel",
+      "lane": [
+        4,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_shell_T_sublevel",
+      "lane": [
+        4,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_shell_T_superlevel",
+      "lane": [
+        4,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_thin_V_sublevel",
+      "lane": [
+        4,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_thin_V_superlevel",
+      "lane": [
+        4,
+        "V",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_thin_T_sublevel",
+      "lane": [
+        4,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_thin_T_superlevel",
+      "lane": [
+        4,
+        "T",
+        "superlevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_layout2_V_sublevel_C",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_shortcut2_V_sublevel_top",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        false,
+        true
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_layout2_T_sublevel_C",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_shortcut2_T_sublevel_top",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        false,
+        true
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_layout3_V_sublevel_C",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_shortcut3_V_sublevel_top",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        false,
+        true
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_layout3_T_sublevel_C",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        false,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_shortcut3_T_sublevel_top",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        false,
+        true
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_V_sublevel_cycles",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_V_superlevel_cycles",
+      "lane": [
+        2,
+        "V",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_T_sublevel_cycles",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_ring_T_superlevel_cycles",
+      "lane": [
+        2,
+        "T",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_rectangle_V_sublevel_cycles",
+      "lane": [
+        2,
+        "V",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, 3.0, 4.0] at 4"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_rectangle_V_superlevel_cycles",
+      "lane": [
+        2,
+        "V",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, -7.0, -3.0] at -3"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_rectangle_T_sublevel_cycles",
+      "lane": [
+        2,
+        "T",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, 2.0, 3.0] at 3"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_rectangle_T_superlevel_cycles",
+      "lane": [
+        2,
+        "T",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, -7.0, -6.0] at -6"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_V_sublevel_cycles",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_V_superlevel_cycles",
+      "lane": [
+        3,
+        "V",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_T_sublevel_cycles",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_cavity_T_superlevel_cycles",
+      "lane": [
+        3,
+        "T",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_V_sublevel_cycles",
+      "lane": [
+        3,
+        "V",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, 2.0, 3.0] at 3"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_V_superlevel_cycles",
+      "lane": [
+        3,
+        "V",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, -7.0, -6.0] at -6"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_T_sublevel_cycles",
+      "lane": [
+        3,
+        "T",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_volume_T_superlevel_cycles",
+      "lane": [
+        3,
+        "T",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_line_V_sublevel_cycles",
+      "lane": [
+        1,
+        "V",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, 3.0, 6.0] at 6"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_line_V_superlevel_cycles",
+      "lane": [
+        1,
+        "V",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, -6.0, -2.0] at -2"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_line_T_sublevel_cycles",
+      "lane": [
+        1,
+        "T",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, 3.0, 6.0] at 6"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_line_T_superlevel_cycles",
+      "lane": [
+        1,
+        "T",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, -6.0, -2.0] at -2"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_V_sublevel_cycles",
+      "lane": [
+        4,
+        "V",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, 2.0, 3.0] at 3"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_V_superlevel_cycles",
+      "lane": [
+        4,
+        "V",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "failed_verification",
+      "errors": [
+        "wrong representative lifetime for [0, -7.0, -6.0] at -6"
+      ],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_T_sublevel_cycles",
+      "lane": [
+        4,
+        "T",
+        "sublevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    },
+    {
+      "case": "qualification_four_T_superlevel_cycles",
+      "lane": [
+        4,
+        "T",
+        "superlevel",
+        true,
+        false
+      ],
+      "status": "verified",
+      "errors": [],
+      "timings": {},
+      "independent_oracle": true
+    }
+  ],
+  "verified": 70,
+  "total": 84,
+  "host_context": "official preparation; user confirmed other heavy work paused"
+}

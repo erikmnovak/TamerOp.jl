@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 270" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="270" viewBox="0 0 820 270" role="img" aria-labelledby="title desc">
 <title id="title">A certified module splitting</title><desc id="desc">S and R each have an inclusion into M and a projection back. The composites p i and q j are identities, the mixed composites vanish, and i p plus j q is the identity of M.</desc>
 <rect width="820" height="270" rx="10" fill="#fff"/>
 <g font-family="system-ui,sans-serif" fill="#173747" text-anchor="middle">

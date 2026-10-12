@@ -45,7 +45,9 @@ maps $F_i:P_{q+i}(L)\to P_i(M)$. The product cocycle is $bF_p$.
 The diagram records the two operations; its top horizontal arrow is the
 computed lift, not an inferred map between unrelated bases.
 
-![The right class is lifted to a map between projective-resolution terms, composed with the left cocycle, and then expressed modulo boundaries.](../assets/implementation/yoneda_lift.svg)
+[![The right class is lifted to a map between projective-resolution terms, composed with the left cocycle, and then expressed modulo boundaries.](../assets/implementation/yoneda_lift.svg)](../assets/implementation/yoneda_lift.svg)
+
+[Open the diagram at full size.](../assets/implementation/yoneda_lift.svg)
 
 The right-hand resolution must therefore reach degree $p+q$, even when the
 right class itself has degree $q$. The left model needs degree $p$. Before

@@ -16,7 +16,9 @@ a module $S$, an inclusion $i:S\to M$, and a projection $p:M\to S$ such that
 $p i=1_S$. The projection extracts the chosen component without disrupting
 any structure map. Its kernel $R$ is a complement, so $M\cong S\oplus R$.
 
-![A splitting retains both directions. Inclusion sends a summand into M; projection recovers it. The complement has its own inclusion and projection, and the two resulting idempotents add to the identity.](assets/decomposition/splitting.svg)
+[![A splitting retains both directions. Inclusion sends a summand into M; projection recovers it. The complement has its own inclusion and projection, and the two resulting idempotents add to the identity.](assets/decomposition/splitting.svg)](assets/decomposition/splitting.svg)
+
+[Open the diagram at full size.](assets/decomposition/splitting.svg)
 
 *The two pieces are modules, not just separate subspaces at each vertex.
 Every displayed map must commute with the structure maps of the finite poset.*

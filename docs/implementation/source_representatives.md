@@ -31,7 +31,9 @@ one resulting chain or cochain at one parameter, with that field and its
 source geometry. Boundary matrices define orientations; geometric projections
 and residue labels do not redefine the basis.
 
-![A retained chain map lifts a selected cycle or death filling to original cells. The source boundary and activity are checked before drawing. Cocycles use the transpose of a retained retraction.](../assets/implementation/source_representatives.svg)
+[![A retained chain map lifts a selected cycle or death filling to original cells. The source boundary and activity are checked before drawing. Cocycles use the transpose of a retained retraction.](../assets/implementation/source_representatives.svg)](../assets/implementation/source_representatives.svg)
+
+[Open the diagram at full size.](../assets/implementation/source_representatives.svg)
 
 The ordinary diagram stores a correspondence only when the caller supplies it
 or requests `source=true`. `representatives=true` and `cocycles=true` are

@@ -672,8 +672,10 @@ end
             @test ui.slice.rebuild_count[] == rebuilds
             @test V.inspection_summary(s).slice_cache_misses == misses
 
-            # Sliders only draft approximate decimal coordinates. Their event
-            # callbacks do not run algebra or move the committed slice.
+            # With continuous updates disabled, sliders draft approximate
+            # coordinates and leave the committed slice unchanged until Apply.
+            @test controls.live.value[]
+            controls.live.value[] = false
             before = V.inspection_snapshot(s)
             selection = V.inspection_selection(s)
             controls.angle.value[] = 30

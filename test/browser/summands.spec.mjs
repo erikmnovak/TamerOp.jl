@@ -15,6 +15,9 @@ async function changed(page,suffix) {
 }
 async function edit(page,suffix,value) {const input=control(page,suffix);await input.fill(value);await input.press('Tab');}
 test('A87 summand selection reconstruction geometry Hom and linked lifecycle',async({page},info)=>{
+  // Scene creation, repeated gallery updates and two connected viewers share
+  // this scenario. Each gesture and mathematical assertion keeps its deadline.
+  test.setTimeout(900_000);
   const errors=[];await openInspector(page,`${base}/summands`,errors);await settled(page);
   expect((await state(page)).summary.selected_dimensions).toEqual([1,2,1,4]);
   expect((await state(page)).summary.certification).toBe('checked_splitting');

@@ -113,12 +113,16 @@ test('A123 parameter-plane drag and discrete stored degree threshold',async({pag
   expect((await state(page)).summary.active_counts).toEqual([3,0]);
   await control(page,'grade-2').focus();await control(page,'grade-2').press('End');await idle(page);
   await expect.poll(async()=>(await state(page)).summary.active_counts).toEqual([4,0]);
+  await idle(page);
   await exact(page,'0,1');
   const plane=(await state(page)).ui.parameter_plane;
   // Interior target avoids the frame; k snaps to 3 and diameter exceeds 1.
   const target={x:plane.lower.x+0.96*(plane.upper.x-plane.lower.x),y:plane.lower.y+0.95*(plane.upper.y-plane.lower.y)};
   await drag(page,page.locator('canvas').first(),plane.cursor,target);await idle(page);
   await expect.poll(async()=>(await state(page)).summary.active_counts).toEqual([4,3]);
+  // The mathematical selection commits before its drawing finishes. Wait for
+  // that update before reading the cursor position for the next real drag.
+  await idle(page);
   expect((await state(page)).selection.parameter[1]).toBe(3);
   const committed=(await state(page)).selection.parameter;
   const invalidPlane=(await state(page)).ui.parameter_plane;

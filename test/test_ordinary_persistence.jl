@@ -2851,8 +2851,8 @@ end
     @test silhouette[3] == 1.0 && silhouette[5] == 0.6
     statistics = public_api.barcode_summary(original;dim=0,essential=:drop)
     @test statistics.n_intervals == 2 && statistics.total_persistence == 5.0
-    @test public_api.barcode_entropy(original;dim=0,essential=:drop,normalize=false) ≈
-        -(2/5)*log(2/5)-(3/5)*log(3/5)
+    @test isapprox(public_api.barcode_entropy(original;dim=0,essential=:drop,normalize=false),
+        -(2/5)*log(2/5)-(3/5)*log(3/5))
     mktempdir() do folder
         file = joinpath(folder,"diagram.json")
         public_api.save_persistence_diagram_json(file,original)

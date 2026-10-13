@@ -18,17 +18,28 @@ class FigureLinks(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.anchor = None
         self.figures = []
+        self.captions = []
+        self.current_caption = None
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
         if tag == 'a':
             self.anchor = attrs.get('href')
+        if tag == 'figcaption':
+            self.current_caption = []
         if tag == 'img':
             self.figures.append((attrs['alt'], attrs['src'], self.anchor))
+
+    def handle_data(self, data):
+        if self.current_caption is not None:
+            self.current_caption.append(data)
 
     def handle_endtag(self, tag):
         if tag == 'a':
             self.anchor = None
+        if tag == 'figcaption':
+            self.captions.append(''.join(self.current_caption))
+            self.current_caption = None
 
 
 class FigureRenderingTests(unittest.TestCase):
@@ -48,8 +59,11 @@ class FigureRenderingTests(unittest.TestCase):
         for index, caption in enumerate(captions):
             data = ({'image/png': png} if index < 3 else
                     {'image/svg+xml': '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><rect width="4" height="4"/></svg>'})
+            metadata = {'tamerop': {'figure_alt': caption}}
+            if index in (0, 3):
+                metadata['tamerop']['figure_caption'] = caption
             cells.append(nbf.v4.new_code_cell('figure', execution_count=index + 1,
-                metadata={'tamerop': {'figure_alt': caption}},
+                metadata=metadata,
                 outputs=[nbf.v4.new_output('display_data', data=data)]))
         notebook = nbf.v4.new_notebook(cells=cells, metadata={'language_info': {'name': 'julia'}})
         self.assertEqual(validate_outputs(notebook), 4)
@@ -78,6 +92,7 @@ makedocs(sitename="Figure caption fixture", source=ARGS[1], build=ARGS[2],
             parsed = FigureLinks()
             parsed.feed(page.read_text())
             self.assertEqual([alt for alt, _, _ in parsed.figures], captions)
+            self.assertEqual(parsed.captions, [captions[0], captions[3]])
             self.assertEqual([Path(urlsplit(src).path).suffix for _, src, _ in parsed.figures],
                              ['.png', '.png', '.png', '.svg'])
             for _, src, href in parsed.figures:

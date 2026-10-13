@@ -5,36 +5,51 @@ fill in. Ordinary persistence records how long these features survive as one
 parameter changes. In the example below, squares appear at their array values:
 the boundary squares form a ring at zero, and the center fills its hole at five.
 
-`persistence_diagram` computes the persistent homology of a finite
-one-parameter chain complex: cells with boundary maps and a single birth
-parameter for each cell. Its reduction works over a prime field, with
-`TamerOp.CoreModules.F2()` as the default. Integer boundary coefficients are
-read modulo the selected prime, including their signs. Use a field object;
-symbolic aliases, rational fields and floating-point fields are not accepted
-by this direct ordinary-persistence interface.
+We can predict the first barcode before computing it. The hole is present
+at parameter zero and remains until five, so its interval is $[0,5)$. The
+left endpoint is included because the ring already exists at zero; the right
+endpoint is excluded because the center square is present at five.
+
+![At parameter one the eight outer squares form a ring; at five the center square fills it. The same loop becomes a boundary, and its first homology interval is closed at zero and open at five.](assets/persistence_modules/ring_class.svg)
+
+*The orange loop is still a chain of edges after the center enters, but it
+now bounds a square. Its homology class has become zero. This schematic uses
+the field $\mathbb{F}_2$ and the array below; it is the same ring developed in
+the [first notebook](tutorials/ring.ipynb).*
 
 ```julia
 import TamerOp as OP
 
-# A square ring appears at 0 and is filled at 5.
 values = zeros(Int, 3, 3)
 values[2, 2] = 5
-D = OP.cubical_persistence(values)
-OP.finite_intervals(D; dim=1)       # [(0, 5)]
-OP.essential_births(D; dim=0)       # [0]
-OP.persistence_intervals(D; dim=0)  # [(0, Inf)]
-OP.describe(D)
-OP.provenance(D)
+ring_diagram = OP.cubical_persistence(values)
+OP.finite_intervals(ring_diagram; dim=1)       # [(0, 5)]
+OP.essential_births(ring_diagram; dim=0)       # [0]
+OP.persistence_intervals(ring_diagram; dim=0)  # [(0, Inf)]
 ```
 
-The result records connected components in degree `H_0`, holes bounded by
-loops in degree `H_1`, and higher-dimensional features in subsequent degrees.
-Here the single finite degree-one interval records the hole from zero to five;
-the essential degree-zero birth records the connected component that remains.
-Degree arguments are named keywords. A nonnegative degree above the stored
-range has no intervals, except when an explicit `max_homology_dim` request
-excluded that degree. Negative degrees are invalid. The two exact-data
-accessors return copies, so editing their output does not modify the diagram.
+The returned **persistence diagram** stores intervals in each homology degree.
+Degree zero records connected components, degree one records classes of loops,
+and degree two can detect enclosed cavities. A **chain** is a formal sum of oriented cells with coefficients in a field,
+and a **cycle** is a chain with zero boundary. A homology class identifies
+cycles whose difference is the boundary of a chain one degree higher. Here the single component remains
+after the hole fills, giving the essential interval $[0,\infty)$ in degree zero.
+“Essential” means that the class never dies in the filtration we constructed;
+a cutoff on the input can limit what this tells us about a larger filtration.
+
+The default coefficients lie in $\mathbb{F}_2$, the field with two elements.
+The direct `persistence_diagram` interface accepts a finite chain complex with
+one birth parameter per cell, or constructs one from data and a typed
+filtration. Its output is the barcode of that complex; this calculation does
+not require a finite encoding. The sections below explain which input and
+retention choices change the question or the information available afterward.
+
+Use `OP.describe(ring_diagram)` for a compact account of the result and
+`OP.provenance(ring_diagram)` for its field, conventions and computation route.
+The exact interval accessors return copies. Degrees are named keywords:
+negative degrees are invalid, and a degree above the stored range is empty
+unless an explicit `max_homology_dim` request excluded it, in which case the
+query raises an error.
 
 ## Choosing coefficients
 
@@ -58,13 +73,16 @@ other spaces. For example, a cellular description of the real projective
 plane has one cell in each of dimensions zero, one and two, with the
 boundary of the two-cell equal to twice the one-cell. That boundary vanishes
 over F₂. Over an odd prime it is nonzero: if the one-cell appears at one and
-the two-cell at two, the degree-one class dies at two. Over F₂ it survives,
-and an essential degree-two class appears as well. Changing the field requires
+the two-cell at two, the class in degree one dies at two. Over F₂ it survives,
+and an essential class in degree two appears as well. Changing the field requires
 recomputing the diagram; changing a stored field label cannot give this result.
 
-All prime moduli accepted by `Fp(p)` are supported, including primes up to
+Pass an actual prime field object, such as `F3()` or `Fp(101)`; this direct
+interface does not accept field names as symbols, rational coefficients or
+floating coefficients. Integer boundary coefficients are interpreted modulo
+the selected prime. All prime moduli accepted by `Fp(p)` are supported, including primes up to
 `typemax(Int)`. Modular arithmetic avoids machine-integer overflow. The field
-contract applies to supplied one-parameter complexes, typed ingestion, both
+contract applies to supplied one parameter complexes, typed ingestion, both
 cubical input conventions, sublevels, superlevels and retained representatives.
 Grade ordering and endpoint types remain independent of the coefficient field.
 
@@ -80,9 +98,8 @@ with maps toward decreasing parameters. Its pair `(birth, death)` has
 coordinates. Essential classes persist to `-Inf`.
 
 Cells at equal grades are inserted together mathematically. Internal reduction
-orders faces before cofaces to break ties, but its zero-length pairs represent
-the zero persistence module and are omitted from the returned barcode. There
-is no diagnostic option that changes this barcode convention.
+orders faces before cofaces to break ties, but its pairs of zero length represent
+the zero persistence module and are omitted from the returned barcode.
 
 ```julia
 upper = OP.cubical_persistence(5 .- values; order=:superlevel)
@@ -106,14 +123,14 @@ value of its incident top cells for sublevels, or their maximum for superlevels.
 This gives the union of closed top cells selected at each parameter; voxel
 values are not reinterpreted as vertex values.
 
-For example, a low-valued shell encloses a cavity until its central voxel
-enters. Its two-dimensional homology has the interval `[0, 2)`:
+For example, a shell of low values encloses a cavity until its central voxel
+enters. Its two dimensional homology has the interval `[0, 2)`:
 
 ```julia
 volume = fill(0, 3, 3, 3)
 volume[2, 2, 2] = 2
-D = OP.cubical_persistence(volume)
-OP.finite_intervals(D; dim=2)  # [(0, 2)]
+volume_diagram = OP.cubical_persistence(volume)
+OP.finite_intervals(volume_diagram; dim=2)  # [(0, 2)]
 ```
 
 Grades keep their original scalar type, including rational and high-precision
@@ -152,11 +169,11 @@ its factor to `2nᵢ`. Set a construction budget when exploring larger inputs:
 options = OP.ConstructionOptions(budget=OP.ConstructionBudget(
     max_simplices=1_000_000, max_edges=400_000,
     memory_budget_bytes=512 * 1024^2))
-D = OP.cubical_persistence(volume; construction=options)
+volume_diagram = OP.cubical_persistence(volume; construction=options)
 ```
 
 For cubical input, `max_simplices` counts **all cells**, and `max_edges` counts
-one-dimensional cells even when their periodic boundaries cancel. Counts and
+one dimensional cells even when their periodic boundaries cancel. Counts and
 index overflow are checked before topology enumeration when a budget is supplied.
 Both vertex and top-cell memory checks estimate the sparse construction:
 topology, cell indices, grades, incident-face entries and assembly workspace.
@@ -164,7 +181,7 @@ Vertex input also allows for channel conversion and grade-axis extraction;
 it does not charge for hypothetical dense boundary matrices. Periodic faces
 count before cancellation, giving a conservative allowance across the cubical
 construction routes.
-These estimates are not caps on process RSS, persistence reduction, or opt-in
+These estimates are not caps on total memory used by the Julia process, persistence reduction, or opt-in
 geometry and representative storage. Those can need additional memory.
 Cubical sparsification and collapse options are rejected. The same
 `construction` option applies to direct and typed vertex input. The separate
@@ -177,9 +194,9 @@ filtered cells without computing homology. Add `source=true` and, separately,
 `representatives=true` or `cocycles=true` to `cubical_persistence` when later
 questions need chains tied to original cells. Source identities retain the
 cell origin and varying coordinate axes, including periodic seams. In one
-dimension the geometry is drawn on a line in the plane; higher-dimensional
+dimension the geometry is drawn on a line in the plane; higher dimensional
 geometry keeps its coordinates for an explicit projection. See the
-[source-cell guide](tutorials/source_cells.ipynb) for the retained-chain workflow.
+[guide to source cells](tutorials/source_cells.ipynb) for the retained-chain workflow.
 
 The equivalent typed vertex workflow is
 `persistence_diagram(ImageNd(values), CubicalFiltration(periodic=true))`.
@@ -188,35 +205,44 @@ exact maximum or minimum of its corners. Internal ordering indices never
 replace or round the reported endpoints. Upper stars also avoid negating
 integers at the limits of their range.
 
-For an ordinary barcode over F₂ on a nonperiodic 1D, 2D or 3D array, TamerOp
-works directly with the rectangular grid. Neighboring cells follow from their
-positions, so their boundary matrices need not be built. Connected components
-are tracked by merging neighboring regions. In 2D the holes can also be found
-by following the complementary regions; in 3D this determines cavities, leaving
-square boundaries to determine the remaining degree-one bars. Cell grades and
-endpoints remain exact. `OP.provenance(D).backend` reports `:f2_cubical_grid`.
+For a barcode over $\mathbb{F}_2$ on a nonperiodic array of one, two or
+three dimensions, TamerOp can work directly with the rectangular grid without
+building every boundary matrix. Periodicity, other fields, higher dimensions,
+or a request for source geometry, cycles or cocycles select a route that
+constructs the oriented complex. These choices affect the computation and its
+storage, while preserving the stated filtration and interval conventions.
 
-In 3D, small neighborhoods often contain features that appear and disappear at
-the same grade. Precomputed local boundary plans remove this work before the
-remaining square boundaries are reduced. The plans retain the boundary
-combinations needed to preserve interactions with neighboring regions. This
-route reports `OP.provenance(D).local_reduction == :relative_tables`. It orders
-the original values exactly, uses integer indices internally, and recovers each
-reported endpoint from the original array. Equal endpoints are still omitted.
-The plans belong to the package; each image gets fresh ranks, connectivity,
-and reduction state.
+```@raw html
+<details>
+<summary>How the grid calculation uses the geometry</summary>
+```
 
-Periodic inputs, other coefficient fields, higher-dimensional arrays, and
-requests for cycles, cocycles or retained source geometry use the general
-complex-based route. That route preserves the existing oriented boundaries and
-source identities, and typed vertex requests can reuse topology through their
-supplied ingestion cache. Arbitrary supplied chain complexes still receive full
-boundary and filtration validation. The grid route establishes the cubical
-boundary identity by construction and retains input and budget checks. Its
-construction allowance remains conservative; actual storage can be smaller
-than the general sparse-complex estimate. Fixed package tables are separate
-from that per-input allowance, which is not a process-memory or reduction-memory
-limit.
+Neighboring cells follow from their positions in the array. The computation
+tracks connected components by joining regions. In two dimensions it can
+also follow the complementary regions to recover holes; in three dimensions
+this recovers cavities, while square boundaries determine the remaining
+degree one bars. Small three dimensional neighborhoods can contain features
+that appear and disappear at the same grade. Precomputed local boundary
+plans eliminate those pairs while retaining their boundary combinations,
+so interactions with neighboring regions are preserved.
+
+`OP.provenance(volume_diagram).backend` reports `:f2_cubical_grid` for this
+route, with `local_reduction == :relative_tables` in the three dimensional
+case. Input grades are ordered exactly and the reported endpoints are
+recovered from those original values. The plans are fixed package data;
+the array's ranks, connectivity and reduction state belong to this call.
+The conservative construction estimate still applies, even when the direct
+grid representation needs less storage. It does not limit reduction memory
+or the total memory of the Julia process.
+
+Arbitrary supplied complexes receive full boundary and filtration checks.
+The grid route uses the cubical boundary identity by construction and retains
+the input and budget checks. Typed vertex construction can reuse topology
+through its supplied ingestion cache.
+
+```@raw html
+</details>
+```
 
 ## Rips: edges, holes and filling simplices
 
@@ -225,14 +251,14 @@ cannot tell us when it fills in: that requires triangles. A Rips filtration
 adds a simplex when all of its edges have appeared, at the largest of their
 distances. To compute homology through degree `q`, construct simplices through
 `q + 1`. For connected components this means edges; for holes it means
-triangles; for two-dimensional cavities it means tetrahedra.
+triangles; for two dimensional cavities it means tetrahedra.
 
 `RipsFiltration(max_dim=2)` therefore controls **simplex dimension**. The
 ordinary request `max_homology_dim=1` selects **homology degrees zero and one**
 and checks that the construction includes the triangles needed for deaths.
 An insufficient `max_dim` raises an explanatory error. Queries in degrees above
 an explicitly requested maximum also raise an error. Without the homology
-keyword, the diagram describes the entire constructed skeleton; its top-degree
+keyword, the diagram describes the entire constructed skeleton; its top degree
 classes can be artifacts of omitting the next simplex dimension.
 
 A sparse distance matrix lets us supply the edges we actually have. Here four
@@ -244,13 +270,21 @@ using SparseArrays
 
 S = sparse([1, 2, 3, 1, 1], [2, 3, 4, 4, 3], [1.0, 1, 1, 1, 2], 4, 4)
 filtration = OP.RipsFiltration(max_dim=2)
-D = OP.persistence_diagram(S, filtration; max_homology_dim=1)
-OP.finite_intervals(D; dim=1)  # [(1.0, 2.0)]
+rips_diagram = OP.persistence_diagram(S, filtration; max_homology_dim=1)
+OP.finite_intervals(rips_diagram; dim=1)  # [(1.0, 2.0)]
 ```
+
+![A four-edge cycle is present for parameters from one up to two. At two a diagonal and both triangles enter, filling the cycle. The degree one interval has a closed endpoint at one and an open endpoint at two.](assets/ordinary_persistence/rips_filling.svg)
+
+*The drawings show the clique complex of the supplied graph. The diagonal
+closes two triangles, so the loop becomes their boundary. Without those
+triangles, the same edge data would leave the loop unfilled. The picture is
+a schematic of the matrix example, rather than a claim about the Euclidean
+distances in the drawing.*
 
 The matrix dimensions retain all four vertices, including any isolated ones.
 A missing stored entry means an absent edge, **not distance zero**. A stored
-zero is a genuine edge born at zero; dropping stored zeros changes the input
+zero specifies an edge born at zero; dropping stored zeros changes the input
 filtration. Either triangle of the matrix is accepted. If both directions are
 stored, their values must agree within the symmetry tolerance; the upper
 entry determines the distance when they differ within that tolerance. Sparse transpose
@@ -294,7 +328,7 @@ limit raises an error; construction never drops cells merely to fit a budget.
 The existing `memory_budget_bytes` option bounds an estimated dense boundary
 footprint, not total process memory. Advanced users can inspect
 `OP.DataIngestion.estimate_ingestion(S, filtration)` before construction;
-higher-dimensional counts are conservative bounds, without enumerating cliques.
+higher dimensional counts are conservative bounds, without enumerating cliques.
 
 ## Choosing landmarks and measuring what was omitted
 
@@ -330,9 +364,9 @@ G_landmarks = OP.encode(cloud, landmarks; stage=:graded_complex)
 
 `G_landmarks` retains the selected filtered complex for further questions.
 Continue `encode` to a module or encoding when those are needed; the direct
-barcode call answers the one-parameter question without constructing that
+barcode call answers the one parameter question without constructing that
 additional object. The returned diagram records the selected original indices
-and their coverage. `landmark_selection(D)` returns `nothing` if no subset was
+and their coverage. `landmark_selection(result)` returns `nothing` if no subset was
 selected. Automatic `RipsFiltration(n_landmarks=..., construction=
 ConstructionOptions(sparsify=:greedy_perm))` records the same information.
 A complete dense distance matrix can replace the point cloud in either route.
@@ -344,7 +378,7 @@ lengths as the parameter. To see where this scale comes from, send each point
 to its nearest landmark. If two original points are at distance at most $t$,
 the triangle inequality places their chosen landmarks at distance at most
 $t+2r$. The resulting simplicial maps, together with inclusion of the landmarks,
-give the persistence comparison. This is the covering-radius bound also
+give the persistence comparison. This is the bound from the covering radius also
 explained in [Ripser.py's landmark tutorial](https://ripser.scikit-tda.org/en/latest/notebooks/Greedy%20Subsampling%20for%20Fast%20Approximate%20Computation.html).
 
 `OP.describe(selection)` includes this **conditional** bound, ordered insertion
@@ -352,7 +386,7 @@ radii, and each original point's nearest landmark index and distance. The first
 insertion radius is `Inf`, since no landmark precedes it. Matrix validation does
 not certify the triangle inequality. This bound concerns full metric Rips
 filtrations with the filling dimensions present; it does not certify additional
-nearest-neighbor pruning, top-degree artifacts of an incomplete skeleton, or
+nearest-neighbor pruning, top degree artifacts of an incomplete skeleton, or
 essential bars censored at a finite cutoff. Distances use Float64; numerical
 rounding is separate from the mathematical bound.
 
@@ -391,7 +425,7 @@ OP.essential_births(D_weighted; dim=0)  # [0.0]
 
 At three, the components born at zero and one merge; the older component
 survives. At four the remaining component joins it. The triangle also appears
-at four, so no positive-length loop interval remains. The default `max_dim=1`
+at four, so no loop of positive length interval remains. The default `max_dim=1`
 keeps only the graph; choose `max_dim=q+1` when requesting homology through
 `max_homology_dim=q` so that possible filling simplices are present.
 
@@ -430,99 +464,90 @@ budgets retain their existing meanings. Weighted-vertex input requires
 
 ## Rips barcodes without building every boundary
 
-The four-edge loop above needs triangles to decide when its hole dies. That
-does not mean we must store every triangle and its boundary in advance. For a
-barcode request, TamerOp can generate the needed containing simplices as the
-calculation reaches them, then discard that temporary work. This is the
-**implicit Rips** route.
-
-The default `method=:auto` chooses it for point clouds, dense or sparse distance
-matrices, landmark Rips requests, and weighted-vertex flag inputs through H₂, over any supported prime
-field. It computes the same finite and essential intervals as explicit
-construction, including finite deaths. Distances and their ordering use the
-existing Float64 geometry contract; exact field arithmetic does not make the
-input geometry exact.
+The loop above needs triangles to determine its death, but we need not store
+every triangle and boundary in advance. An **implicit** computation generates
+containing simplices when it needs them. With `method=:auto`, TamerOp uses this
+route through degree two for point clouds, distance matrices, landmark Rips
+inputs and graphs with vertex birth times, over any supported prime field.
 
 ```julia
 fast = OP.persistence_diagram(S, filtration; max_homology_dim=1)
 explicit = OP.persistence_diagram(S, filtration; max_homology_dim=1,
                                   method=:explicit)
 OP.finite_intervals(fast; dim=1) == OP.finite_intervals(explicit; dim=1)  # true
-OP.provenance(fast).backend              # :implicit_rips_cohomology
-OP.provenance(fast).computation.boundary_matrix_materialized  # false
+OP.provenance(fast).backend  # :implicit_rips_cohomology
 ```
 
-For connected components, joining two previously separate components records
-a death. For higher degrees, the calculation works with **cofaces**: simplices
-containing a given simplex with one additional vertex. Their signed incidence
-coefficients support odd prime fields as well as F₂. Reverse-order cohomology
-reduction, clearing of already paired simplices, and reconstruction from
-stored change vectors avoid retaining the original or reduced coboundary
-matrix. These methods follow [Ulrich Bauer's description of
-Ripser](https://arxiv.org/abs/1908.02518). Over a field, this dual computation
-gives the ordinary homology barcode. Add `cocycles=true` to retain representatives
-for the [scale-specific cohomology workflow](#measuring-a-hole-with-a-cocycle).
+Both calls compute the barcode of the same selected filtration. Exact field
+arithmetic does not make the input geometry exact: distances still follow the
+Float64 convention. The degree and cutoff conditions described above apply to
+both routes. A request through $H_1$ includes the triangles needed for deaths;
+omitting `max_homology_dim` instead asks for the whole constructed skeleton,
+whose top degree can contain classes that further simplices would kill.
 
-Some pairs can be recognized from the local order alone: a simplex is the
-last face of its first containing simplex, and both appear at the same grade.
-These are **apparent pairs**. Their zero-length intervals do not appear in the
-barcode. The calculation can reconstruct their signed coefficients when needed,
-instead of storing a general reduction vector for each pair. Other one-term
-vectors use compact storage; vectors with several terms retain all coefficients.
+Use `cocycles=true` to retain cohomology representatives on the implicit route.
+Homology cycles and death fillings requested with `representatives=true` need
+the explicit route, as do higher degrees. `method=:implicit` requires its
+supported combination of inputs and outputs and raises an error otherwise.
 
-For a bounded barcode request on a complete distance graph, TamerOp can also
-stop once a vertex connects to every other vertex. If the smallest such radius
-is `r`, then every simplex present at `r` can be joined to that vertex: the flag
-complex is a cone. Higher homology has vanished, and only one connected component
-survives. This is a certificate for the complete requested barcode, not a new
-approximation. Inspect `provenance(fast).computation.terminal_radius` for the
-radius and selected-graph vertex, or `nothing` when the certificate is unused.
-The current shortcut applies to barcode-only requests with an explicit
-`max_homology_dim`; retained cocycles, weighted vertices and requests that include the top homology
-of a truncated skeleton keep their requested graph and degree range. User budget
-checks still precede this shortcut. A supplied radius below the certified
-terminal radius keeps its original cutoff interpretation.
+```@raw html
+<details>
+<summary>Reduction, storage and the terminal radius</summary>
+```
 
-This removes a major source of storage, but not all size limits. The selected
-neighbor graph is stored; a dense input still has quadratically many edges.
-The current degree's remaining simplices and its reduction change vectors also
-take space, and difficult inputs can generate substantial temporary work.
-Sparse input remains a sparse graph rather than becoming a dense distance
-table. Reduction statistics in `provenance(fast).reduction_stats` count work
-and stored terms; they are not byte or process-memory measurements.
+The method follows the cohomology reduction described in
+[Ulrich Bauer's account of Ripser](https://arxiv.org/abs/1908.02518).
+A **coface** here is a containing simplex with one additional vertex.
+Its signed incidence coefficient is needed over odd primes as well as over
+$\mathbb{F}_2$. Over a field, the dual cohomology calculation has the same
+interval multiset as homology. Clearing already paired simplices and
+reconstructing columns from stored change vectors avoid retaining a complete
+coboundary matrix.
 
-The degree and radius rules above still apply. A bounded request through H₁
-uses edges and triangles even if `max_dim` permits more dimensions. Without
-`max_homology_dim`, the complete requested skeleton is respected, including
-top-degree classes that further simplices might kill. `method=:auto` uses the
-explicit route for higher degrees or `representatives=true`, retaining the
-existing cycle and death-filling output. Set `method=:implicit` to require the
-implicit route and receive an error if the request is unsupported.
+Some pairs are determined by the order: a simplex is the last face of its
+first coface, and both have the same grade. These **apparent pairs** give
+zero length intervals, which are omitted from the barcode. Their coefficients
+can be reconstructed when needed; other reduction vectors retain the
+coefficients required by the calculation.
 
-Edge budgets are checked before optional certified collapse. Simplex and
-memory-estimate budgets apply to the retained expansion through the dimensions
-needed for this request. Supplying either of those budgets triggers a streamed
-clique count, which can itself be costly on a dense graph; it does not build
-boundaries. `memory_budget_bytes` retains its construction meaning: the maximum
-estimated dense boundary size, not a limit on actual reduction memory or RSS.
-No cells are silently discarded to satisfy a budget.
+For a barcode request through a specified homology degree on a complete distance graph, a vertex adjacent
+to every other vertex at threshold $r$ gives a stopping certificate. Every
+simplex at that threshold can be joined to this vertex, so the clique complex
+is a cone: higher homology vanishes and one connected component remains.
+`OP.provenance(fast).computation.terminal_radius` records the certificate or
+`nothing`. This shortcut requires an explicit `max_homology_dim` and a request
+without retained cocycles; graphs with varying vertex births and computations
+that include the top degree of a truncated skeleton retain their requested
+range. A user cutoff below the terminal radius still censors the filtration.
 
-Landmark selection and nearest-neighbor graph selection still change the input
-filtration. Their use, retained point indices, edge counts and certified collapse
-option appear in `provenance(fast).input_selection`. A radius cutoff instead
-restricts the parameter range. These choices are separate from the implicit
-reduction itself, which preserves the barcode of the selected graph filtration.
-All graph and reduction state belongs to the current call; this route does not
-retain mathematical results in an `EncodingCache` for later queries.
+The selected graph, the current degree's remaining simplices and reduction
+change vectors still require storage. Dense inputs can have quadratically
+many edges. Sparse inputs keep a sparse graph. Edge budgets are checked
+before optional certified collapse; simplex and memory estimates apply to
+the dimensions needed by the request. Those two estimates require a streamed
+clique count, which can itself take considerable work. The memory estimate
+concerns dense construction boundaries, rather than total process or reduction
+memory. No cells are discarded to meet a budget.
+
+`provenance(fast).input_selection` records landmark or neighbor selection and
+collapse choices. Subsampling changes the input filtration; the implicit
+reduction preserves the barcode of the filtration actually selected.
+`reduction_stats` describes operations and stored terms, rather than bytes.
+Graph and reduction state belong to this call; this route does not retain
+results in an `EncodingCache` for later queries.
+
+```@raw html
+</details>
+```
 
 ## General filtered complexes
 
-Pass a one-parameter `GradedComplex` directly to `persistence_diagram`, or pass
+Pass a one parameter `GradedComplex` directly to `persistence_diagram`, or pass
 data and a typed filtration to construct the complex first:
 
 ```julia
-D = OP.persistence_diagram([0.0 2.0; 2.0 0.0], OP.RipsFiltration(max_dim=1))
-OP.finite_intervals(D; dim=0)  # [(0.0, 2.0)]
+two_points = OP.persistence_diagram([0.0 2.0; 2.0 0.0], OP.RipsFiltration(max_dim=1))
+OP.finite_intervals(two_points; dim=0)  # [(0.0, 2.0)]
 ```
 
 A direct complex is checked before reduction: packed cell dimensions and sparse
@@ -539,7 +564,7 @@ chosen order or the call fails. The dedicated cubical vertex route handles the
 upper-star construction explicitly. Other builders keep their own geometry and
 grade-precision contracts; exact reduction does not certify their geometry.
 
-`provenance(D)` records the field, homological convention, filtration direction,
+`provenance(ring_diagram)` records the field, homological convention, filtration direction,
 interval convention, grade type and reduction backend. Cubical routes also
 record array shape, periodicity and input convention. A generic ingestion build
 does not carry execution provenance, so its effective construction
@@ -550,235 +575,149 @@ constructing stored intervals does not claim that the reducer ran.
 
 ## Computing a barcode without retaining chains
 
-A barcode records births and deaths. Computing it does not require retaining
-all the chains used to establish those events. For a supplied complex or an
-explicit construction over F₂, the default request
-uses a reduction organized by homological degree. Once a birth is paired with
-a death in the next degree, its column is known to reduce to zero and can be
-skipped. This is called **clearing**. A reusable binary workspace handles column
-additions. Stored columns use individual entries when sparse and groups of
-binary coefficients when several entries share a machine word. Adding a group
-at once performs the same arithmetic over F₂ with less bookkeeping. These
-choices preserve the barcode; they do not approximate the grades or boundaries.
-Completed columns are extracted in one traversal, and saved columns share
-storage within the current computation. This avoids repeated bookkeeping and
-individual column-array objects; it does not cache a barcode for a later call.
+A barcode needs the pairing of births with deaths, but it need not retain
+every chain used to find those pairs. This is why the default result is
+smaller than one computed with `representatives=true`. The latter tracks the
+column operations needed to recover a cycle and a chain filling it at death.
+Request that information when a later question needs the cells themselves.
 
-Connected-component persistence depends only on vertices and edges, even when
-the complex also contains squares, cubes, or other higher-dimensional cells.
-When each edge has zero or two boundary coefficients that are nonzero modulo
-two, the computation tracks components directly: joining two components kills
-the younger one. In a graph, closing a cycle creates an essential degree-one
-class. With higher-dimensional cells present, the pairings already found in
-higher degrees determine which of those cycles eventually die.
+```@raw html
+<details>
+<summary>Reduction of a supplied complex</summary>
+```
 
-The highest boundary can sometimes use the same idea in reverse. If each of
-its rows has at most two nonzero coefficients modulo two, regard the
-highest-dimensional cells as vertices and their shared faces as edges, then
-process this graph in reverse filtration order. A bookkeeping vertex handles
-faces with only one incident cell; it contributes no reported class. Real
-unpaired top-dimensional classes remain in the barcode, including those on
-periodic grids. Eligibility is checked from the supplied boundary matrix;
-arbitrary algebraic boundaries retain general reduction when the condition
-fails. These shortcuts preserve all finite and essential intervals.
+For explicit complexes over $\mathbb{F}_2$, the default reduction works by
+homological degree. Once a birth is paired with a death in the next degree,
+its own column is known to reduce to zero and can be skipped. This step is
+called **clearing**. Sparse columns store individual entries, while denser
+columns group binary coefficients into machine words. Both representations
+perform the same field arithmetic. Completed columns share storage within
+the computation; this does not retain a barcode for another call.
 
-The usual input checks remain enabled. In particular, for the binary route
-the double boundary must vanish exactly modulo two. Dense, sufficiently reused boundary columns can use
-packed binary products for this check; sparse inputs use direct parity checks.
-Neither route performs floating-point arithmetic on the boundary coefficients.
+Connected components depend only on vertices and edges. When each edge has
+zero or two nonzero boundary coefficients modulo two, the algorithm can
+track components directly, retaining the older component at a merge. The
+highest boundary admits a related computation in reverse order when each row
+has at most two nonzero coefficients: highest dimensional cells become graph
+vertices and shared faces become edges. A bookkeeping vertex handles a face
+incident to only one such cell and contributes no reported class. These
+conditions are checked on the supplied boundaries; general reduction handles
+the remaining cases. Unpaired top dimensional classes are still retained,
+including on periodic grids.
 
-Requesting `representatives=true` retains the column reduction that constructs
-cycles and filling chains. Its selected representatives are preserved. You can
-inspect the executed route with `provenance(D).backend`: barcode-only requests
-report `:f2_clearing` for the degree-organized route, which may use the component
-shortcuts above, or `:f2_graph_union_find` for a graph-only complex. Requests
-retaining chains report
-`:f2_column_reduction`. The public call and interval conventions are the same.
+The input checks include the exact identity $\partial^2=0$ in the selected
+field. Over an odd prime, elimination uses scaled column additions and field
+inverses, preserving signs. With representatives retained, those same
+operations ensure that a finite death filling has the returned cycle as
+its boundary.
 
-For odd primes, sparse column elimination adds scaled columns and normalizes
-pivot coefficients using field inverses. It preserves signs and checks double
-boundaries in that field. With representatives requested, the same operations
-track source chains so that each finite death filling has precisely the
-returned cycle as its boundary. Barcode-only requests omit that tracking.
-This route reports `:prime_column_reduction`; the binary graph, dual-graph and
-packed-XOR shortcuts remain specific to F₂.
+The provenance backend identifies the route: `:f2_clearing`,
+`:f2_graph_union_find`, `:f2_column_reduction` with representatives, or
+`:prime_column_reduction` for odd primes. These choices change the work and
+storage without changing the interval conventions.
+
+```@raw html
+</details>
+```
 
 ## Which cells represent an interval?
 
-The ring's interval `[0,5)` tells us when its hole exists. To inspect a chain of
-edges representing that hole, retain the reduction's choices during computation.
-A **cycle** is a chain whose boundary is zero. Here its homology class remains
-nonzero from parameter zero until parameter five, when it becomes the boundary
-of a chain of squares. That latter chain explains the interval's death.
-
-Representative inspection is an advanced operation, so import the `Advanced`
-namespace alongside the ordinary workflow:
+The ring's interval $[0,5)$ tells us when its hole exists. To see a chain of
+edges representing it, ask the calculation to retain its reduction choices.
+Use `source=true` as well if those edges should be drawn on the original
+array: cell labels alone do not specify their geometric positions.
 
 ```julia
 import TamerOp.Advanced as OA
 
-retained = OP.cubical_persistence(values; representatives=true)
-OP.persistence_diagram_summary(retained).representatives_available  # true
+retained = OP.cubical_persistence(values; source=true, representatives=true)
 selected = OA.persistence_representative(retained; dim=1, kind=:finite, index=1)
-selected.available              # true
-selected.interval               # (0, 5)
-selected.cycle.cell_indices     # Positions among the one-dimensional cells
-selected.cycle.cell_ids         # Their original labels in the constructed complex
-selected.cycle.coefficients     # Coefficients modulo two
-selected.bounding_chain         # A two-dimensional chain bounding this cycle at 5
+selected.interval        # (0, 5)
+selected.cycle           # A chain of edges with zero boundary
+selected.bounding_chain  # A chain of squares filling that cycle at 5
 ```
 
-Both chain records include their dimension, exact cell grades, and coefficients
-as nonzero integer residues `1:p-1` in the recorded field. For F₂ these
-coefficients are all one; for odd primes they can differ. Cycle and filling
-equations are interpreted modulo that prime. Indices refer
-to positions within that chain dimension; IDs are the labels supplied by the
-complex. IDs can repeat in different dimensions and do not establish pixel,
-point-cloud, or other source geometry. For cubical inputs these records refer
-to the constructed cubical complex. Drawing its cells on the original image
-requires an additional geometric correspondence. Request `source=true` together
-with representative retention to preserve it; `selected.source_cycle` and
-`selected.source_bounding_chain` then carry verified source records. The
-[source-cell guide](tutorials/source_cells.ipynb) develops their overlays and
-[reference](src/reference/source_representatives.md) gives scale and map contracts.
+The [guide to source cells](tutorials/source_cells.ipynb) follows this cycle through
+its source geometry and death filling, then relates the calculation to the
+induced map on homology. It also explains the distinction between the
+retained cells, a chain on those cells and its homology class.
 
-The returned cycle is a noncanonical choice made by the field-specific reduction: changing
-the ordering of tied cells can change it. There is no shortest-cycle or preferred
-geometric-shape guarantee. A finite interval's `bounding_chain` has this cycle
-as its boundary at death. An essential interval has `bounding_chain=nothing`,
-because it never becomes a boundary in the supplied finite complex. For
-superlevels the same statements hold as the parameter decreases; birth remains
-included and finite death excluded.
+The chosen cycle need not be shortest or geometrically preferred. Changing
+the order of tied cells can change the representative while preserving its
+interval. An essential member has `bounding_chain=nothing`, since it never
+becomes a boundary in the supplied complex. Coefficients are nonzero integer
+residues modulo the recorded prime; the cycle and filling equations are
+interpreted in that field.
 
-Retention is opt-in because tracking change-of-basis columns can substantially
-increase memory during reduction. The default result keeps interval data:
-
-```julia
-intervals_only = OP.cubical_persistence(values)
-OA.persistence_representative(intervals_only; dim=1).reason  # :not_retained
-```
-
-An unavailable response has `available=false` and no cycle. A hand-built
-diagram containing only endpoints has no retained representative either;
-adding descriptive provenance does not supply the missing chains. Invalid
-dimensions, interval kinds, and member indices are errors. Pass
-`representatives=true` to `persistence_diagram` as well when starting from a
-graded complex or a data-and-filtration pair.
-
-Equal intervals need an additional choice. The one-cell torus has two essential
-degree-one classes born at `2//3`; their common endpoints do not identify one
-of the two cycles:
-
-```julia
-retained_torus = OP.cubical_persistence(fill(2//3, 1, 1);
-    periodic=true, representatives=true)
-first_cycle = OA.persistence_representative(retained_torus;
-    dim=1, kind=:essential, index=1)
-second_cycle = OA.persistence_representative(retained_torus;
-    dim=1, kind=:essential, index=2)
-```
-
-`index` refers to the original member in `finite_intervals` or `essential_births`,
-according to `kind`. It is local to that diagram. In a grouped visualization,
-first select the interval group, then choose an original member before requesting
-its cycle. These choices do not identify classes between different slices or
-separate computations. The [visualization guide](visualization.md) explains
-how the barcode, diagram and representative readout share this selection.
+The member `index` refers to its position in `finite_intervals` or
+`essential_births`, according to `kind`. Equal endpoints can describe distinct
+members, as for the two essential loops of a torus. The index is local to this
+diagram and does not identify a class across separate computations or slices.
+The [source reference](src/reference/source_representatives.md) gives the cell,
+scale and map conventions. Without retained representatives, the query reports
+`available=false` with reason `:not_retained`; saving endpoints or adding a
+provenance label cannot supply the missing chains.
 
 ## Measuring a hole with a cocycle
 
-A cycle describes a hole by combining edges into a closed loop. Another way to
-study the same hole is to assign values to edges and add those values around a
-loop. To obtain a measurement that depends only on its homology class, the sum
-must vanish around the boundary of every active two-dimensional cell. Such an
-assignment is a **cocycle**. More generally, a degree-`d` cochain assigns a field
-coefficient to each oriented `d`-cell; it is a cocycle when its coboundary is zero.
-Two cocycles differing by a coboundary represent the same cohomology class.
-
-The ring example supplies both perspectives. We can keep a cocycle while
-computing its barcode, then ask for its values at a particular scale:
+A cycle combines edges into a closed loop. A **cochain** instead assigns field
+coefficients to oriented cells, so that we can evaluate it on a chain. In
+degree one, it is a **cocycle** when its sum around the boundary of every
+active two dimensional cell is zero. Its evaluation then depends only on the
+homology class of the loop. Cocycles that differ by a coboundary represent
+the same cohomology class. Here a coboundary is a cochain obtained by
+evaluating a cochain one degree lower on cell boundaries; it evaluates to zero
+on every cycle.
 
 ```julia
-import TamerOp as OP
-import TamerOp.Advanced as OA
-import TamerOp.CoreModules: F3
-
-values = zeros(Int, 3, 3)
-values[2, 2] = 5
 cohomology = OP.cubical_persistence(values; field=F3(), cocycles=true)
-OP.finite_intervals(cohomology; dim=1)  # [(0, 5)]
 measurement = OA.persistence_cocycle(cohomology; dim=1, scale=2)
 measurement.cochain.cell_indices
-measurement.cochain.coefficients      # Nonzero residues modulo three
-OP.describe(cohomology).cocycles_available  # true
+measurement.cochain.coefficients  # Nonzero residues modulo three
 ```
 
-Unlisted cells have coefficient zero. At scale two, these coefficients satisfy
-the cocycle equations on all active squares and represent a nonzero class.
-Scale five is excluded: the hole has filled, and this class cannot extend
-through that stage. Requesting it there raises an error. `kind=:essential`
-selects an essential interval; `index` distinguishes separate members with
-equal endpoints. The requested scale must be finite and inside both the
-selected interval and any recorded radius window.
+At scale two the ring's class is alive, so the query returns a nonzero
+cohomology representative. At five the hole has filled and the interval has
+ended; requesting this member there is an error. The scale must lie inside
+the chosen interval and any recorded cutoff window. `kind` and `index` select
+members as in the cycle query.
 
-Why specify a scale? More cells become available as a sublevel grows. A
-cocycle on the larger complex gives one on the smaller complex by forgetting
-its values on cells that are absent there. This is **restriction**. It goes
-from `H^d(K_t)` to `H^d(K_s)` when `s ≤ t`, opposite to the homology map from
-`H_d(K_s)` to `H_d(K_t)`. For two scales within the same retained member's
-interval, TamerOp returns exactly these restrictions of a fixed cochain.
-Before birth that cochain restricts to zero. For superlevels, smaller complexes
-occur at larger numerical parameters, so the numerical inequalities reverse.
+Specifying a scale also makes the direction of the maps visible. For
+$s\leq t$ in a sublevel filtration, including cells sends homology from
+$H_d(K_s)$ to $H_d(K_t)$. A cochain on $K_t$ restricts to $K_s$ by forgetting
+values on absent cells, so the cohomology map goes the other way. Within one
+retained member's interval, the queries are these restrictions of a fixed
+cochain. Before birth that cochain restricts to zero. The numerical
+inequalities reverse for superlevels.
 
-For finite chain complexes over a field, cohomology is naturally dual to
-homology and has the same interval multiset. This does not identify their
-chosen representatives. `representatives=true` still asks for homology cycles
-and death fillings. `cocycles=true` asks for cohomology representatives. Both
-can be requested together, at the cost of both reductions; matching interval
-indices do not assert that these independently chosen bases are dual.
+Finite complexes over a field have naturally dual homology and cohomology,
+with the same interval multiset. Their chosen representatives need not be
+dual bases. Requesting both `representatives=true` and `cocycles=true` performs
+both reductions and retains both choices. The guide to source cells develops
+[a cocycle evaluation on the ring](tutorials/source_cells.ipynb); the
+[source reference](src/reference/source_representatives.md) explains how
+retained maps carry cycles and pull back cocycles.
 
 ### Following the cochain back to its cells
 
-For a supplied `GradedComplex`, the output uses its original cell labels,
-dimension-local positions, exact grades and boundary orientations. Cubical and
-other explicitly constructed complexes report their constructed cells; those
-labels alone do not define a geometric overlay on the original data.
+For explicit complexes, cochain records use the constructed cells' labels,
+positions within their dimension, exact grades and orientations. Their
+unlisted coefficients are zero. Geometric overlays additionally need
+`source=true`.
 
-The implicit Rips route also supports `cocycles=true` through degree two,
-including degree-zero functions on connected components. Its sparse cochain
-records contain `source_vertices`: an ordered tuple of original point indices
-or distance-matrix row indices for each simplex. The tuple's order specifies
-orientation, including when landmarks were listed out of numerical order.
-`cell_indices` and `cell_ids` on this route are combinatorial simplex indices
-within the selected vertex set, not positions in an explicitly stored complex.
+The implicit Rips route supports retained cocycles through degree two. Its
+`source_vertices` records the ordered original point or matrix-row indices
+for each simplex; this order determines orientation, including when landmark
+indices were supplied out of numerical order. On this route, `cell_indices`
+and `cell_ids` are combinatorial simplex indices within the selected vertex
+set, rather than positions in a stored complex. Landmark and neighbor
+selection do not produce cochains on omitted points or edges.
 
-```julia
-distances = [0.0 1 2 1; 1 0 1 2; 2 1 0 1; 1 2 1 0]
-rips = OP.persistence_diagram(distances, OP.RipsFiltration(max_dim=2);
-    field=F3(), max_homology_dim=1, cocycles=true)
-edge_values = OA.persistence_cocycle(rips; dim=1, scale=1)
-edge_values.source_vertices           # Oriented edges in the input vertex labels
-edge_values.cochain.coefficients
-```
-
-Landmark or nearest-neighbor selection still means we are studying the selected
-complex. It does not produce cocycles on discarded points or edges. Cocycle
-retention with collapse requires `source=true`: the explicit source route
-retains and verifies the retraction needed to pull a cocycle back. Without
-that opt-in, use `collapse=:none`. The resulting source complex retains the
-same landmark/neighbor selection as the computation.
-
-Retention is optional because representative supports can be large. The default
-barcode route keeps its existing reductions and stores no public cocycles.
-The implicit route with retention keeps selected cochains, including the work
-needed for degree zero, while continuing to generate cofaces as needed.
-`describe` reports availability and `provenance` records the field, filtration
-and variance. Returned cochain records are immutable copies.
-
-Cocycles provide input for further questions that endpoints alone cannot
-answer. Circular coordinates additionally need an integer lift and a coordinate
-solver; cup products need a compatible multiplication on cochains. Retaining
-cocycles supplies their starting data, not those additional constructions.
+With collapse, cocycle retention requires `source=true` to retain and verify
+the retraction used for pullback. Otherwise choose `collapse=:none`.
+Returned cochain records are immutable copies, and retaining them can require
+considerable storage. Further constructions, such as circular coordinates or
+cup products, need additional operations beyond these retained cochains.
 
 ## Compare diagrams and make features
 
@@ -790,19 +729,18 @@ two predictable merges, diagram comparison, finite features and a saved result.
 other_values = copy(values)
 other_values[2, 2] = 6
 other = OP.cubical_persistence(other_values)
-OP.bottleneck_distance(D, other; dim=1)       # 1.0
-OP.wasserstein_distance(D, other; dim=1, p=2) # 1.0
+OP.bottleneck_distance(ring_diagram, other; dim=1)       # 1.0
+OP.wasserstein_distance(ring_diagram, other; dim=1, p=2) # 1.0
 
-landscape = OP.persistence_landscape(D; dim=1, tgrid=0:0.5:6, kmax=2)
-image = OP.persistence_image(D; dim=1,
+landscape = OP.persistence_landscape(ring_diagram; dim=1, tgrid=0:0.5:6, kmax=2)
+image = OP.persistence_image(ring_diagram; dim=1,
     xgrid=0:0.5:2, ygrid=0:0.5:6, sigma=0.5)
-OP.persistence_silhouette(D; dim=1, tgrid=0:0.5:6)
-OP.barcode_entropy(D; dim=1, normalize=false) # 0.0: only one finite bar
-OP.barcode_summary(D; dim=1)                 # Total persistence 5.0
+OP.persistence_silhouette(ring_diagram; dim=1, tgrid=0:0.5:6)
+OP.barcode_entropy(ring_diagram; dim=1, normalize=false) # 0.0: only one finite bar
+OP.barcode_summary(ring_diagram; dim=1)                 # Total persistence 5.0
 ```
 
-These methods reuse the barcode matching and feature algorithms used elsewhere
-in the library. Repeated intervals remain separate members. Fields may differ
+Repeated intervals remain separate members in these comparisons. Fields may differ
 between diagrams: the distance compares their interval multisets, so it does
 not compare chosen chains, certify a source correspondence or construct a map.
 `bottleneck_matching` returns member indices in stored finite-member order,
@@ -822,14 +760,14 @@ an essential bar instead of silently dropping it.
 | `essential=:keep` | Keep infinite deaths for distances or explicit interval inspection; finite features reject them. |
 | `essential=:error` | Require the selected degree to have no essential bars. |
 
-For example, `OP.barcode_summary(D; dim=0, essential=:drop)` omits the connected
+For example, `OP.barcode_summary(ring_diagram; dim=0, essential=:drop)` omits the connected
 component that survives forever. Capping that component is an observation
 choice, not its computed death and not extended persistence. The cap is always
 in original grade units, including for superlevels.
 
 ### Use comparable coordinates and grids
 
-`analysis_barcode(D; dim, ...)` exposes an independent vector of exact analysis
+`analysis_barcode(ring_diagram; dim, ...)` exposes an independent vector of exact analysis
 intervals. Sublevel analysis time is `(grade-origin)/scale`; superlevel analysis
 time is `(origin-grade)/scale`, where `scale` must be positive. Superlevel time
 is reflected, retaining the direction of the filtration. A comparison requires
@@ -852,9 +790,13 @@ ground norm `q` is `1`, `2` or `Inf`. `p=Inf` selects bottleneck and requires
 to rescale. The auction backend uses a relative numerical tolerance; choose
 `backend=:hungarian` for direct assignment on the Float64 cost matrix.
 
-Landscapes sample ordered tents. Silhouettes average weighted tents. Images
-sample Gaussian values at grid centers, **not pixel integrals**; their rows are
-y-coordinates and columns are x-coordinates. Entropy uses lifetime weights by
+Each finite interval defines a tent that is zero outside the interval and
+rises with slope one to its midpoint, then falls with slope minus one. A
+landscape orders these tent heights at each parameter; a silhouette takes
+a weighted average. The [analysis notebook](tutorials/ordinary_analysis.ipynb)
+follows these constructions on two intervals. A persistence image samples
+Gaussian values at grid centers rather than integrating over pixels; its rows
+are y coordinates and its columns are x coordinates. Entropy uses lifetime weights by
 default and `normalize=true` divides by the logarithm of the number of weighted
 members. These arrays and summaries use Float64 arithmetic and lose information;
 a distance between feature arrays is not automatically a diagram distance.
@@ -862,11 +804,11 @@ a distance between feature arrays is not automatically a diagram distance.
 ## Save a diagram with retained data
 
 ```julia
-OP.save_persistence_diagram_json("ring.json", D)
+OP.save_persistence_diagram_json("ring.json", retained)
 restored = OP.load_persistence_diagram_json("ring.json")
 OP.inspect_json("ring.json")
 OA.check_persistence_diagram_json("ring.json")
-OP.bottleneck_distance(D, restored; dim=1) # 0.0
+OP.bottleneck_distance(ring_diagram, restored; dim=1) # 0.0
 ```
 
 The versioned owned format preserves all degrees, exact endpoint values and
@@ -876,7 +818,7 @@ vertex records survive too. Saving does not compute missing representatives or
 include an unretained source complex or its geometry. When `source=true` was
 requested, schema version 2 also preserves and verifies those complexes and
 source maps. Reloaded cocycles support
-the same scale-specific queries as before saving.
+the same queries at a specified scale as before saving.
 
 The default profile is compact; `profile=:debug` requests indented JSON.
 `inspect_json` reads a cheap header, while
@@ -889,25 +831,27 @@ not converted silently to strings. No executable source is evaluated on loading.
 
 ## Relative to a subcomplex
 
-For a filtered pair Aₜ ⊆ Kₜ, use `filtered_pair(K, cells)` followed by
-`persistence_diagram(pair)`. The result describes H(Kₜ,Aₜ). Selected cells
-can inherit K's grades or enter A later; the latter can kill a relative
+For a based chain complex, a subcomplex selects cells and includes every
+boundary term whose coefficient is nonzero in the chosen field.
+For a filtered pair $A_t\subseteq K_t$, use `filtered_pair(K, cells)` followed by
+`persistence_diagram(pair)`. The result describes relative homology $H(K_t,A_t)$, where chains in $A_t$
+are treated as zero. Selected cells can inherit the grades of $K$ or enter $A$ later; the latter can kill a relative
 class. The [boundary recipe](recipes/relative_pair.md) computes an interval
 and its connecting map. See the [pair reference](src/reference/persistence_variants.md)
-for cell indexing, coefficient fields, scale-specific quotient bases and
+for cell indexing, coefficient fields, quotient bases at a specified scale and
 induced maps.
 
 
 ## Results and figures
 
-`result_summary(D)` and `describe(D)` show the same cheap mathematical summary.
-The advanced `field(D)` and `filtration_order(D)` accessors return the coefficient
-field and order. `check_persistence_diagram(D)` validates a hand-built diagram;
+`OP.result_summary(ring_diagram)` and `OP.describe(ring_diagram)` show the same cheap mathematical summary.
+The advanced `field(ring_diagram)` and `filtration_order(ring_diagram)` accessors return the coefficient
+field and order. `check_persistence_diagram(ring_diagram)` validates a hand-built diagram;
 wrap its report with `persistence_validation_summary` for compact notebook
 presentation. It checks barcode storage, not an unrecorded source computation.
 
-`visualize(D; kind=:persistence_diagram, dim=1)` and
-`visualize(D; kind=:barcode, dim=1)` use the shared visualization interface.
+`visualize(ring_diagram; kind=:persistence_diagram, dim=1)` and
+`visualize(ring_diagram; kind=:barcode, dim=1)` use the shared visualization interface.
 Plotting makes explicit Float64 display copies while retaining exact intervals
 in the visualization metadata. Values that overflow or distinct endpoints
 that collapse at display precision are rejected. Essential bars have a separate
@@ -915,7 +859,7 @@ labelled infinity lane or continuation arrows, including `-Inf` for superlevels.
 Rendering requires an explicitly loaded plotting extension; constructing and
 inspecting a diagram does not require a plotting package.
 
-This is a direct route from a one-parameter filtered complex to its barcode;
+This is a direct route from a one parameter filtered complex to its barcode;
 it does not require constructing an `EncodingResult`. With several parameters,
 we need to retain vector spaces and their maps to support a wider range of
 questions. Continue with [why two parameters change the problem](two_parameters.md)

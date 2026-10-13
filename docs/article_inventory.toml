@@ -209,7 +209,7 @@ type = "library_guide"
 topics = ["persistence", "geometry", "visualization", "features", "data_io"]
 question = "Which ordinary persistence construction and retained output answer my question?"
 state = "existing"
-scope = "The guide now covers higher-dimensional top-cell versus vertex input and construction budgets under A113. Planned extensions: spatial alpha geometry limits, checked filtered pairs and typed extended persistence. Retain the existing guide identity and link the new mathematical lessons instead of embedding all proofs or temporal workflows here."
+scope = "The guide covers cubical and Rips inputs, coefficient and interval conventions, retained chains, comparison and saving, with a concise continuation to the implemented filtered pair workflow. Spatial alpha geometry limits and typed extended persistence remain planned. Sustained source representative explanations belong to guide_representatives; specialized reduction notes are optional reading within this guide until their algorithm accounts are written."
 plan_ids = ["A113", "A114", "A118", "A119"]
 source = "docs/ordinary_persistence.md"
 related = ["ring", "B27", "B28", "B29", "B63", "B64", "ordinary_analysis", "B39", "B43", "B48", "ref_ordinary_persistence", "guide_representatives", "guide_slices_diagrams", "guide_features", "guide_data_io", "extended_persistence_lesson"]
@@ -227,7 +227,7 @@ source = "docs/tutorials/ordinary_analysis.ipynb"
 plan_ids = ["A116", "A100"]
 related = ["ordinary_persistence", "ring", "features_lesson", "distances_stability", "B39", "B43", "B48", "ref_ordinary_persistence", "ref_features", "ref_io"]
 migration = "retain"
-migration_note = "Canonical novice notebook with hand-derived three-point mergers and executable assertions. Publication routing is a separate next step; do not claim a rendered website route merely because this source exists."
+migration_note = "Published novice recipe following three points through two predicted merges, comparable barcodes, diagram distances, finite features and a retained cocycle roundtrip. Keep the worked interpretation here and general option contracts in the ordinary guide and reference."
 
 [[articles]]
 id = "ingestion_options"
@@ -264,7 +264,7 @@ state = "existing"
 source = "docs/rhomboid_depth.md"
 related = ["multicover", "B24", "B25"]
 migration = "split"
-migration_note = "Retain the boundary issue and correct use; let B24/B25 own terminal-cap and enumeration implementation detail."
+migration_note = "Retain the boundary issue, two-site cap example and justification needed to use a depth window correctly. The notebook introduces the example. Detailed incremental discovery now belongs to the existing B23 account and is linked from this guide. Move the full cap argument and any remaining enumeration detail to B24/B25 only after those planned destinations exist."
 
 [[articles]]
 id = "exact_grades"
@@ -3348,7 +3348,7 @@ topics = ["persistence", "algebra"]
 question = "What input, basis and map conventions define relative persistence?"
 state = "existing"
 source = "docs/src/reference/persistence_variants.md"
-scope = "Specify filtered pairs and quotient/connecting maps, extended interval types and source grades, zigzag event directions and decorations, allowed incremental edits and certified correspondences. Shared ordinary result/analysis methods stay in their canonical reference with variant-specific applicability explained here. Separate temporal landscapes from the computation engine."
+scope = "The existing page specifies filtered pairs, quotient bases, relative homology, connecting maps and induced maps. Extended interval types, temporal event directions and incremental correspondences are planned additions or dedicated references; their inclusion in planning does not imply that this page already documents them. Shared ordinary analysis methods stay in the ordinary reference."
 related = ["relative_extended_lesson", "extended_persistence_lesson", "temporal_persistence_lesson", "guide_temporal_persistence", "B66", "B67", "B68"]
 plan_ids = ["A55", "A118", "A119", "A120", "A121"]
 migration = "retain"

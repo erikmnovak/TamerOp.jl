@@ -120,8 +120,17 @@ def validate_outputs(nb) -> int:
         descriptions = [alt] if isinstance(alt, str) else alt
         if len(images) != len(descriptions) or any(not x.strip() for x in descriptions):
             raise ValueError(f"Missing figure or figure description in cell {cell.id}")
-        for output, description in zip(images, descriptions):
+        caption = cell.metadata.get("tamerop", {}).get("figure_caption")
+        captions = [caption] if isinstance(caption, str) else caption
+        if captions is not None and (not isinstance(captions, list)
+                or len(captions) != len(images)
+                or any(not isinstance(x, str) or not x.strip() for x in captions)):
+            raise ValueError(f"Invalid figure captions in cell {cell.id}")
+        for index, (output, description) in enumerate(zip(images, descriptions)):
             output.metadata["figure_alt"] = description
+            output.metadata.pop("figure_caption", None)
+            if captions is not None:
+                output.metadata["figure_caption"] = captions[index]
         figures += len(images)
     if not figures:
         raise ValueError("A published teaching notebook must contain static figures.")

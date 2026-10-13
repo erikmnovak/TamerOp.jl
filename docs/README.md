@@ -454,8 +454,12 @@ section with the same metadata, for example:
 Keep an explicit optional heading and explanation in its first Markdown cell.
 The website wraps the group in a native, initially closed disclosure; the
 executed download keeps the original cells and all saved figures. Figure cells
-still require `tamerop.figure_alt`. All code cells, including optional ones,
-execute during publication. Later required cells must work if optional cells are skipped.
+still require `tamerop.figure_alt`. An optional `tamerop.figure_caption` adds
+visible plain text below a figure. Both accept a string for one figure or a list
+with one entry per figure, in output order; every supplied caption must be
+nonempty. Captions preserve literal interval brackets and escape HTML rather
+than interpreting it. All code cells, including optional ones, execute during
+publication. Later required cells must work if optional cells are skipped.
 Review both disclosure states, keyboard access, narrow-screen layout, and the
 complete notebook; do not use folding to hide an assumption needed for a result.
 

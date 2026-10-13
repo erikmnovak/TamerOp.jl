@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="500" height="580" viewBox="0 0 500 580" role="img" aria-labelledby="title description">
+<title id="title">The diagonal fills a four-edge cycle</title>
+<desc id="description">A schematic of the supplied sparse weighted graph, over F two. Four edges form a cycle at parameter one. At two the diagonal from vertex one to vertex three enters together with triangles 123 and 134. Their common diagonal cancels in the boundary, leaving the original cycle. First homology has interval [1,2). Positions do not encode distances.</desc>
+<!-- Authored schematic; regenerate with docs/build_scripts/render_ordinary_figures.py. -->
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#0f766e" stroke-width="1.5"/></marker></defs>
+<rect width="500" height="580" fill="white"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+<text x="250" y="36" font-size="25" fill="#172b42" text-anchor="middle">When triangles fill the loop</text>
+<text x="125" y="84" font-size="26" fill="#172b42" text-anchor="middle">t = 1</text>
+<path d="M 69 226 L 181 226" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="69" cy="226" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="51" y="251" font-size="22" fill="#172b42" text-anchor="middle">1</text>
+<path d="M 181 226 L 181 114" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="181" cy="226" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="199" y="251" font-size="22" fill="#172b42" text-anchor="middle">2</text>
+<path d="M 181 114 L 69 114" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="181" cy="114" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="199" y="101" font-size="22" fill="#172b42" text-anchor="middle">3</text>
+<path d="M 69 114 L 69 226" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="69" cy="114" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="51" y="101" font-size="22" fill="#172b42" text-anchor="middle">4</text>
+<text x="125" y="299" font-size="25" fill="#172b42" text-anchor="middle">H₁ = F₂</text>
+<text x="375" y="84" font-size="26" fill="#172b42" text-anchor="middle">t = 2</text>
+<polygon points="319,226 431,226 431,114" fill="#b7e2dd"/>
+<polygon points="319,226 431,114 319,114" fill="#dbeafe"/>
+<path d="M 319 226 L 431 114" fill="none" stroke="#0f766e" stroke-width="3" stroke-dasharray=""/>
+<path d="M 319 226 L 431 226" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="319" cy="226" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="301" y="251" font-size="22" fill="#172b42" text-anchor="middle">1</text>
+<path d="M 431 226 L 431 114" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="431" cy="226" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="449" y="251" font-size="22" fill="#172b42" text-anchor="middle">2</text>
+<path d="M 431 114 L 319 114" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="431" cy="114" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="449" y="101" font-size="22" fill="#172b42" text-anchor="middle">3</text>
+<path d="M 319 114 L 319 226" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray=""/>
+<circle cx="319" cy="114" r="5" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<text x="301" y="101" font-size="22" fill="#172b42" text-anchor="middle">4</text>
+<text x="375" y="299" font-size="25" fill="#172b42" text-anchor="middle">H₁ = 0</text>
+<path d="M 195 170 L 305 170" fill="none" stroke="#0f766e" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<text x="250" y="362" font-size="22" fill="#172b42" text-anchor="middle">∂(123 + 134) = 12 + 23 + 34 + 14</text>
+<text x="250" y="399" font-size="22" fill="#475569" text-anchor="middle">The shared diagonal cancels over F₂.</text>
+<text x="250" y="449" font-size="24" fill="#172b42" text-anchor="middle">Interval in first homology</text>
+<path d="M 120 487 L 380 487" fill="none" stroke="#245c99" stroke-width="6" stroke-dasharray=""/>
+<circle cx="120" cy="487" r="7" fill="#245c99" stroke="#245c99" stroke-width="2"/>
+<circle cx="380" cy="487" r="7" fill="white" stroke="#245c99" stroke-width="3"/>
+<text x="120" y="528" font-size="24" fill="#172b42" text-anchor="middle">1</text>
+<text x="380" y="528" font-size="24" fill="#172b42" text-anchor="middle">2</text>
+<text x="424" y="495" font-size="25" fill="#172b42" text-anchor="middle">t</text>
+<text x="250" y="567" font-size="21" fill="#172b42" text-anchor="middle">Filled end included; open end excluded.</text>
+</g></svg>

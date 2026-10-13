@@ -1,5 +1,6 @@
 """Focused conversion/failure-contract checks, independent of Julia compilation."""
 import copy
+import html
 import json
 from pathlib import Path
 import shutil
@@ -118,6 +119,52 @@ class PublicationTests(unittest.TestCase):
             self.assertNotIn('not the figure', text)
             self.assertIn('docs/tutorials/ring.ipynb', text)
             self.assertEqual(len(list(page.parent.rglob('*.png'))), 1)
+
+    def test_optional_visible_captions_keep_literals_for_png_and_svg(self):
+        caption = 'Compare [0,2), (1,3] and [0,3]; "quoted" <basis> & coordinates.'
+        for mime in ('image/png', 'image/svg+xml'):
+            for value in (caption, [caption]):
+                with self.subTest(mime=mime, caption_type=type(value).__name__):
+                    nb = self.fixture()
+                    cell = nb.cells[1]
+                    cell.metadata.tamerop.figure_caption = value
+                    if mime == 'image/svg+xml':
+                        cell.outputs[0].data = {
+                            mime: '<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"></svg>'}
+                    self.assertEqual(validate_outputs(nb), 1)
+                    with tempfile.TemporaryDirectory() as tmp:
+                        stage = Path(tmp)
+                        page = stage / 'tutorials/ring.md'
+                        export_lesson(nb, DOCS / 'tutorials/ring.ipynb', page, {}, stage)
+                        text = page.read_text()
+                        self.assertIn('<figure class="notebook-figure"><a href="', text)
+                        self.assertIn('<figcaption>' + html.escape(caption, quote=True)
+                                      + '</figcaption></figure>', text)
+                        self.assertIn('alt="A checked mathematical figure."', text)
+                        self.assertNotIn('<basis>', text)
+                        self.assertEqual(text.count('<figcaption>'), 1)
+
+    def test_missing_caption_keeps_original_markup_and_clears_stale_output(self):
+        nb = self.fixture()
+        nb.cells[1].outputs[0].metadata.figure_caption = 'An earlier caption.'
+        validate_outputs(nb)
+        self.assertNotIn('figure_caption', nb.cells[1].outputs[0].metadata)
+        with tempfile.TemporaryDirectory() as tmp:
+            stage = Path(tmp)
+            page = stage / 'tutorials/ring.md'
+            export_lesson(nb, DOCS / 'tutorials/ring.ipynb', page, {}, stage)
+            text = page.read_text()
+            self.assertIn('```@raw html\n<a href="', text)
+            self.assertNotIn('<figure', text)
+            self.assertNotIn('<figcaption', text)
+            self.assertNotIn('An earlier caption.', text)
+
+    def test_invalid_visible_captions_fail(self):
+        for caption in (True, 3, {}, [], '', ' ', [''], [3], ['one', 'two']):
+            with self.subTest(caption=caption), self.assertRaisesRegex(ValueError, 'figure captions'):
+                nb = self.fixture()
+                nb.cells[1].metadata.tamerop.figure_caption = caption
+                validate_outputs(nb)
 
     def test_optional_section_preserves_cells_figures_and_reading_order(self):
         nb = self.fixture()

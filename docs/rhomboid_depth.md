@@ -1,178 +1,167 @@
 # Exact coverage-depth windows
 
-A multicover asks which locations lie in at least a chosen number of balls.
-If only a few coverage depths matter, a bounded construction can avoid storing
-the full range. It must still retain the cells that connect features at the
-chosen depths. This guide explains that boundary issue and why the resulting
-finite module has the required spaces and maps within its window. Start with
-the [multicover guide](tutorials/multicover.ipynb) for the radius/depth interpretation and
-the available construction methods.
+A multicover keeps the locations covered by at least a chosen number of balls.
+When only a few coverage depths matter, we would like to construct just that
+part of the model. The difficulty is at the ends of the requested range:
+cells that cross an endpoint can leave a boundary cell there, and that cell
+may be needed to join components or fill a cycle. We will see this already
+with two sites. The [multicover guide](tutorials/multicover.ipynb) develops the
+radius and depth interpretation through computed figures.
 
 `RhomboidFiltration(depth_range=(lo, hi))` represents the inclusive integer
-coverage-depth window `lo:hi`. Radius increases and depth decreases. The
-construction retains the horizontal cap at depth `hi`: the boundary cells
-created by cutting the rhomboid model at that depth. They are retained even
-when `lo == hi`.
+window `lo:hi`. Increasing radius or decreasing depth enlarges the represented
+space. At the upper depth `hi`, the construction retains a **terminal cap**,
+the horizontal section made by cutting the cells at that depth. It is needed
+even when `lo == hi`, so the window contains just one depth.
 
 ```julia
-using TamerOp
+import TamerOp as OP
 
-points = PointCloud(reshape(QQ[0, 2], :, 1))
-filtration = RhomboidFiltration(depth_range=(1, 1), backend=:exhaustive)
-enc = encode(points, filtration; degree=0)
+points = OP.PointCloud(reshape(OP.QQ[0, 2], :, 1))
+filtration = OP.RhomboidFiltration(depth_range=(1, 1), backend=:exhaustive)
+enc = OP.encode(points, filtration; degree=0)
 ```
 
-Here degree zero counts connected components. The two balls are disjoint below
-radius one and touch at radius one, so the degree-zero dimension is two below
-that radius and one at it. The cap contains the joining edge. Removing the
-original depth-two vertex and all its incident cells would lose that edge and
-give the wrong answer.
+Here degree zero homology, over the default rational field, counts connected
+components. The two balls are disjoint below radius one and touch at radius
+one. The dimension is therefore two before contact and one at contact. In
+the cell model, the joining edge lies in the cap. Deleting the original
+vertex at depth two and all its incident cells would remove this edge and
+leave the wrong number of components.
+
+![The rhomboid for sites 0 and 2 has subset vertices at depths 0, 1 and 2. Its horizontal section at depth 1 joins the two singleton vertices when radius reaches 1.](assets/rhomboid/terminal_cap.svg)
+
+*The lifted coordinates are the sum of the selected sites and their number.
+The horizontal cut retains an edge between the singleton vertices. The small
+complexes below show its effect on connected components at depth one; they
+are schematic views of the same two-site calculation.*
 
 ## The represented bifiltration
 
-Write an original rhomboid as `(I,O)`, where `I` and `O` are its disjoint inside
-and on-sphere site sets. With ordered coordinates `t in [0,1]^q`, where
-`q = |O|`, its depth is `|I| + sum(t)`. The implementation intersects rhomboids
-with integer horizontal planes and closed unit slabs between `lo` and `hi`.
-It identifies shared intersections by their smallest original carrier and
-integer level.
+A native rhomboid is labelled by two disjoint sets of sites $(I,O)$: those
+inside a separating sphere and those on it. Write $q=|O|$ and give its cube
+coordinates $t=(t_1,\ldots,t_q)\in[0,1]^q$. Its depth is
 
-Each resulting cell receives its carrier's constrained minimum radius and its
-minimum depth. Consequently its faces are present whenever it is present.
-At `(r,k)` the active complex is the part of this sliced tiling in
-`k <= depth <= hi` whose cells have radius at most `r`. Structure maps are the
-literal inclusions of these complexes.
+$$d(t)=|I|+t_1+\cdots+t_q.$$
 
-The proof uses a capped mapping telescope and the sliced-rhomboid nerve
-comparison of Corbet, Kerber, Lesnick and Osang, Theorem 12. The telescope
-retains the depth-`hi` space and attaches the cylinders of the inclusions down
-to depth `k`; projection onto the spatial coordinate is a natural homotopy
-equivalence to the depth-`k` multicover. Its nerve contains the terminal
-order-`hi` complex as well as every intervening mixed-order complex. Compatible
-convex-cell covers give the same nerve for the restricted sliced model.
-This proves compatibility of persistence maps as well as individual spaces.
-The terminal component is essential even when the union of intervening
-cylinders is empty. See
-[Computing the multicover bifiltration](https://arxiv.org/pdf/2103.07823).
+Intersecting these cubes with the integer horizontal planes and the closed
+unit slabs between `lo` and `hi` gives the sliced model. A resulting cell can
+belong to several original rhomboids. Its **carrier** is the smallest original
+face containing it; the carrier and integer level identify shared sliced
+cells without duplication.
 
-This application requires the native general-position hypotheses. The
-separate `backend=:subdivision_cech` construction supports degenerate and
-repeated labeled sites. A depth window also restricts the represented query
-domain; it does not certify answers outside that window.
+Each sliced cell inherits its carrier's constrained minimum radius and its
+own minimum depth. These grades ensure that every face is present whenever
+its cell is present. At physical parameter $(r,k)$ we take the cells with
+radius at most $r$ in the portion $k\leq d\leq\mathrm{hi}$ of the sliced
+tiling. Increasing $r$ or decreasing $k$ includes one of these complexes in
+another, and the inclusions induce the structure maps after taking homology.
+
+The comparison with multicover needs to preserve these maps. One can form a
+**mapping telescope** by retaining the space at depth `hi` and attaching
+cylinders for the successive inclusions down to depth $k$. Projection onto
+the spatial coordinate gives a natural homotopy equivalence with the
+multicover at depth $k$. Here naturality means that the comparisons commute
+with the inclusions as radius or depth changes.
+
+Covering this telescope by compatible convex cells gives a **nerve**, the
+simplicial complex that records which cover sets have a common intersection.
+It contains the terminal complex at depth `hi` and the complexes connecting
+successive depths. The restricted sliced model has a cover with the same
+nerve. This is the capped version of the sliced rhomboid comparison in
+[Corbet, Kerber, Lesnick and Osang, Theorem 12](https://arxiv.org/html/2103.07823v3).
+When `lo == hi`, there are no intervening cylinders, but the terminal space
+and its nerve are still present. This explains why the cap cannot be omitted.
+
+The argument uses the native general position hypotheses. Degenerate or
+repeated labelled sites require the separate `backend=:subdivision_cech`
+construction. The window also bounds the query domain whose geometry is
+represented; it gives no conclusion outside those depths.
 
 ## Radius-preserving pruning
 
-Native geometry retains only carriers whose depth interval meets the window,
-with positive-dimensional carriers anchored strictly below `hi`. This happens
-while constructing the geometry. It does not build the full tiling and filter
-its final module.
+The constructor can discard irrelevant original rhomboids before slicing.
+It keeps carriers whose depth interval meets the window; a carrier of positive
+dimension must have **anchor depth** $|I|<\mathrm{hi}$. We need to know that
+this early pruning still finds the right birth radius for the cells it keeps.
 
-For a positive-dimensional retained carrier, every original coface has an
-anchor no larger than its anchor and a depth interval containing its interval.
-All cofaces that can improve its constrained radius therefore survive the
-same pruning rule. The exceptional case is a vertex at depth `hi`. A minimum
-ball enclosing its nonempty inside set must touch an inside site; otherwise
-its radius could decrease. Moving that site onto the boundary supplies an
-incident minimizing carrier anchored below `hi`. The empty vertex has radius
-zero. These observations justify descending radius propagation on the retained
-carriers without replacing constrained minima by unconstrained enclosing-ball
-radii.
+A cell's constrained minimum radius can be attained on a larger cell that
+contains it, called a **coface**. For a retained carrier of positive dimension,
+every original coface has anchor depth no larger than its own and a depth
+interval containing its interval. Such a coface meets the same pruning rule,
+so all cofaces that could lower its radius remain available.
+
+The remaining case is a vertex at depth `hi`. If its inside set is nonempty,
+a smallest ball enclosing that set must touch an inside site; otherwise the
+radius could be decreased. Moving that site from the inside set to the
+on-sphere set gives an incident minimizing carrier with anchor below `hi`.
+The empty vertex has radius zero. Thus descending radius propagation still
+finds the constrained minima, without replacing them by radii of unconstrained
+enclosing balls.
 
 The exhaustive backend still examines candidate supports outside the window.
-The incremental backend also avoids discovering unnecessary later depth
-levels. Storage and time savings depend on the requested window and input;
-integer slicing itself adds cells.
+The incremental backend can avoid discovering later depth levels that are
+unneeded. How much time and storage this saves depends on the cloud and
+window, and the slicing itself can add cells.
 
 ## Integral boundaries and the simplex stage
 
-Slab cells use the ordered cube orientation `e_1,...,e_q`. Horizontal cells use
-`e_1-e_q,...,e_(q-1)-e_q`. For coordinate number `i`, the lower and upper
-coordinate facets have incidence `(-1)^i` and `(-1)^(i-1)`. Slab lower and upper
-horizontal caps have incidence `(-1)^q` and `(-1)^(q-1)`. Only actual
-codimension-one faces contribute. Coincident endpoint descriptions in a sliced
-square or interval are counted once. The constructor verifies `boundary² = 0`
-over the integers before changing coefficient field.
+To compute homology we also need the signs of the boundary maps. A slab cell
+uses the ordered cube orientation $e_1,\ldots,e_q$, while a horizontal cell
+uses $e_1-e_q,\ldots,e_{q-1}-e_q$. For coordinate $i$, its lower and upper
+coordinate facets have incidence coefficients $(-1)^i$ and $(-1)^{i-1}$.
+The lower and upper horizontal caps of a slab have coefficients $(-1)^q$
+and $(-1)^{q-1}$.
 
-`stage=:simplex_tree` explicitly constructs the barycentric subdivision: one
-vertex per sliced cell, one simplex per strict face flag, and the grade of the
-largest cell on that flag. Shared faces acquire identical subdivisions, and
-subdivision restricts at every filtration parameter. Flag counts and workspace
-estimates are checked against construction budgets before allocation. This
-stage can be much larger than the native cellular complex.
+Only actual faces of codimension one contribute. When two endpoint
+descriptions coincide in a sliced square or interval, they describe one face
+and are counted once. The constructor checks $\partial^2=0$ over the integers
+before changing coefficient field, so the signed boundaries can then be used
+in the requested homology computation.
 
-`max_dim` applies after slicing. A `q`-dimensional original rhomboid can supply
-an essential `(q-1)`-dimensional cap. As for other skeleton requests, degree
-`h` homology generally needs cells through dimension `h+1` to retain its
-boundaries. Radius grades retain the [exact arithmetic contract](exact_grades.md).
+Requesting `stage=:simplex_tree` subdivides this cellular complex. Each
+sliced cell becomes a vertex, and each **flag**, a strict chain of faces,
+becomes a simplex with the grade of its largest cell. This is the barycentric
+subdivision. Shared faces get identical subdivisions, and restricting to any
+filtration parameter commutes with the subdivision. It can contain many more
+simplices than the cellular model; flag counts and workspace estimates are
+checked against construction budgets before allocation.
+
+`max_dim` is applied after slicing. A rhomboid of dimension $q$ can supply a
+cap of dimension $q-1$, so discarding the original rhomboid too early would
+lose an admissible cell. As elsewhere, degree $h$ homology generally needs
+cells through dimension $h+1$, whose boundaries may kill classes in degree
+$h$. Radius grades retain the [exact arithmetic contract](exact_grades.md).
 
 ## Incremental enumeration
 
-`backend=:incremental` computes native rhomboids in affine dimensions zero
-through three. `backend=:exhaustive` retains the dimension-generic support
-enumeration route. These choices feed the same carrier-radius and boundary
-construction; they do not define different multicover approximations. The
-result provenance records both the requested and executed backend.
+`backend=:incremental` discovers native rhomboids across depth levels in
+affine dimensions zero through three. `backend=:exhaustive` enumerates
+supports in any affine dimension. Both feed the same radius and boundary
+construction, so they describe the same multicover under their hypotheses.
+The requested and executed choices are recorded in provenance.
 
-The default `backend=:auto` selects incremental enumeration only for
-affine dimension two, at least 32 sites, and an explicit depth window ending
-at two. Other requests use exhaustive enumeration.
+The default `backend=:auto` selects incremental enumeration for affine
+dimension two, at least 32 sites and an explicit depth window ending at two.
+Other requests use exhaustive enumeration. Incremental construction still
+processes prerequisite depths below `lo`; degeneracy there can prevent that
+route even if exhaustive enumeration can construct the narrower window.
+Encountered native degeneracy causes an error, without perturbing the sites
+or silently switching to subdivision–Čech.
 
-For a subset `Q` of `k` sites, form the exact lifted point
-
-```text
-(mean(a for a in Q), mean(dot(a,a) for a in Q)).
-```
-
-Its lower convex hull gives a weighted Delaunay mosaic. Start with singleton
-labels at depth one. Each recovered rhomboid supplies subset vertices for
-later depths, so the algorithm does not enumerate all subsets of the input.
-The intersection and union of a first-generation cell's labels recover its
-inside and on-sphere sets. Completeness follows from Edelsbrunner and Osang's
-earlier-level vertex discovery theorem; see Theorem 5, Lemma 2 and Algorithm 1
-in [A Simple Algorithm for Higher-order Delaunay Mosaics and Alpha
-Shapes](https://arxiv.org/pdf/2011.03617v1).
-
-The implementation uses CDD's exact rational convex-hull conversion. It adds
-an upward vertical ray to the lifted hull and selects facets with a negative
-final normal coefficient. This also handles a simplex whose lifted vertices
-all lie in one affine plane. CDD returns whole facets, so nonsimplicial
-higher-generation cells need no arbitrary triangulation. Every recovered top
-rhomboid is checked against its original exact sphere classification.
-
-For a cloud in a proper affine subspace, an injective coordinate projection
-reduces only the horizontal coordinates of the lifted hull. The final lifted
-coordinate still uses the original full squared norm. This preserves the
-Euclidean metric of the input. Lifted means, facet incidence and sphere
-classification never pass through floating-point arithmetic.
-
-The algorithm stops after the requested upper depth, or earlier when no new
-top rhomboids are possible. It still processes prerequisite depths below
-`lo`; degeneracy there can prevent incremental enumeration even if exhaustive
-enumeration could construct the narrower window. Native construction rejects
-encountered degeneracy and never perturbs the sites or silently selects
-subdivision-Cech.
-
-Here *incremental* means discovery across depth levels. CDD recomputes each
-level's weighted hull. Runtime depends on that hull computation, exact integer
-sizes, and constrained-radius calculations; no output-linear bound is claimed.
-Convex-hull computation is an allowed weighted-Delaunay implementation in
-[Section 4.5 of Computing the multicover
-bifiltration](https://arxiv.org/html/2103.07823v3).
-
-When benchmarking exhaustive and incremental execution, use identical data
-and depth windows. Track retained original carriers, emitted cells and
-exact-critical-grid H0 ingestion separately. Full and capped models have
-different cell structures, so their storage comparisons are separate from
-equality checks between enumeration backends. Label first-operation and warm
-timings separately, and include ordinary package loading when measuring a
-fresh process. Julia allocation counters exclude CDD/GMP's native working
-memory. Compatible requests can reuse compiled geometry through the
+The [construction account](implementation/rhomboid_construction.md#discover-cells-across-depth-levels)
+follows the lifted subset coordinates, exact lower hulls and stopping rule.
+Compatible requests can reuse that geometry through an explicit
 [session cache](tutorials/multicover.ipynb#reusing-exact-geometry).
 
-A depth window and radius cutoff can produce an empty complex. Empty graded
-and simplex-tree stages retain their two parameter coordinates and exact
-algebraic radius type; they do not acquire an artificial vertex. Dataset JSON
-round trips preserve this shape through a closed `empty_grade_type` record.
-To encode an empty dataset as a module, supply explicit axes: there are no
-cell grades from which to infer a parameter grid. The resulting stalks and
-structure maps are zero on that grid.
+## When the selected complex is empty
+
+A depth window and radius cutoff may leave no cells. The graded complex and
+simplex tree still retain their two parameter coordinates and exact algebraic
+radius type, without adding an artificial vertex. Dataset JSON preserves this
+shape through its `empty_grade_type` record.
+
+To encode an empty dataset, supply explicit axes: there are no cell grades
+from which to infer a grid. Every stalk and structure map on that grid is
+zero. As for a nonempty window, this records the module on the domain you
+specified.

@@ -200,3 +200,6 @@ html.theme--documenter-dark #documenter-page {
     .reading-map-mobile-starts > a strong { font-size: 1rem; line-height: 1.3; }
     .reading-map-mobile-starts > p { grid-column: 1 / -1; margin: 0; font-size: .85rem; }
 }
+
+#documenter-page .notebook-figure { margin: 1.5rem 0; }
+#documenter-page .notebook-figure figcaption { margin-top: .65rem; line-height: 1.5; }

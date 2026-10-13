@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="520" height="610" viewBox="0 0 520 610" role="img" aria-labelledby="title description">
+<title id="title">The relative edge and its connecting map</title>
+<desc id="description">At t at least one, K is an oriented edge e from v0 to v1, and A is its endpoints. Its ambient boundary is v1 minus v0. Both vertices vanish in quotient chains, making the edge a relative cycle. The connecting map takes the edge class in H1(K,A) to the endpoint difference in H0(A). This is a chain schematic, not a geometric realization of the quotient.</desc>
+<!-- Authored schematic; regenerate with docs/build_scripts/render_relative_figures.py. -->
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 1 1 L 9 5 L 1 9" fill="none" stroke="#245c99" stroke-width="1.5"/></marker></defs>
+<rect width="520" height="610" fill="white"/>
+<g font-family="DejaVu Sans, sans-serif" fill="#172b42" text-anchor="middle">
+<text x="260" y="36" font-size="25" fill="#172b42" text-anchor="middle">An edge relative to its endpoints</text>
+<text x="260" y="88" font-size="25" fill="#172b42" text-anchor="middle">K at t ≥ 1</text>
+<path d="M 140 143 L 368 143" fill="none" stroke="#245c99" stroke-width="4" stroke-dasharray="" marker-end="url(#arrow)"/>
+<circle cx="135" cy="143" r="6" fill="#b45309" stroke="#b45309" stroke-width="2.5"/>
+<circle cx="385" cy="143" r="6" fill="#b45309" stroke="#b45309" stroke-width="2.5"/>
+<text x="260" y="128" font-size="25" fill="#245c99" text-anchor="middle">e</text>
+<text x="135" y="182" font-size="23" fill="#172b42" text-anchor="middle">v₀ (10)</text>
+<text x="385" y="182" font-size="23" fill="#172b42" text-anchor="middle">v₁ (20)</text>
+<text x="260" y="218" font-size="23" fill="#b45309" text-anchor="middle">A = {v₀, v₁}</text>
+<text x="260" y="256" font-size="27" fill="#172b42" text-anchor="middle">∂ₖe = v₁ − v₀</text>
+<path d="M 35 278 L 485 278" fill="none" stroke="#cbd5e1" stroke-width="1" stroke-dasharray=""/>
+<text x="260" y="319" font-size="26" fill="#172b42" text-anchor="middle">Q = C(K) / C(A)</text>
+<text x="260" y="358" font-size="22" fill="#475569" text-anchor="middle">Both vertex coordinates become zero.</text>
+<text x="260" y="402" font-size="23" fill="#0f766e" text-anchor="middle">∂e = 0, so e is a relative cycle.</text>
+<path d="M 35 427 L 485 427" fill="none" stroke="#cbd5e1" stroke-width="1" stroke-dasharray=""/>
+<text x="118" y="469" font-size="25" fill="#172b42" text-anchor="middle">H₁(K, A)</text>
+<text x="398" y="469" font-size="25" fill="#172b42" text-anchor="middle">H₀(A)</text>
+<text x="115" y="520" font-size="27" fill="#245c99" text-anchor="middle">[e]</text>
+<path d="M 162 512 L 278 512" fill="none" stroke="#245c99" stroke-width="2.5" stroke-dasharray="" marker-end="url(#arrow)"/>
+<text x="220" y="498" font-size="25" fill="#245c99" text-anchor="middle">δ</text>
+<text x="390" y="520" font-size="25" fill="#b45309" text-anchor="middle">[v₁] − [v₀]</text>
+<text x="260" y="574" font-size="21" fill="#172b42" text-anchor="middle">δ recovers the original endpoint boundary.</text>
+</g></svg>

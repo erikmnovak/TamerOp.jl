@@ -4,10 +4,15 @@
 """
     SourceCorrespondence
 
-An opt-in filtered chain map from a computed complex to retained source cells.
-Create with `source_correspondence`. A retained retraction also supports the
-contravariant pullback of cocycles. Inspect with `describe` and validate with
-`check_source_correspondence`. Arrays are read-only mathematical data.
+A retained chain map from a computed complex to source cells. A chain map
+commutes with taking boundaries, so it sends a computed cycle to a source
+cycle. Construct the correspondence with `source_correspondence`.
+
+An optional retraction maps source chains back to computed chains and recovers
+each computed chain after its lift. Its transpose lets a computed cocycle
+evaluate source chains. Use `describe` to inspect retained counts, the field
+and retraction availability, and `check_source_correspondence` to validate the
+maps. Treat retained arrays as read only.
 """
 struct SourceCorrespondence{C,S,K,F}
     computed::C
@@ -18,10 +23,20 @@ struct SourceCorrespondence{C,S,K,F}
     certificate::Symbol
 end
 
-"""A checked chain or cochain on source cells, at one declared parameter.
-Use `lift_source_chain` or an ordinary persistence representative query to
-obtain it; `source_chain_data` exposes its coefficients and source identities.
-`visualize` draws the retained geometry without computing a homology basis.
+"""
+    SourceChain
+
+A chain or cochain on retained source cells at one parameter. Obtain it through
+`lift_source_chain` or an ordinary persistence representative query. A chain
+is a linear combination of cells; a cochain assigns values to those cells and
+evaluates chains by linearity. The `kind` records whether the object is an
+arbitrary chain, a cycle with zero boundary, or a cocycle vanishing on active
+boundaries.
+
+`describe` gives the degree, parameter, field and support size.
+`source_chain_data` returns the nonzero coefficients and corresponding source
+identities and geometry. `visualize` draws that retained geometry without
+computing a new homology basis.
 """
 struct SourceChain{S,K,F,P,M}
     source::S
@@ -33,7 +48,13 @@ struct SourceChain{S,K,F,P,M}
     metadata::M
 end
 
-"""A validation report for source maps or chains (`valid`, `issues`)."""
+"""
+    SourceValidationSummary
+
+A validation result for a source correspondence or chain. `valid` reports
+whether its required checks passed, and `issues` lists any failures. Use
+`describe` for a structured result containing the validation kind as well.
+"""
 struct SourceValidationSummary
     kind::Symbol
     valid::Bool
@@ -93,9 +114,14 @@ end
 """
     check_source_correspondence(c; throw=false)
 
-Check the two filtered complexes, chain-map equations and grade preservation.
-When a retraction is supplied also check `retraction * lift == identity` in
-each degree. A supplied split injection need not be a homotopy equivalence.
+Check the two filtered complexes and their map equations over the retained
+field. Each map must commute with taking boundaries and send active cells to
+active cells. If a retraction is retained, also check
+`retraction * lift == identity` in each degree.
+
+Return a `SourceValidationSummary` containing `valid` and `issues`, or raise an
+`ArgumentError` on failure when `throw=true`. The splitting equation makes the
+lift injective on homology; it does not exclude additional source classes.
 """
 function check_source_correspondence(c::SourceCorrespondence;throw=false)
     _source_validation(:source_correspondence,throw) do
@@ -117,20 +143,26 @@ end
     source_correspondence(computed, source=computed; field=PrimeField(2),
                           lift=nothing, retraction=nothing)
 
-Retain checked, filtration-preserving chain maps between `FilteredComplex`
-objects. With one object the maps are identities. With two objects and no maps,
-match exact source-cell identities and construct a retraction by equal-grade
-algebraic cancellations of the complement. This requires a genuine subcomplex
-with identical oriented boundaries; geometric proximity is never used.
-The complement must contract without crossing grades. An explicit `lift` may
-instead describe a general filtered chain map; a supplied retraction certifies
-a split injection, not an asserted equivalence. Maps use dimension-local rows
-(destination) and columns (domain), including degree zero.
+Retain checked maps between `FilteredComplex` objects. With one object, both
+maps are identities. With two objects and no explicit maps, match exact source
+identities and construct a retraction by canceling complementary cells with
+equal appearance grade sets. The computed cells must form a subcomplex of the
+source with the same oriented boundaries, and its complement must admit these
+cancellations.
 
-Exact rational and prime fields are supported. This operation retains both complexes and can introduce elimination fill.
-Call it explicitly when representatives are needed, including for
-multicritical/multiparameter inputs. It does not recover a forgotten basis
-correspondence from a module encoding.
+An explicit `lift` may instead be any filtered chain map: it commutes with
+boundaries and respects cell appearances. A supplied retraction must recover
+each computed chain after lifting it. This certifies an injection on homology
+but permits additional source classes outside the image. Map rows index
+destination cells and columns index domain cells within each degree. Supply
+all retained degrees, including zero, and pad absent top degrees explicitly.
+
+Exact rational and prime fields are supported. The result keeps both complexes;
+algebraic cancellation can increase the number of nonzero matrix entries.
+Use `describe` for counts and retained map information, and `lift_source_chain`
+for a cycle or cocycle at one parameter. Several parameters and several
+appearance grades per cell are supported. A module encoding without a retained
+cell correspondence does not provide the data needed by this constructor.
 """
 function source_correspondence(computed::FilteredComplex,source::FilteredComplex=computed;
         field=PrimeField(2),lift=nothing,retraction=nothing)
@@ -205,11 +237,14 @@ Base.show(io::IO,c::SourceCorrespondence)=print(io,"SourceCorrespondence(",sum(_
 """
     source_correspondence(data, filtration; field=PrimeField(2), cache=nothing)
 
-Construct and retain source geometry using `filtered_complex`. If ingestion
-collapses cells, also construct the same selected/sparsified model without
-collapse and certify its correspondence. Sampling and sparsification are not
-undone or claimed to preserve every original-data class. Unsupported geometric
-models require an explicitly supplied `FilteredComplex` and maps.
+Construct and retain source geometry through `filtered_complex`. When ingestion
+collapses cells, retain the same selected model before collapse and check a
+correspondence to it. Sampling and sparsification remain part of that model;
+restoring collapsed cells does not restore discarded points or omitted edges.
+
+The result is a `SourceCorrespondence`, which can be inspected with `describe`
+and queried with `lift_source_chain`. Inputs without automatic geometry require
+a supplied `FilteredComplex` with geometry and the required maps.
 """
 function source_correspondence(data,filtration::AbstractFiltration;field=PrimeField(2),cache=nothing)
     if filtration isa Union{RipsFiltration,LandmarkRipsFiltration}
@@ -241,8 +276,18 @@ function source_correspondence(data,filtration::AbstractFiltration;field=PrimeFi
     return source_correspondence(computed,original;field)
 end
 
-"""Copy the exact coefficients (canonical residues over prime fields), source identities, oriented cell geometry,
-grades, parameter, field and verification/optimization metadata of a source chain."""
+"""
+    source_chain_data(chain)
+
+Return the nonzero coefficients of a source chain together with their cell
+indices, source identities, oriented geometry and appearance grades. The result
+also gives the degree, chain kind, parameter, field, construction information
+and verification or optimization metadata. Over a prime field, coefficients
+are represented by their canonical integer residues.
+
+Cell indices are positions within the chain degree. Source identities refer
+to the input model and are retained separately from those positions.
+"""
 function source_chain_data(c::SourceChain)
     ids=findall(!iszero,c.coefficients);off=_source_offsets(c.source)[c.dimension+1]
     return (;dimension=c.dimension,kind=c.kind,parameter=c.parameter,field=c.field,
@@ -274,7 +319,17 @@ function _source_chain_equations(c)
     end
 end
 
-"""Check activity and the declared cycle/cocycle equation on original cells."""
+"""
+    check_source_chain(chain; throw=false)
+
+Check the source complex, support activity and the equation required by the
+chain kind. A cycle must have zero boundary; a cocycle must vanish on every
+active boundary. An arbitrary `:chain`, such as a death filling, need not
+satisfy either equation on its own.
+
+Return a `SourceValidationSummary` with `valid` and `issues`, or raise an
+`ArgumentError` on failure when `throw=true`.
+"""
 function check_source_chain(c::SourceChain;throw=false)
     _source_validation(:source_chain,throw) do
         check_filtered_complex(c.source;throw=true)
@@ -336,12 +391,23 @@ end
 """
     lift_source_chain(c; dim, coefficients, parameter, kind=:cycle)
 
-Lift a dimension-local coefficient vector through a `SourceCorrespondence`.
-Checks activity and the cycle equation before and after lifting. For
-`kind=:cocycle`, uses the transpose of the retained retraction and restricts to
-active source cells: cochains have contravariant variance. `kind=:chain` is
-for arbitrary chains such as death fillings, and asserts no cycle equation.
-No geometric or homological correspondence is inferred from an annotation.
+Apply a retained `SourceCorrespondence` to a coefficient vector indexed by
+computed cells of degree `dim`. Check activity and the required cycle or
+cocycle equation before and after mapping, then return a `SourceChain` on the
+source cells at `parameter`.
+
+With `kind=:cocycle`, use the transpose of the retained retraction and restrict
+the result to active source cells. A computed cocycle evaluates a source chain
+by first mapping that chain back to the computed complex. A lift without a
+retraction cannot perform this operation. Use `kind=:chain` for arbitrary
+chains, including fillings; this mode checks activity without imposing a cycle
+equation.
+
+Coefficients must be integers, elements of the retained field, or rational
+numbers over `QQField()`. Supply one coefficient per computed cell in the
+chosen degree and a parameter tuple with one entry per filtration coordinate;
+a scalar is accepted for one parameter. The supplied maps determine the basis
+correspondence.
 """
 function lift_source_chain(c::SourceCorrespondence;dim,coefficients,parameter,kind=:cycle)
     dim isa Int && 0<=dim<length(c.lift) || throw(ArgumentError("dim must index a retained chain degree."))
@@ -372,14 +438,19 @@ end
 """
     optimize_representative(c; weights=nothing, max_candidates=100000)
 
-Find a minimum weighted-support cycle homologous to the nonzero `SourceChain`
-`c` at its declared parameter, over its prime field. Weights are nonnegative
-finite reals, one per dimension-local source cell (default one). Enumerates
-the finite boundary image exactly; refuses before enumeration if its size
-exceeds `max_candidates`. Ties keep the first enumerated chain. The result
-records weights, objective, candidate count and an explicit boundary-adjustment
-witness. This is a bounded exact guarantee for the active finite complex, not
-a shortest Euclidean cycle or a persistent choice across parameters.
+Find a cycle of minimum weighted support in the homology class of the nonzero
+`SourceChain` `c`, at its declared parameter and over its prime field. Weights
+are finite nonnegative real numbers, one per source cell of that degree; the
+default gives every cell weight one. The objective sums weights at cells with
+nonzero coefficients, regardless of coefficient magnitude.
+
+Enumerate the active boundary image exactly, refusing the problem before
+search if the number of candidates exceeds `max_candidates`. Ties keep the
+first enumerated chain. The returned source cycle records its weights,
+objective, candidate count and an explicit chain whose boundary is the
+difference from the original cycle. This certifies the unchanged nonzero class.
+The minimum uses the declared cell weights and active complex; it need not
+minimize Euclidean length or remain minimal at another parameter.
 """
 function optimize_representative(c::SourceChain;weights=nothing,max_candidates=100000)
     check_source_chain(c;throw=true)

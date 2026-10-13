@@ -103,7 +103,7 @@ The edge still has the other vertex as its relative boundary, so it is not
 yet a relative cycle. At three both endpoints belong to $A$, making the
 edge a cycle; at four the edge itself enters $A$, and its class becomes zero.
 
-![Timeline for the changing pair. The first vertex survives in quotient chains from 0 to 2, the second from 0 to 3, and the edge from 1 to 4. The relative H0 intervals are [0,1) and [0,2), while relative H1 has [3,4). Filled endpoints are included and open endpoints are excluded.](../assets/relative_persistence/delayed_entry.svg)
+![Timeline for the changing pair. The first vertex survives in quotient chains from 0 to 2, the second from 0 to 3, and the edge from 1 to 4. The relative degree zero intervals run from zero to one and from zero to two. The degree one interval runs from three to four. Each interval includes its left endpoint and excludes its right endpoint.](../assets/relative_persistence/delayed_entry.svg)
 
 *The upper rows show when each cell is available as a quotient coordinate.
 The lower rows show the resulting homology intervals. Having an edge

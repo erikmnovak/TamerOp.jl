@@ -22,6 +22,8 @@ grade_orientation(x::FilteredComplex)=x.orientation
 cell_geometry(x::FilteredComplex,i::Integer)=x.geometry[i]
 """`cell_source(x, i)` returns the source identity of global cell `i`, before drawing."""
 cell_source(x::FilteredComplex,i::Integer)=x.sources[i]
+"""Return retained codimension-one face indices, or `nothing` when geometric incidence was not supplied. Indices are global and independent of boundary coefficients."""
+face_incidence(x::FilteredComplex)=get(x.provenance,:face_incidence,nothing)
 function describe(x::FilteredComplex)
     (;kind=:filtered_complex,cell_counts=DataTypes.cell_counts(x.complex),
       parameter_dim=DataTypes.parameter_dim(x.complex),orientation=x.orientation,
@@ -64,6 +66,18 @@ function check_filtered_complex(x::FilteredComplex;throw=false)
         end
         B=DataTypes.boundary_maps(G);length(B)==length(counts)-1 || error("wrong number of boundary maps.")
         offsets=cumsum(vcat(0,counts))
+        faces=face_incidence(x)
+        if faces!==nothing
+            length(faces)==n || error("Face incidence must cover every cell.")
+            for i in 1:n
+                allunique(faces[i]) || error("Repeated face at cell $i.")
+                all(j->j isa Int && 1<=j<=n && dims[j]==dims[i]-1,faces[i]) || error("Invalid face index at cell $i.")
+                for j in faces[i], g in DataTypes.cell_grade_set(G,i)
+                    any(f->all(k->x.orientation[k]==1 ? f[k]<=g[k] : f[k]>=g[k],1:N),DataTypes.cell_grade_set(G,j)) ||
+                        error("Geometric face $j enters after cell $i.")
+                end
+            end
+        end
         for d in eachindex(B)
             size(B[d])==(counts[d],counts[d+1]) || error("boundary $d has the wrong shape.")
             # BigInt prevents overflow from certifying a false chain identity.
@@ -72,6 +86,7 @@ function check_filtered_complex(x::FilteredComplex;throw=false)
             rows,cols,vals=findnz(B[d])
             for (r,c,v) in zip(rows,cols,vals)
                 iszero(v) && continue
+                faces===nothing || offsets[d]+r in faces[offsets[d+1]+c] || error("Retained faces omit nonzero boundary incidence.")
                 face=DataTypes.cell_grade_set(G,offsets[d]+r)
                 coface=DataTypes.cell_grade_set(G,offsets[d+1]+c)
                 all(g->any(f->all(k->x.orientation[k]==1 ? f[k]<=g[k] : f[k]>=g[k],1:N),face),coface) ||
@@ -88,7 +103,7 @@ end
 
 """
     filtered_complex(G; geometry, orientation=(1,...), source_ids=nothing,
-                     construction="supplied cellular complex", model=:original)
+                     construction="supplied cellular complex", model=:original, faces=nothing)
     filtered_complex(tree; coordinates, orientation=(1,...))
     filtered_complex(data, filtration; cache=:auto)
 
@@ -98,6 +113,11 @@ global cell (dimension-major order). Polygon vertices must be cyclic; edges may
 be polylines. Higher cells retain vertices but are displayed through a labelled
 2-skeleton. Coordinates may have more than three components; projection is an
 explicit visualization choice. `source_ids` defaults to `(dimension, cell_id)`.
+
+`faces` supplies global codimension-one face indices independently of boundary
+coefficients. Automatic simplicial and cubical constructors retain these faces,
+including periodic incidences that cancel in the boundary matrix. Supplied
+incidence describes the cell model; geometry alone does not infer it.
 
 The data form constructs supported point-cloud simplicial, embedded graph or
 vertex-valued cubical image filtrations. It records actual construction choices,
@@ -109,6 +129,7 @@ lifting or representative optimization is performed.
 """
 function filtered_complex(G::Union{GradedComplex,MultiCriticalGradedComplex};geometry=nothing,
         cubical_shape=nothing,periodic=false,
+        faces=nothing,
         orientation=ntuple(_->1,DataTypes.parameter_dim(G)),source_ids=nothing,
         construction="supplied cellular complex",model=:original,provenance=(;))
     model in (:original,:reduced) || throw(ArgumentError("model must be :original or :reduced."))
@@ -122,6 +143,7 @@ function filtered_complex(G::Union{GradedComplex,MultiCriticalGradedComplex};geo
         all(pair->abs.(pair[1])==abs.(pair[2]),zip(structure.boundaries,DataTypes.boundary_maps(G))) ||
             throw(ArgumentError("Cubical incidences do not match the supplied complex."))
         geometry,identities=_filtered_cubical_geometry(structure.cells_by_dim,Val(N))
+        faces===nothing && (faces=_cubical_face_incidence(identities,shape,per))
         source_ids === nothing && (source_ids=identities)
         provenance=merge(provenance,(;periodic=per,domain=ntuple(i->(1,shape[i]+Int(per[i])),N),source_mapping=:cubical_origin_mask))
     end
@@ -135,6 +157,7 @@ function filtered_complex(G::Union{GradedComplex,MultiCriticalGradedComplex};geo
     p=merge((;requested=String(construction),effective=String(construction),grade_scale=:supplied,
         source_mapping=:supplied,periodic=(),domain=nothing,lifting_maps=nothing),provenance,
         (;ambient_dim=D,model))
+    faces===nothing || (p=merge(p,(;face_incidence=[Int.(collect(f)) for f in faces])))
     x=FilteredComplex(G,vertices,sources,Tuple(orientation),p)
     check_filtered_complex(x;throw=true)
     return x
@@ -148,7 +171,7 @@ function filtered_complex(ST::SimplexTreeMulti;coordinates,orientation=ntuple(_-
     all(s->all(v->1<=v<=size(C,1),s),simplices) || throw(ArgumentError("A simplex has no supplied vertex coordinate."))
     return filtered_complex(_graded_complex_from_simplex_tree(ST);
         geometry=[[Tuple(C[v,:]) for v in s] for s in simplices],source_ids=Tuple.(simplices),
-        orientation,construction,model,provenance)
+        faces=_simplicial_face_incidence(Tuple.(simplices)),orientation,construction,model,provenance)
 end
 
 function _filtered_simplicial_geometry(G,C,vertex_ids)
@@ -212,8 +235,30 @@ function filtered_complex(data::Union{PointCloud,GraphData,EmbeddedPlanarGraph2D
             for (i,poly) in enumerate(data.polylines);geometry[n+i]=Tuple.(poly);end
         end
     end
-    return filtered_complex(G;geometry,source_ids=sources,orientation,
+    faces=data isa ImageNd ? _cubical_face_incidence(sources,size(data.data),provenance.periodic) : _simplicial_face_incidence(sources)
+    return filtered_complex(G;geometry,source_ids=sources,faces,orientation,
         construction=string(spec.kind),model,provenance)
+end
+
+function _simplicial_face_incidence(simplices)
+    lookup=Dict(Tuple(sort(collect(s)))=>i for (i,s) in enumerate(simplices))
+    return [length(s)==1 ? Int[] : [lookup[Tuple(sort([s[k] for k in eachindex(s) if k!=j]))] for j in eachindex(s)] for s in simplices]
+end
+
+function _cubical_face_incidence(sources,shape,periodic)
+    lookup=Dict((s.origin,s.mask)=>i for (i,s) in enumerate(sources))
+    return map(sources) do s
+        faces=Int[]
+        for k in eachindex(s.mask)
+            s.mask[k]==0 && continue
+            mask=ntuple(j->j==k ? 0 : s.mask[j],length(shape))
+            for step in (0,1)
+                origin=ntuple(j->j==k ? (periodic[j] ? mod1(s.origin[j]+step,shape[j]) : s.origin[j]+step) : s.origin[j],length(shape))
+                push!(faces,lookup[(origin,mask)])
+            end
+        end
+        unique(faces)
+    end
 end
 
 function _filtered_cubical_geometry(cells,::Val{N}) where {N}

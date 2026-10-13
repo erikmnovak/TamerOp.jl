@@ -3198,7 +3198,55 @@ end
     @test R1 === R2
 end
 
-@testset "ChangeOfPosets derived coefficient fast path parity" begin
+@testset "A32 derived right pushforward cycle oracle" begin
+    owner = TO.ChangeOfPosets
+    MC = TO.ModuleComplexes
+    # The order complex is a circle: its constant rank-two diagram has H^0
+    # and H^1 of dimension two and no higher cohomology. Scalar and nilpotent
+    # coefficient maps act on both copies in the same way.
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101))
+        K = CM.coeff_type(field)
+        order = Matrix{Bool}(I,6,6)
+        for (u,v) in ((1,4),(2,4),(2,5),(3,5),(3,6),(1,6))
+            order[u,v] = true
+        end
+        Q = FF.FinitePoset(order); P = chain_poset(1)
+        pi = TO.Encoding.EncodingMap(Q,P,ones(Int,6))
+        N = MD.PModule{K}(Q,fill(2,6),
+            Dict((u,v)=>Matrix{K}(I,2,2) for (u,v) in FF.cover_edges(Q));field)
+        opts = OPT.DerivedFunctorOptions(maxdeg=2)
+        res = DF.injective_resolution(N,OPT.ResolutionOptions(maxlen=3,check=true);threads=false)
+        for A in (CM.coerce(field,2)*Matrix{K}(I,2,2), K[0 1;0 0]), threads in (false,true)
+            f = MD.PMorphism(N,N,[copy(A) for _ in 1:6])
+            sc = CM.SessionCache()
+            F = owner.pushforward_right_complex(pi,f,opts;res_dom=res,res_cod=res,threads,session_cache=sc)
+            @test MC.check_module_complex(F.C).valid
+            @test MC.check_module_complex(F.D).valid
+            @test MC.check_module_complex_map(F).valid
+            @test owner.pushforward_right_complex(pi,f,opts;res_dom=res,res_cod=res,threads,session_cache=sc) === F
+            for t in 0:2
+                g = MC.induced_map_on_cohomology_modules(F,t)
+                @test g.dom.dims == g.cod.dims == [t<2 ? 2 : 0]
+                @test MD.check_morphism(g).valid
+                if t<2
+                    B = Matrix(g.comps[1])
+                    if iszero(A[1,2])
+                        @test B == A
+                    else
+                        @test FL.rank(field,B)==1
+                        @test iszero(B*B)
+                    end
+                end
+            end
+            CM._clear_session_cache!(sc)
+            G = owner.pushforward_right_complex(pi,f,opts;res_dom=res,res_cod=res,threads,session_cache=sc)
+            @test G !== F
+            @test all(a.comps==b.comps for (a,b) in zip(F.comps,G.comps))
+        end
+    end
+end
+
+@testset "ChangeOfPosets derived map shortcut parity" begin
     field = CM.QQField()
     K = CM.coeff_type(field)
     Q = chain_poset(4)
@@ -3248,24 +3296,18 @@ end
     resI = DF.injective_resolution(M, OPT.ResolutionOptions(maxlen=2))
 
     old_left_fast = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[]
-    old_right_fast = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[]
     old_left_plan_cache = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[]
     old_left_diffs = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[]
     old_left_cohom = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[]
-    old_right_plan_cache = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[]
     old_right_diffs = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[]
-    old_right_matrix_recur = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[]
     old_right_shared = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[]
     old_right_identity = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[]
     try
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[] = false
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[] = false
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[] = false
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[] = false
         Lcold = TO.ChangeOfPosets.pushforward_left_complex(
@@ -3288,13 +3330,10 @@ end
         )
 
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[] = true
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[] = true
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[] = true
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[] = true
         Lfast = TO.ChangeOfPosets.pushforward_left_complex(
@@ -3333,13 +3372,10 @@ end
         end
     finally
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH[] = old_left_fast
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[] = old_right_fast
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[] = old_left_plan_cache
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA[] = old_left_diffs
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT[] = old_left_cohom
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[] = old_right_plan_cache
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA[] = old_right_diffs
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[] = old_right_matrix_recur
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH[] = old_right_shared
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH[] = old_right_identity
     end
@@ -4576,4 +4612,425 @@ end
         @test_throws AssertionError DF.Utils.solve_particular(field, A, zeros(K, 3, 1))
         @test A == beforeA && B == beforeB
     end
+end
+
+# One-vertex augmented complexes isolate the four resolution composition
+# checks. All terms are projective and injective; minimality is not assumed.
+function _a48_composition_resolutions(field, A, B)
+    K = CM.coeff_type(field)
+    P = chain_poset(1)
+    mods = [MD.PModule{K}(P,[d],Dict{Tuple{Int,Int},Matrix{K}}();field)
+            for d in (0,size(A,1),size(A,2),size(B,2))]
+    Z, X, Y, W = mods
+    g, f = MD.PMorphism(Y,X,[A]), MD.PMorphism(W,Y,[B])
+    tozero = MD.PMorphism(X,Z,[zeros(K,0,size(A,1))])
+    fromzero = MD.PMorphism(Z,W,[zeros(K,size(B,2),0)])
+    gens(M) = fill(1,only(M.dims))
+    ps = (DF.ProjectiveResolution(X,[Y,W],gens.([Y,W]),[f],[sparse(B)],g),
+          DF.ProjectiveResolution(Z,[X,Y,W],gens.([X,Y,W]),[g,f],[sparse(A),sparse(B)],tozero))
+    ins = (DF.InjectiveResolution(W,[Y,X],gens.([Y,X]),[g],f),
+           DF.InjectiveResolution(Z,[W,Y,X],gens.([W,Y,X]),[f,g],fromzero))
+    return ps, ins, f, g
+end
+
+@testset "A48 resolution relations retain numerical operand scales" begin
+    AB = TamerOp.AbelianCategories
+    for T in (Float32,Float64), storage in (identity,sparse)
+        field = CM.RealField(T)
+        for scale in T.((1e-10,1,1e10)), delta in (eps(T),T(0.05))
+            A, B = storage(scale .* T[1 1]), storage(scale .* reshape(T[-1,1+delta],2,1))
+            ps, ins, f, g = _a48_composition_resolutions(field,A,B)
+            valid = delta == eps(T)
+            for p in ps
+                @test DF.check_projective_resolution(p).valid == valid
+                valid || @test_throws ArgumentError DF.check_projective_resolution(p;throw=true)
+            end
+            for r in ins
+                @test DF.check_injective_resolution(r).valid == valid
+                valid || @test_throws ArgumentError DF.check_injective_resolution(r;throw=true)
+            end
+            @test AB._zero_composition(field,g,f) == valid
+            # Standalone nonzero maps have no operand scale to borrow.
+            valid && scale == 1 && @test !AB.is_zero_morphism(DF.Utils.compose(g,f))
+        end
+    end
+    for (field,delta,valid) in (
+        (CM.RealField(Float64;rtol=0.0),eps(),false),
+        (CM.RealField(Float64;rtol=0.0,atol=1e-10),1e-12,true),
+        (CM.RealField(Float64;rtol=0.0,atol=1e-10),1e-6,false),
+        (CM.RealField(Float64),NaN,false),
+        (CM.RealField(Float64),Inf,false),
+        (CM.QQField(),1//10^12,false),
+        (CM.F2(),1,false),(CM.F3(),1,false),(CM.Fp(101),1,false))
+        K = CM.coeff_type(field)
+        A, B = K[1 1], reshape(K[-1,1+CM.coerce(field,delta)],2,1)
+        ps, ins, _, _ = _a48_composition_resolutions(field,A,B)
+        @test all(p -> DF.check_projective_resolution(p).valid == valid,ps)
+        @test all(r -> DF.check_injective_resolution(r).valid == valid,ins)
+    end
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101),CM.RealField(Float64))
+        K = CM.coeff_type(field)
+        ps, ins, _, _ = _a48_composition_resolutions(field,K[1 1],reshape(K[-1,1],2,1))
+        @test all(p -> DF.check_projective_resolution(p;throw=true).valid,ps)
+        @test all(r -> DF.check_injective_resolution(r;throw=true).valid,ins)
+    end
+    field = CM.RealField(Float64)
+    ps, ins, f, g = _a48_composition_resolutions(field,[1.0 1.0],reshape([-1.0,nextfloat(1.0)],2,1))
+    ses = AB.short_exact_sequence(f,g)
+    @test AB.is_exact(ses)
+    @test AB.check_short_exact_sequence(ses).valid
+    # No components may be silently omitted after mutation of stored data.
+    empty!(f.comps)
+    @test !DF.check_projective_resolution(ps[1]).valid
+    @test !DF.check_injective_resolution(ins[1]).valid
+end
+
+# Dense naturality oracle, independent of the streaming and generator solvers.
+function _a47_dense_oracle(M, N)
+    K = CM.coeff_type(M.field)
+    offsets = cumsum(vcat(0, M.dims .* N.dims))
+    blocks = Matrix{K}[]
+    for (u, v) in FF.cover_edges(M.Q)
+        A = zeros(K, M.dims[u] * N.dims[v], offsets[end])
+        A[:, offsets[u]+1:offsets[u+1]] +=
+            kron(Matrix{K}(I, M.dims[u], M.dims[u]), Matrix(N.edge_maps[u,v]))
+        A[:, offsets[v]+1:offsets[v+1]] -=
+            kron(transpose(Matrix(M.edge_maps[u,v])), Matrix{K}(I, N.dims[v], N.dims[v]))
+        push!(blocks, A)
+    end
+    equations = isempty(blocks) ? zeros(K, 0, offsets[end]) : reduce(vcat, blocks)
+    return equations, Matrix(FL.nullspace(M.field, equations))
+end
+
+# Convex intervals guarantee commutative diagrams. Independent local gauges
+# destroy coordinate sparsity while retaining a known isomorphism to the sum.
+function _a47_interval_sum(P, field, intervals, rng; sparse_maps=false)
+    K = CM.coeff_type(field)
+    active = [[j for (j, (a,b)) in enumerate(intervals)
+               if FF.leq(P,a,v) && FF.leq(P,v,b)] for v in 1:FF.nvertices(P)]
+    dims = length.(active)
+    gauges = [Matrix{K}(I,d,d) for d in dims]
+    for v in eachindex(dims), i in 1:dims[v], j in i+1:dims[v]
+        gauges[v][i,j] = CM.coerce(field, rand(rng, -2:2))
+    end
+    inverses = [FL.solve_fullcolumn(field, g, Matrix{K}(I,size(g,1),size(g,1))) for g in gauges]
+    edges = Dict{Tuple{Int,Int},Matrix{K}}()
+    for (u,v) in FF.cover_edges(P)
+        A = K[one(K) * (i == j) for i in active[v], j in active[u]]
+        edges[u,v] = gauges[v] * A * inverses[u]
+    end
+    maps = sparse_maps ? Dict(e => sparse(A) for (e,A) in edges) : edges
+    return MD.PModule{K}(P,dims,maps;field)
+end
+
+@testset "A47 generator Hom matches independent naturality kernels" begin
+    ES = DF.ExtTorSpaces
+    for field in (CM.QQField(), CM.F2(), CM.F3(), CM.Fp(101))
+        K = CM.coeff_type(field)
+        rng = MersenneTwister(47001)
+        for P0 in (chain_poset(5), diamond_poset(), boolean_lattice_B3_poset())
+            perm = randperm(rng, FF.nvertices(P0))
+            P = FF.FinitePoset(FF.leq_matrix(P0)[perm,perm])
+            intervals = [(a,b) for a in 1:FF.nvertices(P), b in 1:FF.nvertices(P) if FF.leq(P,a,b)]
+            for trial in 1:8
+                source_intervals = rand(rng, intervals, rand(rng, 0:5))
+                target_intervals = rand(rng, intervals, rand(rng, 0:5))
+                M = _a47_interval_sum(P,field,source_intervals,rng;sparse_maps=iseven(trial))
+                N = _a47_interval_sum(P,field,target_intervals,rng;sparse_maps=isodd(trial))
+                @test MD.check_module(M).valid && MD.check_module(N).valid
+                A, oracle = _a47_dense_oracle(M,N)
+                offsets = ES._hom_offsets(M,N)
+                plan = ES._hom_generator_plan(M,N)
+                for v in eachindex(M.dims)
+                    incoming = M.edge_maps.maps_from_pred[v]
+                    image = isempty(incoming) ? zeros(K,M.dims[v],0) : reduce(hcat,incoming)
+                    @test plan.offsets[v+1]-plan.offsets[v] ==
+                        (M.dims[v]-FL.rank(field,image))*N.dims[v]
+                end
+                B = ES._hom_generator_basis(M,N,offsets,plan)
+                @test iszero(A * B)
+                @test size(B,2) == size(oracle,2)
+                @test FL.rank(field,B) == size(B,2)
+                @test FL.rank(field,hcat(B,oracle)) == size(B,2)
+                direct = ES._hom_naturality_basis(M,N,offsets)
+                @test FL.rank(field,hcat(B,direct)) == size(B,2)
+                H = DF.Hom(M,N)
+                @test getfield(H,:basis) === nothing || size(B,1) == 0
+                @test DF.dim(H) == size(B,2)
+                @test all(f -> MD.check_morphism(f).valid, DF.basis(H))
+            end
+        end
+        # A relation at a merge cannot be inferred from either branch alone.
+        P = diamond_poset()
+        M = _a47_interval_sum(P,field,[(1,4),(2,2),(3,3)],rng)
+        N = _a47_interval_sum(P,field,[(1,2),(1,3),(4,4)],rng)
+        A,B = _a47_dense_oracle(M,N)
+        plan = ES._hom_generator_plan(M,N)
+        reduced = ES._hom_generator_basis(M,N,ES._hom_offsets(M,N),plan)
+        @test iszero(A*reduced) && FL.rank(field,hcat(B,reduced)) == size(B,2) == size(reduced,2)
+    end
+end
+
+@testset "A47 Hom routing preserves maps and cache lifecycle" begin
+    ES = DF.ExtTorSpaces
+    for field in (CM.QQField(), CM.F2(), CM.F3(), CM.Fp(101))
+        K = CM.coeff_type(field)
+        P = chain_poset(32)
+        rng = MersenneTwister(47002)
+        M = _a47_interval_sum(P,field,fill((1,32),3),rng)
+        N = _a47_interval_sum(P,field,fill((1,32),2),rng)
+        H = DF.Hom(M,N)
+        @test DF.dim(H) == 6
+        @test DF.hom_summary(H).algorithm == H.algorithm
+        @test H.algorithm == (field isa CM.QQField ? :projective_forest : :generators)
+        @test DF.hom_summary(H).variables == H.variables
+        @test H.variables == 6
+        @test !DF.hom_summary(H).basis_cached
+        @test all(f -> MD.check_morphism(f).valid, DF.basis(H))
+        @test DF.hom_summary(H).basis_cached
+        f = DF.basis(DF.Hom(M,M))[1]
+        g = DF.basis(DF.Hom(N,N))[end]
+        cache = DF.HomSystemCache{K}()
+        @test isempty(cache.hom)
+        cached = DF.hom_with_cache(M,N;cache)
+        @test DF.hom_with_cache(M,N;cache) === cached
+        @test cached.basis_matrix == H.basis_matrix
+        pre = Matrix(DF.precompose_matrix_cached(H,H,f;cache))
+        post = Matrix(DF.postcompose_matrix_cached(H,H,g;cache))
+        @test post*pre == pre*post
+        for (j,h) in enumerate(DF.basis(H))
+            actual_pre = vcat([vec(h.comps[v]*f.comps[v]) for v in 1:32]...)
+            actual_post = vcat([vec(g.comps[v]*h.comps[v]) for v in 1:32]...)
+            @test H.basis_matrix*pre[:,j] == actual_pre
+            @test H.basis_matrix*post[:,j] == actual_post
+        end
+        empty!(cache.hom)
+        @test DF.hom_with_cache(M,N;cache) !== cached
+        @test DF.hom_with_cache(M,N;cache).basis_matrix == H.basis_matrix
+        tasks = [Threads.@spawn DF.Hom(M,N) for _ in 1:8]
+        @test all(T -> fetch(T).basis_matrix == H.basis_matrix, tasks)
+    end
+    # Numerical tolerance policy stays on the numerical kernel.
+    field = CM.RealField(Float64;atol=1e-12,rtol=1e-10)
+    P = chain_poset(32)
+    M = _a47_interval_sum(P,field,fill((1,32),2),MersenneTwister(47))
+    H = DF.Hom(M,M)
+    @test H.algorithm == :numerical
+    @test DF.dim(H) == 4
+    @test all(f -> MD.check_morphism(f).valid,DF.basis(H))
+end
+
+@testset "A47 generator gate and projective forest hypotheses" begin
+    ES = DF.ExtTorSpaces
+    for field in (CM.QQField(), CM.F2(), CM.F3(), CM.Fp(101))
+        K = CM.coeff_type(field)
+        rng = MersenneTwister(47003)
+        P = chain_poset(32)
+        full = _a47_interval_sum(P,field,fill((1,32),3),rng)
+        later = _a47_interval_sum(P,field,fill((17,32),3),rng)
+        dying = _a47_interval_sum(P,field,fill((1,16),3),rng)
+        for (M,N) in ((full,later),(dying,full))
+            H = DF.Hom(M,N)
+            @test DF.dim(H) == 0
+            @test H.algorithm in (:generators,:projective_forest)
+            @test size(H.basis_matrix) == (sum(M.dims .* N.dims),0)
+            @test isempty(DF.basis(H))
+        end
+        zero_maps = MD.PModule{K}(P,fill(3,32),
+            Dict(e => zeros(K,3,3) for e in FF.cover_edges(P));field)
+        @test !ES._hom_generator_candidate(zero_maps,zero_maps,288)
+        @test DF.Hom(zero_maps,zero_maps).algorithm == :naturality
+        @test DF.dim(DF.Hom(zero_maps,zero_maps)) == 288
+        # A cheap structural bound can overestimate the ranks. The exact
+        # generator count must still reject the candidate after preparation.
+        rank_one = MD.PModule{K}(P,fill(3,32),
+            Dict(e => ones(K,3,3) for e in FF.cover_edges(P));field)
+        @test ES._hom_generator_candidate(rank_one,full,288)
+        plan = ES._hom_generator_plan(rank_one,full)
+        @test plan.offsets[end] == 195
+        @test !ES._hom_projective_forest(rank_one,plan)
+        H = DF.Hom(rank_one,full)
+        @test H.algorithm == :naturality
+        @test DF.dim(H) == 9
+        @test all(f -> MD.check_morphism(f).valid,DF.basis(H))
+        for (n,expected) in ((31,:naturality),(32,:generators))
+            Q = chain_poset(n)
+            X = _a47_interval_sum(Q,field,fill((1,n),2),rng)
+            @test DF.Hom(X,X).algorithm == expected
+        end
+        # Even substantial compression does not pay for coordinate setup
+        # when each vertex contributes very few original unknowns.
+        Q = chain_poset(48)
+        X = _a47_interval_sum(Q,field,[(1,48)],rng)
+        Y = _a47_interval_sum(Q,field,fill((1,48),3),rng)
+        @test !ES._hom_generator_candidate(X,Y,144)
+        H = DF.Hom(X,Y)
+        @test H.algorithm == :naturality
+        @test DF.dim(H) == 3
+        # Three distinct lines meeting in a plane form a noninterval
+        # indecomposable. Subdivide its arms and take two copies: the
+        # endomorphisms are exactly a shared 2-by-2 matrix on all arms.
+        n = 31
+        order = Matrix{Bool}(I,n,n)
+        for arm in 0:2, i in 1:10, j in i:10
+            order[10arm+i,10arm+j] = true
+        end
+        order[:,n] .= true
+        Q = FF.FinitePoset(order)
+        Id, Z = Matrix{K}(I,2,2), zeros(K,2,2)
+        maps = Dict(e => (e[2] != n ? Id : e[1] == 10 ? vcat(Id,Z) :
+                         e[1] == 20 ? vcat(Z,Id) : vcat(Id,Id)) for e in FF.cover_edges(Q))
+        X = MD.PModule{K}(Q,vcat(fill(2,30),4),maps;field)
+        H = DF.Hom(X,X)
+        @test H.algorithm == :generators
+        @test H.variables == 12
+        @test DF.dim(H) == 4
+        @test FL.rank(field,H.basis_matrix) == 4
+        @test all(f -> MD.check_morphism(f).valid,DF.basis(H))
+        # A projective source may acquire new generators along the chain;
+        # its target can have births and deaths. No target injectivity is used.
+        Q = chain_poset(8)
+        M = _a47_interval_sum(Q,field,[(1,8),(1,8),(3,8),(6,8)],rng)
+        N = _a47_interval_sum(Q,field,[(1,5),(2,8),(4,6)],rng)
+        A,oracle = _a47_dense_oracle(M,N)
+        plan = ES._hom_generator_plan(M,N)
+        B = ES._hom_forest_basis(M,N,ES._hom_offsets(M,N),plan)
+        @test iszero(A*B)
+        @test size(B,2) == size(oracle,2) == FL.rank(field,hcat(B,oracle))
+        @test ES._hom_projective_forest(M,plan) == (field isa CM.QQField)
+        # An outward fork has independent target maps and no merge. Relabel
+        # its root to 3 to exercise topological processing in the forest route.
+        order = Matrix{Bool}(I,4,4)
+        order[3,[1,2,4]] .= true
+        fork = FF.FinitePoset(order)
+        dm, dn = [5,5,3,5], [1,3,2,0]
+        gauges = [Matrix{K}(I,d,d) for d in dm]
+        for v in 1:4, j in 1:dm[v]-1
+            gauges[v][j,j+1] = CM.coerce(field,j+v)
+        end
+        root_inverse = FL.solve_fullcolumn(field,gauges[3],Matrix{K}(I,3,3))
+        source_edges = Dict((3,v) => gauges[v]*vcat(Matrix{K}(I,3,3),zeros(K,2,3))*root_inverse for v in (1,2,4))
+        target_edges = Dict((3,v) => K[CM.coerce(field,rand(rng,-2:2)) for i in 1:dn[v],j in 1:2] for v in (1,2,4))
+        X = MD.PModule{K}(fork,dm,source_edges;field)
+        Y = MD.PModule{K}(fork,dn,target_edges;field)
+        A,oracle = _a47_dense_oracle(X,Y)
+        plan = ES._hom_generator_plan(X,Y)
+        B = ES._hom_forest_basis(X,Y,ES._hom_offsets(X,Y),plan)
+        @test iszero(A*B)
+        @test size(B,2) == 14 == size(oracle,2) == FL.rank(field,hcat(B,oracle))
+        # The rational specialization must reject merges, even if all
+        # individual edge maps are injective.
+        Q = diamond_poset()
+        X = _a47_interval_sum(Q,field,fill((1,4),3),rng)
+        @test !ES._hom_projective_forest(X,ES._hom_generator_plan(X,X))
+    end
+end
+
+# Direct sums of box intervals, with an independent tensor-product resolution
+# oracle: each finite upper face contributes one relation, their intersections
+# give the higher syzygies. Coordinates below are logical, increasing indices.
+function _a31_boxes(P, boxes, field)
+    sizes=P.sizes
+    orientation=P isa FF.ProductOfChainsPoset ? P.orientation : map(_->1,sizes)
+    label(x)=1+sum(((orientation[i]==1 ? x[i] : sizes[i]+1-x[i])-1)*P.strides[i] for i in eachindex(sizes))
+    points=collect(Iterators.product((1:s for s in sizes)...))
+    active=Vector{Vector{Int}}(undef,FF.nvertices(P))
+    for x in points
+        active[label(x)]=[i for (i,(lo,hi)) in enumerate(boxes) if all(lo[k]<=x[k]<=hi[k] for k in eachindex(x))]
+    end
+    K=CM.coeff_type(field)
+    maps=Dict((u,v)=>K[a==b for a in active[v],b in active[u]] for (u,v) in FF.cover_edges(P))
+    M=MD.PModule{K}(P,length.(active),maps;field)
+    expected=zeros(Int,length(sizes)+1,FF.nvertices(P))
+    for (lo,hi) in boxes
+        finite=[i for i in eachindex(sizes) if hi[i]<sizes[i]]
+        for mask in 0:(1<<length(finite))-1
+            grade=collect(lo)
+            for (j,i) in enumerate(finite)
+                mask & (1<<(j-1)) != 0 && (grade[i]=hi[i]+1)
+            end
+            expected[count_ones(mask)+1,label(grade)]+=1
+        end
+    end
+    return M,expected
+end
+
+@testset "A31 local Koszul Betti oracle" begin
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101),CM.RealField(Float64))
+        K=CM.coeff_type(field)
+        for P in (FF.ProductOfChainsPoset((3,3)),
+                  FF.ProductOfChainsPoset((3,3);orientation=(-1,1)),
+                  FF.GridPoset(([0.,0.2,5.],[-2.,1.,7.])))
+            M,expected=_a31_boxes(P,[((1,1),(1,1)),((1,2),(3,2)),((2,1),(3,3))],field)
+            opts=OPT.ResolutionOptions(maxlen=3,minimal=true)
+            reference=DF.projective_resolution(M,opts;threads=false)
+            @test DF.betti_table(reference;pad_to=2)==expected
+            ids=[9,1,5,2,1,7]
+            for threads in (false,true)
+                @test DF.betti_table(M;vertices=collect(1:9),opts,pad_to=2,threads)==expected
+                @test DF.betti_table(M;vertices=ids,opts,pad_to=2,threads)==expected[:,ids]
+            end
+            for maxlen in 0:2
+                @test DF.betti_table(M;vertices=ids,opts=OPT.ResolutionOptions(;maxlen),pad_to=3)==vcat(expected[1:maxlen+1,ids],zeros(Int,3-maxlen,length(ids)))
+            end
+            @test TamerOp.betti_table(M;vertices=ids,pad_to=2)==expected[:,ids]
+            zero_vertex=findfirst(v->all(iszero,expected[:,v]),1:9)
+            @test DF.betti_table(M;vertices=[zero_vertex])==zeros(Int,1,1)
+            @test DF.betti_table(M;vertices=[1],pad_to=2)==expected[:,[1]]
+            @test size(DF.betti_table(M;vertices=Int[]))==(1,0)
+            @test size(DF.betti_table(M;vertices=(),pad_to=4))==(5,0)
+            @test_throws ArgumentError DF.betti_table(M;vertices=[0])
+            @test_throws ArgumentError DF.betti_table(M;vertices=[10])
+            @test_throws ArgumentError DF.betti_table(M;vertices=[1.0])
+            @test_throws ArgumentError DF.betti_table(M;vertices=[true])
+            @test_throws ArgumentError DF.betti_table(M;vertices=1)
+            @test_throws ArgumentError DF.betti_table(M;vertices=[1],pad_to=-1)
+            # A hand-built noncommuting diamond must be caught by check=true.
+            if P isa FF.ProductOfChainsPoset && P.orientation==(1,1)
+                badmaps=Dict((u,v)=>ones(K,1,1) for (u,v) in FF.cover_edges(P))
+                badmaps[(1,2)]=zeros(K,1,1)
+                bad=MD.PModule{K}(P,ones(Int,9),badmaps;field)
+                @test_throws ArgumentError DF.betti_table(bad;vertices=[5])
+            end
+        end
+        # Three parameters genuinely require the top Koszul differential.
+        P=FF.ProductOfChainsPoset((2,2,2);orientation=(1,-1,1))
+        M,expected=_a31_boxes(P,[((1,1,1),(1,1,1))],field)
+        @test sum(expected[4,:])==1
+        @test DF.betti_table(M;vertices=collect(1:8),pad_to=3)==expected
+        @test DF.betti_table(DF.projective_resolution(M,OPT.ResolutionOptions(maxlen=3));pad_to=3)==expected
+        # Arbitrary finite-poset dispatch preserves the full-resolution oracle.
+        Q=FF.FinitePoset([FF.leq(P,i,j) for i in 1:8,j in 1:8])
+        N=MD.PModule{CM.coeff_type(field)}(Q,copy(M.dims),Dict((u,v)=>copy(MD.map_leq(M,u,v)) for (u,v) in FF.cover_edges(Q));field)
+        @test DF.betti_table(N;vertices=[8,3,1,3],pad_to=3)==expected[:,[8,3,1,3]]
+    end
+end
+
+@testset "A31 presentation Betti and query locality" begin
+    P=FF.ProductOfChainsPoset((3,3))
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101),CM.RealField(Float64))
+        K=CM.coeff_type(field)
+        # Nonprincipal source supports, a zero column and overlapping rows.
+        U=[FF.Upset(P,BitVector([v!=1 for v in 1:9])), FF.principal_upset(P,1),FF.principal_upset(P,5)]
+        E=[FF.principal_downset(P,9),FF.principal_downset(P,8),FF.principal_downset(P,6)]
+        H=FF.FringeModule{K}(P,U,E,sparse(K[1 2 0;1 1 0;0 1 0]);field)
+        M=IR.pmodule_from_fringe(H)
+        expected=DF.betti_table(DF.projective_resolution(M,OPT.ResolutionOptions(maxlen=3));pad_to=3)
+        @test DF.betti_table(H;vertices=collect(1:9),pad_to=3)==expected
+        @test TamerOp.betti_table(H;vertices=[8,1,8],pad_to=3)==expected[:,[8,1,8]]
+        localM,ids=DF._query_module(H,[2,5,6,8,9])
+        for i in 1:5,j in 1:5
+            FF.leq(localM.Q,i,j) || continue
+            original=[2,5,6,8,9]
+            A,B=MD.map_leq(localM,i,j),MD.map_leq(M,original[i],original[j])
+            @test field isa CM.RealField ? isapprox(A,B;atol=1e-10,rtol=1e-10) : A==B
+        end
+        if Threads.nthreads()>1
+            tasks=[Threads.@spawn DF.betti_table(H;vertices=[1,5,8],pad_to=3) for _ in 1:4]
+            @test all(fetch(t)==expected[:,[1,5,8]] for t in tasks)
+        end
+    end
+    @test TamerOp.betti_table === TamerOp.Workflow.betti_table
+    @test TamerOp.rank_map === TamerOp.Workflow.rank_map
+    @test TOA.rank_map === TamerOp.rank_map
 end

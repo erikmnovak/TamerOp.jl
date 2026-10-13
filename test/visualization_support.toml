@@ -1,17 +1,30 @@
 schema_version = 1
-review_date = "2026-10-12"
-renderer_sources = ["ext/visualization_wgl_atlas.jl", "ext/visualization_wgl_summands.jl", "ext/visualization_wgl_controls.jl", "ext/visualization_wgl_ensembles.jl", "ext/visualization_makie_retained.jl", "ext/visualization_makie_annotations.jl", "ext/visualization_wgl_fields.jl", "ext/visualization_wgl_generalized_rank.jl", "ext/visualization_makie_batches.jl", "ext/visualization_wgl_editor.jl", "ext/visualization_makie_common.jl", "ext/visualization_makie_composition.jl", "ext/visualization_wgl_chains.jl", "ext/visualization_wgl_collections.jl", "ext/visualization_wgl_comparisons.jl", "ext/visualization_wgl_complexes.jl", "ext/visualization_wgl_components.jl", "ext/visualization_wgl_inspection.jl", "ext/visualization_wgl_intervals.jl", "ext/visualization_wgl_matchings.jl", "ext/visualization_wgl_signed.jl", "ext/visualization_wgl_slices.jl", "ext/visualization_wgl_spectral.jl", "ext/visualization_wgl_transport.jl", "ext/visualization_wgl_volume.jl", "ext/TamerOpCairoMakieExt.jl", "ext/TamerOpWGLMakieExt.jl"]
+review_date = "2026-10-13"
+renderer_sources = ["ext/visualization_wgl_source_laboratory.jl", "ext/visualization_wgl_paths.jl", "ext/visualization_wgl_relative.jl", "ext/visualization_wgl_certificates.jl", "ext/visualization_wgl_atlas.jl", "ext/visualization_wgl_summands.jl", "ext/visualization_wgl_controls.jl", "ext/visualization_wgl_ensembles.jl", "ext/visualization_makie_retained.jl", "ext/visualization_makie_annotations.jl", "ext/visualization_wgl_fields.jl", "ext/visualization_wgl_generalized_rank.jl", "ext/visualization_makie_batches.jl", "ext/visualization_wgl_editor.jl", "ext/visualization_makie_common.jl", "ext/visualization_makie_composition.jl", "ext/visualization_wgl_chains.jl", "ext/visualization_wgl_collections.jl", "ext/visualization_wgl_comparisons.jl", "ext/visualization_wgl_complexes.jl", "ext/visualization_wgl_components.jl", "ext/visualization_wgl_inspection.jl", "ext/visualization_wgl_intervals.jl", "ext/visualization_wgl_matchings.jl", "ext/visualization_wgl_signed.jl", "ext/visualization_wgl_slices.jl", "ext/visualization_wgl_spectral.jl", "ext/visualization_wgl_transport.jl", "ext/visualization_wgl_volume.jl", "ext/TamerOpCairoMakieExt.jl", "ext/TamerOpWGLMakieExt.jl"]
 core_sources = ["src/visualization/inspection_requests.jl", "src/Visualization.jl", "src/visualization/types.jl", "src/visualization/style.jl", "src/visualization/rendering.jl", "src/visualization/validation.jl", "src/visualization/inspection_rendering.jl"]
 shared_browser_tests = ["static-export.spec.mjs"]
 shared_native_tests = ["test_visualization_a38.jl", "test_contracts.jl"]
 workflow = ".github/workflows/Visualization.yml"
 
 [verification]
-date = "2026-10-12"
-environment = "Julia 1.12.1, Makie 0.24.15, CairoMakie 0.15.15, WGLMakie 0.13.15, Bonito 5.2.0, Observables 0.5.5; Node 22.23.3, Playwright 1.63.0 and Chromium 153.0.8010.12 (revision 1243). One Julia/BLAS thread and one browser worker. A125's 12 October browser run used Chromium 155.0.8059.12 (revision 1247); the earlier recorded browser used revision 1243."
-native = "The earlier 29-owner qualification exercised: 23,860 assertions passed and 12 nested-app stylesheet assertions failed. After repair, a fresh focused run passed 251/251 embedding, style, coordinate, volume and WGL-export assertions. The later saved-HTML readability repair passed 103/103 export assertions in another fresh process. A99 subsequently passed 3,200 focused owner/API assertions with graphics loaded; its final field-label/export-control rendering run passed 14/14. A54 subsequently passed 545 focused checks, including 19 actual Cairo/WGL renderer/export assertions, and an extended 462-assertion boundary-oracle run. A44 subsequently passed 876 focused checks, including 43 native Cairo/WGL assertions. Its separate fresh mathematical regression run passed 1,158 and API guards passed 2,936. These overlapping counts are separate runs, not an aggregate total. On 12 October, A125 passed a fresh 158-assertion owner with Cairo/WGL required: exact endpoint maps and compositions over QQ/F2/F3, cycle/filling equations, incomparable and unavailable parameters, zero composites, multicritical superlevel order, a higher-cell filling, budgets, serialized coefficients, actual renderer axes, exports and native lifecycle. Separate source/API guards passed 3,077 checks; these counts overlap earlier runs and are not an aggregate."
-live = "The earlier 27 standalone Chromium scenarios passed. Both additional A99 editor scenarios passed, including numeric edits, invalid relation recovery, downloads, linked-client cleanup and narrow keyboard scrolling. The strengthened composition-host keyboard scenario also passed against a fresh Julia server, including resize, pointer pan and unchanged correspondence geometry. Both A54 scenarios passed on the final browser run: finite selection, boundary occurrences/bars, matrix toggles, exact rational worm entry, verified pointer centers, layer reuse, linked-client cleanup and narrow keyboard scrolling. The A44 standalone Chromium scenario passed real sliders, native chart selection, plane/layer/baseline changes, invalid-input rollback, two-viewer synchronization with visible slider positions after reset, stale-error clearing, disconnect cleanup, narrow keyboard scrolling and close/release. A125 subsequently passed two standalone Chromium scenarios: exact and keyboard controls, entry and class selection, invalid-witness rollback, hover without queries, panel/source/target selection, shared views, disconnect cleanup, retained contact canvas, narrow keyboard scrolling, incomparable grid points and nonzero adjacent maps with zero composite. Rendered frames were inspected; the disconnect check allows Bonito's 30-second reconnection grace period."
-offline = "All 3 scenarios passed with Julia stopped and networking disabled: fixed SVG compositions, saved finite states, and an actually rendered WGL scene with reload. Narrow SVG views preserve their intrinsic size and support keyboard and pointer scrolling. A125 separately passed its contact/filling atlas scenario with its fixture Julia process stopped and networking disabled: saved selections, exact downloads, reload and narrow keyboard/pointer scrolling, with no HTTP/WebSocket requests or browser errors."
+date = "2026-10-13"
+environment = "Julia 1.12.1, Makie 0.24.15, CairoMakie 0.15.15, WGLMakie 0.13.15, Bonito 5.2.0, Observables 0.5.5; Node 22.23.3, Playwright 1.63.0 and Chromium 153.0.8010.12 (revision 1243). One Julia/BLAS thread and one browser worker. A125's 12 October browser run used Chromium 155.0.8059.12 (revision 1247); the earlier recorded browser used revision 1243. A128 native checks used Julia 1.12.1 with two default threads; focused final core/regressions and the live fixture used Julia 1.12.7 -O0 with one default/BLAS thread. Its browser used Chromium revision 1243."
+native = "The earlier 29-owner qualification exercised: 23,860 assertions passed and 12 nested-app stylesheet assertions failed. After repair, a fresh focused run passed 251/251 embedding, style, coordinate, volume and WGL-export assertions. The later saved-HTML readability repair passed 103/103 export assertions in another fresh process. A99 subsequently passed 3,200 focused owner/API assertions with graphics loaded; its final field-label/export-control rendering run passed 14/14. A54 subsequently passed 545 focused checks, including 19 actual Cairo/WGL renderer/export assertions, and an extended 462-assertion boundary-oracle run. A44 subsequently passed 876 focused checks, including 43 native Cairo/WGL assertions. Its separate fresh mathematical regression run passed 1,158 and API guards passed 2,936. These overlapping counts are separate runs, not an aggregate total. On 12 October, A125 passed a fresh 158-assertion owner with Cairo/WGL required: exact endpoint maps and compositions over QQ/F2/F3, cycle/filling equations, incomparable and unavailable parameters, zero composites, multicritical superlevel order, a higher-cell filling, budgets, serialized coefficients, actual renderer axes, exports and native lifecycle. Separate source/API guards passed 3,077 checks; these counts overlap earlier runs and are not an aggregate. On 13 October, A128 passed 329 native owner assertions with Cairo/WGL required, then 308 final core assertions with five expected graphics skips after a caption/legend cleanup. Separate source/A92/A118/API guards passed 30,051 assertions with one graphics skip. These are overlapping runs, not an aggregate. A96 passed 699 mathematical/session assertions and 32 final native renderer/export assertions, including independent reductions at crossings and intermediate points, F2/F3/F5, both filtration orders, exact representatives, actual Cairo/WGL coordinates and close-during-update cleanup. Its owned-value codec regression passed 328 assertions and separate source/API guards passed 3,477. The 32-assertion final graphics run overlaps the earlier 27 graphics checks; these runs are not aggregate totals. A124 passed 243 final native assertions with Cairo/WGL loaded, including independent rectangle and codensity-boundary oracles, fresh construction parity over F2/F3, stable input history, active cancellation/closure, obsolete work rejection, actual renderer coordinates and exports. An earlier overlapping combined run passed 3,795 A124/API/shared-request assertions, including the repaired late-callback world-age boundary."
+live = "The earlier 27 standalone Chromium scenarios passed. Both additional A99 editor scenarios passed, including numeric edits, invalid relation recovery, downloads, linked-client cleanup and narrow keyboard scrolling. The strengthened composition-host keyboard scenario also passed against a fresh Julia server, including resize, pointer pan and unchanged correspondence geometry. Both A54 scenarios passed on the final browser run: finite selection, boundary occurrences/bars, matrix toggles, exact rational worm entry, verified pointer centers, layer reuse, linked-client cleanup and narrow keyboard scrolling. The A44 standalone Chromium scenario passed real sliders, native chart selection, plane/layer/baseline changes, invalid-input rollback, two-viewer synchronization with visible slider positions after reset, stale-error clearing, disconnect cleanup, narrow keyboard scrolling and close/release. A125 subsequently passed two standalone Chromium scenarios: exact and keyboard controls, entry and class selection, invalid-witness rollback, hover without queries, panel/source/target selection, shared views, disconnect cleanup, retained contact canvas, narrow keyboard scrolling, incomparable grid points and nonzero adjacent maps with zero composite. Rendered frames were inspected; the disconnect check allows Bonito's 30-second reconnection grace period. A128 passed its periodic incidence-cancellation scenario and its spatial brush/exact-input, computed maps/witnesses, rollback, linked-client, narrow keyboard-scroll and cleanup scenario. The latter passed on a warm rerun after its initial cold run exceeded the overall test budget; operation assertions were retained. Final visual review clarified witness captions/legends (checked in core) and cleared stale hover text on refresh; the recorded live scenarios precede those display-only edits. A96 passed both final standalone Chromium scenarios: exact crossings, pointer/keyboard selection, visible source representatives, invalid-input rollback, linked sliders, forward/backward playback, endpoint stopping, disconnect cleanup, narrow scrolling, duplicate/unmatched members, recorded objectives and close during playback. The latter exposed and now guards a repaired refresh/close race. The fixture first ran native graphics checks; the first browser update allows 120 seconds for compilation, with normal timeouts retained for later actions. No cold-start speed claim is made. A124 passed three final Chromium 155.0.8059.12 (1247) scenarios: pointer and keyboard source edits, explicit reconstruction, linked undo/redo/reset, settings and parameter changes, budget failure/recovery, cancellation/close, narrow scrolling, inactive sites and censored H0 bars. Hover feedback now reserves layout space so it cannot shift the dragged chart."
+offline = "All 3 scenarios passed with Julia stopped and networking disabled: fixed SVG compositions, saved finite states, and an actually rendered WGL scene with reload. Narrow SVG views preserve their intrinsic size and support keyboard and pointer scrolling. A125 separately passed its contact/filling atlas scenario with its fixture Julia process stopped and networking disabled: saved selections, exact downloads, reload and narrow keyboard/pointer scrolling, with no HTTP/WebSocket requests or browser errors. A128 passed saved ring/empty selection, exact download, reload and narrow scrolling checks with its fixture stopped and networking disabled; no HTTP/WebSocket requests or browser errors. Its saved figure was visually inspected. A96 passed saved-state selection, exact value download, reload and narrow keyboard/pointer scrolling with its Julia fixture stopped and networking disabled. No HTTP/WebSocket requests or browser errors occurred. Live and offline screenshots were visually reviewed. A124 passed one saved-comparison scenario after its Julia fixture exited, with networking disabled: state selection, exact downloaded values, reload and narrow keyboard/pointer scrolling; zero HTTP/WebSocket requests and browser errors. Final live and offline figures were visually reviewed."
+
+[[family]]
+id = "extended_persistence"
+title = "Extended persistence diagrams and tagged barcodes"
+sources = ["src/visualization/builders_extended.jl"]
+native_tests = ["test_extended_persistence.jl"]
+browser_tests = ["extended-offline.spec.mjs"]
+live = "unsupported"
+cairo = "native"
+wgl = "native"
+html = "browser"
+notebooks = "unverified"
+scope = "Static type-separated diagrams retain original scalar coordinates and decorated endpoints; barcodes explicitly use ordinal events on two parameter copies. Saved-view controls require no Julia. No live extended-interval inspector is offered."
 
 [[family]]
 id = "encoding"
@@ -415,3 +428,55 @@ wgl = "native"
 html = "browser"
 notebooks = "unverified"
 scope = "Budgeted declared states/grids, aligned source geometry, actual rational/prime-field maps, cell entries and opt-in kernel/cokernel witnesses. Incomparable parameters have no map; sample coverage is not exhaustive. Standalone WGL controls and portable prepared HTML have separate acceptance. Live reconstruction from saved atlas inputs and notebook frontend integration are not claimed."
+
+[[family]]
+id = "certificates"
+title = "Interleaving and pruning certificates"
+sources = ["src/visualization/builders_certificates.jl", "src/visualization/inspection_certificates.jl"]
+native_tests = ["test_visualization_a101.jl"]
+browser_tests = ["certificates.spec.mjs", "certificates-offline.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "browser"
+notebooks = "unverified"
+scope = "Validated global rectilinear or supplied finite-poset translations, both composition equations, naturality covers and actual pruning subquotient maps. Domain pictures are qualified for one or two parameters; higher-dimensional algebraic views retain every coordinate. Live navigation requires Julia; exported snapshots have no callbacks. No matching-distance or conjectural pruning-distance guarantee is substituted."
+
+[[family]]
+id = "relative_selection"
+title = "Spatial selections and relative persistence"
+sources = ["src/visualization/builders_relative.jl", "src/visualization/inspection_relative.jl"]
+native_tests = ["test_visualization_a128.jl"]
+browser_tests = ["relative.spec.mjs", "relative-offline.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "browser"
+notebooks = "unverified"
+scope = "One-parameter coordinate pairs over prime fields. Retained face incidence supports induced vertices or face closure; field chain closure makes no geometric claim. Exact cell/table and closed-box inputs, 2D pointer brush, 3D exact box, both entry grades, three barcodes, opt-in quotient cycles and connecting maps. Saved HTML contains precomputed answers only; geometric clipping and arbitrary multiparameter relative persistence are unsupported."
+
+[[family]]
+id = "persistence_paths"
+title = "Persistence paths and vineyard continuation"
+sources = ["src/visualization/persistence_paths.jl", "src/visualization/builders_paths.jl", "src/visualization/inspection_paths.jl"]
+native_tests = ["test_visualization_a96.jl"]
+browser_tests = ["paths.spec.mjs", "paths-offline.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "browser"
+notebooks = "unverified"
+scope = "Bounded supplied ordinary diagram sequences with optional consecutive bottleneck matches, and certified piecewise-linear grade paths on fixed prime-field chain complexes. Exact crossing frames, deterministic tie ambiguity, zero reduction pairs, unmatched members, synchronized source views and optional retained representatives. Supplied optimization histories can carry recorded settings, invariant summaries and a scalar objective plot. Standalone playback follows frame order. Offline HTML selects saved snapshots only; live path reconstruction and notebook host qualification are not claimed."
+
+[[family]]
+id = "source_laboratory"
+title = "Source and construction sensitivity"
+sources = ["src/visualization/source_laboratory.jl", "src/visualization/builders_source_laboratory.jl"]
+native_tests = ["test_visualization_a124.jl"]
+browser_tests = ["source-laboratory.spec.mjs", "source-laboratory-offline.spec.mjs"]
+live = "supported"
+cairo = "native"
+wgl = "native"
+html = "browser"
+notebooks = "unverified"
+scope = "Bounded planar Rips-codensity sources over prime fields in H0/H1. Move/add/remove points and change DTM mass or inclusive diameter cap; explicit full rebuild, draft undo/redo/reset, stable source IDs and atomic failed/obsolete/cancelled request recovery. Original and edited sources/barcodes use common scales and censored construction endpoints. Live edits require Julia; saved HTML contains prepared comparisons only. Point IDs do not identify cells or homology across rebuilds. Image/scalar editing, radius-dependent graph-degree and incremental reconstruction remain separate qualifications."

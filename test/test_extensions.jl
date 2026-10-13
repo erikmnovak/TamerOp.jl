@@ -1,7 +1,7 @@
 # Optional packages may be installed, but core loading must not activate them.
 @testset "A16 optional dependency boundaries" begin
     project = TamerOpTestRunner.TOML.parsefile(joinpath(@__DIR__, "..", "Project.toml"))
-    for name in ("CairoMakie", "WGLMakie", "CSV", "DelaunayTriangulation", "Distances", "KernelFunctions")
+    for name in ("CairoMakie", "WGLMakie", "CSV", "DelaunayTriangulation", "Distances", "KernelFunctions", "Hecke")
         @test !haskey(project["deps"], name)
         @test haskey(project["weakdeps"], name)
     end
@@ -39,7 +39,7 @@
     end
     # The strict minimal environment checks accessibility as well as activation.
     if get(ENV, "TAMEROP_TEST_MINIMAL", "false") == "true"
-        for name in ("CairoMakie", "WGLMakie", "CSV", "KernelFunctions", "DelaunayTriangulation")
+        for name in ("CairoMakie", "WGLMakie", "CSV", "KernelFunctions", "DelaunayTriangulation", "Hecke")
             @test Base.find_package(name) === nothing
         end
         @test isempty(TamerOp.Visualization._VISUAL_RENDERERS)

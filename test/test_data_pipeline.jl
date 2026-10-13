@@ -9738,3 +9738,122 @@ end
     @test all(x -> x===first(results),results)
     @test length(cache.cubical)==1
 end
+
+@testset "A31 lazy selected homology and Betti queries" begin
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101),CM.RealField(Float64)), degree in (1,2)
+        # One cycle killed independently in each parameter: H_t is a single
+        # finite rectangle, with Betti numbers (1,2,1) at its four corners.
+        cells=[Int[] for _ in 0:degree+1]
+        cells[degree+1]=[1];cells[degree+2]=[1,2]
+        boundaries=[spzeros(Int,length(cells[i]),length(cells[i+1])) for i in 1:length(cells)-1]
+        boundaries[end]=sparse(ones(Int,1,2))
+        G=DT.GradedComplex(cells,boundaries,[(0,0),(2,0),(0,2)])
+        enc=TamerOp.encode(G,DI.GradedFiltration();field,degree)
+        @test FF.nvertices(enc.P)==4
+        expected=[1 0 0 0;0 1 1 0;0 0 0 1;0 0 0 0]
+        @test TamerOp.betti_table(enc;vertices=[1,2,3,4],pad_to=3)==expected
+        @test TamerOp.betti_table(enc;vertices=[4,1,4],pad_to=3)==expected[:,[4,1,4]]
+        @test all(DI._betti_may_be_nonzero(enc.M,v) for v in 1:4)
+        for a in 1:4,b in 1:4
+            FF.leq(enc.P,a,b) || continue
+            @test TamerOp.rank_map(enc;source=a,target=b)==(a==b==1 ? 1 : 0)
+        end
+        @test TamerOp.rank_map(enc,(0,0),(0,0))==1
+        @test TamerOp.rank_map(enc,(0,0),(2,2))==0
+        @test_throws ErrorException TamerOp.rank_map(enc;source=2,target=3)
+        @test_throws ErrorException TamerOp.rank_map(enc;source=0,target=1)
+        @test enc.M.cached_module===nothing
+        @test enc.M.dims===nothing
+        @test all(isnothing,enc.M.lazy.active_by_dim)
+        @test all(isnothing,enc.M.lazy.boundaries_field)
+        @test all(isnothing,enc.M.lazy.terms)
+        M=TamerOp.Workflow.pmodule(enc)
+        @test TamerOp.betti_table(TamerOp.resolve(enc);pad_to=3)==expected
+        @test DF.betti_table(M;vertices=collect(1:4),pad_to=3)==expected
+        sc=TamerOp.SessionCache()
+        @test TamerOp.betti_table(enc;vertices=[4,1,4],pad_to=3,cache=sc)==expected[:,[4,1,4]]
+        @test TamerOp.betti_table(enc;vertices=[2,3],pad_to=3,cache=sc)==expected[:,[2,3]]
+    end
+    # Characteristic-dependent H1: boundary 2 kills the cycle except in F2.
+    G=DT.GradedComplex([[1],[1],[1]],[spzeros(Int,1,1),sparse(reshape([2],1,1))],[(0,0),(0,0),(1,1)])
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101),CM.RealField(Float64))
+        enc=TamerOp.encode(G,DI.GradedFiltration();field,degree=1)
+        expected=zeros(Int,4,4);expected[1,1]=1
+        field==CM.F2() || (expected[2,4]=1)
+        @test TamerOp.betti_table(enc;vertices=collect(1:4),pad_to=3)==expected
+        @test TamerOp.rank_map(enc;source=1,target=4)==(field==CM.F2() ? 1 : 0)
+        @test TamerOp.betti_table(TamerOp.resolve(enc);pad_to=3)==expected
+    end
+    # Multicritical input uses local homology but must not apply the
+    # one-critical entrance-grade theorem to the original cells.
+    G=DT.MultiCriticalGradedComplex([Int[],[1],[1]], [spzeros(Int,0,1),sparse(ones(Int,1,1))],
+        [[(0,2),(2,0)],[(3,3)]])
+    for mode in (:union,:intersection)
+        enc=TamerOp.encode(G,TamerOp.FiltrationSpec(kind=:graded,multicritical=mode);field=CM.F3(),degree=1)
+        n=FF.nvertices(enc.P)
+        result=TamerOp.betti_table(enc;vertices=collect(1:n),pad_to=3)
+        @test enc.M.cached_module===nothing
+        @test result==TamerOp.betti_table(TamerOp.resolve(enc);pad_to=3)
+    end
+    # Extra grid levels exercise provably absent grades and a coarsened input.
+    G=DT.GradedComplex([Int[],[1],[1]],[spzeros(Int,0,1),sparse(ones(Int,1,1))],[(0,0),(4,4)])
+    for axes in ((collect(0:4),collect(0:4)),([0,2,4],[0,3,4]))
+        enc=TamerOp.encode(G,TamerOp.FiltrationSpec(kind=:graded,axes=axes);degree=1)
+        n=FF.nvertices(enc.P)
+        expected=zeros(Int,4,n);expected[1,1]=1;expected[2,n]=1
+        @test TamerOp.betti_table(enc;vertices=collect(1:n),pad_to=3)==expected
+        @test count(v->DI._betti_may_be_nonzero(enc.M,v),1:n)==2
+        @test all(isnothing,enc.M.lazy.active_by_dim)
+        @test TamerOp.betti_table(TamerOp.resolve(enc);pad_to=3)==expected
+    end
+end
+
+@testset "A31 lazy boundaries, orientation and cache lifecycle" begin
+    G=DT.GradedComplex([Int[],[1],[1,2]],[spzeros(Int,0,1),sparse(ones(Int,1,2))],[(2,2),(0,2),(2,0)])
+    for pipeline in (OPT.PipelineOptions(),OPT.PipelineOptions(axes_policy=:coarsen,max_axis_len=1),OPT.PipelineOptions(poset_kind=:dense))
+        enc=TamerOp.encode(G,TamerOp.FiltrationSpec(kind=:graded,orientation=(-1,-1));degree=1,pipeline,field=CM.F3())
+        ids=collect(1:FF.nvertices(enc.P))
+        # Concurrent calls use independent local modules and keep the source
+        # lazy for grid inputs. The explicitly dense-poset input uses fallback.
+        results=if pipeline.poset_kind==:signature
+            fetch.([Threads.@spawn TamerOp.betti_table(enc;vertices=ids,pad_to=3) for _ in 1:4])
+        else
+            [TamerOp.betti_table(enc;vertices=ids,pad_to=3)]
+        end
+        reference=TamerOp.betti_table(TamerOp.resolve(enc);pad_to=3)
+        @test all(==(reference),results)
+        cache=TamerOp.SessionCache()
+        first=TamerOp.resolve(enc;cache)
+        @test TamerOp.betti_table(enc;vertices=reverse(ids),cache,pad_to=3)==reference[:,reverse(ids)]
+        @test TamerOp.resolution_object(TamerOp.resolve(enc;cache))===TamerOp.resolution_object(first)
+        CM._clear_session_cache!(cache)
+        @test TamerOp.betti_table(enc;vertices=reverse(ids),cache,pad_to=3)==reference[:,reverse(ids)]
+        @test TamerOp.resolution_object(TamerOp.resolve(enc;cache))!==TamerOp.resolution_object(first)
+        @test_throws ArgumentError TamerOp.betti_table(enc;vertices=[0],cache)
+        @test_throws ArgumentError TamerOp.betti_table(enc;vertices=ids,cache=:invalid)
+    end
+    # Vanishing and absent chain degrees, including a one-parameter grid.
+    G=DT.GradedComplex([[1]],SparseMatrixCSC{Int,Int}[],[(0,)])
+    for degree in (0,1,3)
+        enc=TamerOp.encode(G,DI.GradedFiltration();degree)
+        @test TamerOp.betti_table(enc;vertices=[1],pad_to=2)==reshape([degree==0 ? 1 : 0,0,0],3,1)
+        @test TamerOp.rank_map(enc;source=1,target=1)==(degree==0 ? 1 : 0)
+        @test TamerOp.rank_map(enc,[-1],[0];opts=OPT.InvariantOptions(strict=false))==0
+        @test_throws ErrorException TamerOp.rank_map(enc,[-1],[0])
+    end
+end
+
+@testset "A31 selected H0 reuses component kernels" begin
+    B=sparse([1,2,1,2],[1,1,2,2],[-1,1,-1,1],2,2)
+    G=DT.GradedComplex([[1,2],[1,2]],[B],[(0,0),(0,0),(1,0),(0,1)])
+    expected=[2 0 0 0;0 1 1 0;0 0 0 1]
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101),CM.RealField(Float64))
+        enc=TamerOp.encode(G,DI.GradedFiltration();field)
+        # One constant component plus the simple at the lower corner.
+        @test TamerOp.betti_table(enc;vertices=[4,1,3,4],pad_to=2)==expected[:,[4,1,3,4]]
+        @test enc.M.cached_module===nothing
+        @test all(isnothing,enc.M.lazy.active_by_dim)
+        @test TamerOp.betti_table(enc;pad_to=2)==expected
+        @test TamerOp.betti_table(TamerOp.resolve(enc);pad_to=2)==expected
+    end
+end

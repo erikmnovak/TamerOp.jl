@@ -1,7 +1,8 @@
 # Continuous GRIL worms (Xin et al., PMLR 221, 2023, Definition 3.2):
 # |x-px| <= ell*delta, |y-py| <= ell*delta,
 # |x+y-px-py| <= 2*delta. They are not a finite union of 2ell-1 squares.
-# See docs/implementation/generalized_rank.md for the restriction and event arguments.
+# For the restriction and event arguments, see
+# https://www.tamerop.com/implementation/generalized_rank.html
 
 """
     GRILResult

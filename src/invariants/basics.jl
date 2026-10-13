@@ -115,7 +115,7 @@ Unknown points follow `opts.strict` semantics:
 - strict (default): throw if `locate` returns 0,
 - non-strict: return 0.
 """
-function rank_query(M::PModule{K},
+function rank_query(M::Union{PModule{K},FringeModule{K}},
                     pi::ZnEncodingMap,
                     x,
                     y,
@@ -148,7 +148,7 @@ function rank_query(M::PModule{K},
     end
 end
 
-function rank_query(M::PModule{K},
+function rank_query(M::Union{PModule{K},FringeModule{K}},
                     pi::CompiledEncoding{<:ZnEncodingMap},
                     x,
                     y,
@@ -157,7 +157,7 @@ function rank_query(M::PModule{K},
     return rank_query(M, pi.pi, x, y, opts; kwargs...)
 end
 
-function rank_query(M::PModule{K},
+function rank_query(M::Union{PModule{K},FringeModule{K}},
                     pi::ZnEncodingMap,
                     a::Int,
                     b::Int;
@@ -171,7 +171,7 @@ function rank_query(M::PModule{K},
     end
 end
 
-function rank_query(M::PModule{K},
+function rank_query(M::Union{PModule{K},FringeModule{K}},
                     pi::CompiledEncoding{<:ZnEncodingMap},
                     a::Int,
                     b::Int;
@@ -179,7 +179,7 @@ function rank_query(M::PModule{K},
     return rank_query(M, pi.pi, a, b; kwargs...)
 end
 
-function rank_query(M::PModule{K},
+function rank_query(M::Union{PModule{K},FringeModule{K}},
                     pi::ZnEncodingMap,
                     a::Int,
                     b::Int,
@@ -188,7 +188,7 @@ function rank_query(M::PModule{K},
     return rank_query(M, pi, a, b; kwargs...)
 end
 
-function rank_query(M::PModule{K},
+function rank_query(M::Union{PModule{K},FringeModule{K}},
                     pi::CompiledEncoding{<:ZnEncodingMap},
                     a::Int,
                     b::Int,
@@ -197,36 +197,9 @@ function rank_query(M::PModule{K},
     return rank_query(M, pi.pi, a, b; kwargs...)
 end
 
-function rank_query(M::PModule{K}, pi, x, y, opts::InvariantOptions;
+function rank_query(M::Union{PModule{K},FringeModule{K}}, pi, x, y, opts::InvariantOptions;
                     cache=nothing, memo=nothing)::Int where {K}
     return rank_map(M, pi, x, y, opts; cache=cache, memo=memo)
-end
-
-function rank_query(H::FringeModule{K}, pi, x, y, opts::InvariantOptions; kwargs...)::Int where {K}
-    Mp = pmodule_from_fringe(H)
-    return rank_query(Mp, pi, x, y, opts; kwargs...)
-end
-
-function rank_query(H::FringeModule{K}, pi::ZnEncodingMap, a::Int, b::Int; kwargs...)::Int where {K}
-    Mp = pmodule_from_fringe(H)
-    return rank_query(Mp, pi, a, b; kwargs...)
-end
-
-function rank_query(H::FringeModule{K}, pi::CompiledEncoding{<:ZnEncodingMap}, a::Int, b::Int; kwargs...)::Int where {K}
-    Mp = pmodule_from_fringe(H)
-    return rank_query(Mp, pi, a, b; kwargs...)
-end
-
-function rank_query(H::FringeModule{K}, pi::ZnEncodingMap, a::Int, b::Int,
-                    opts::InvariantOptions; kwargs...)::Int where {K}
-    Mp = pmodule_from_fringe(H)
-    return rank_query(Mp, pi, a, b; kwargs...)
-end
-
-function rank_query(H::FringeModule{K}, pi::CompiledEncoding{<:ZnEncodingMap}, a::Int, b::Int,
-                    opts::InvariantOptions; kwargs...)::Int where {K}
-    Mp = pmodule_from_fringe(H)
-    return rank_query(Mp, pi, a, b; kwargs...)
 end
 
 # ----- Restricted Hilbert function --------------------------------------------

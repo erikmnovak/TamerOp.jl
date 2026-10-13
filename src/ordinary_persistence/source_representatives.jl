@@ -169,6 +169,7 @@ function _ordinary_source_cubical(G,shape,periodic,order,input)
     geometry=vcat([[(i,0)] for i in 1:n],[[(i,0),(i+1,0)] for i in 1:ne])
     sources=vcat([(;origin=(i,),mask=(0,)) for i in 1:n],[ (;origin=(i,),mask=(1,)) for i in 1:ne])
     return DataIngestion.filtered_complex(G;geometry,source_ids=sources,orientation,
+        faces=DataIngestion._cubical_face_incidence(sources,dims,periodic),
         construction="cubical $(input)",provenance=merge(provenance,(;periodic,
             domain=((1,n+Int(only(periodic))),),spatial_dim=1,source_mapping=:cubical_origin_mask)))
 end

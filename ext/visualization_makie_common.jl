@@ -409,6 +409,15 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                     elseif spec.kind === :hasse
                         # Center multiline labels beside schematic vertices.
                         (; align=(:left, :center))
+                    elseif spec.kind in (:certificate_domain, :certificate_diagram)
+                        (; align=(:center, :center))
+                    elseif spec.kind === :certificate_locations
+                        # Shift endpoints can touch the top/right of the chart.
+                        # Place their labels inward without moving exact anchors.
+                        right = pos[1] > sum(spec.axes.xlimits)/2
+                        top = pos[2] > sum(spec.axes.ylimits)/2
+                        (; align=(right ? :right : :left, top ? :top : :bottom),
+                            offset=(right ? -8 : 8, top ? -8 : 8) .* annotation_scale)
                     elseif spec.kind in (:source_chain_geometry, :component_geometry)
                         # Source panels also appear beside coefficient tables.
                         # Grow labels into the viewport without moving cells.

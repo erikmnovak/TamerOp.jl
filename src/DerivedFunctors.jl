@@ -11,7 +11,8 @@ resolution model holds within that category; it does not establish invariance
 under a change of encoding or identification with ambient R^n/Z^n Ext/Tor.
 Inspect `provenance(result)` or the `provenance` field of its summary for the
 base poset, coefficient field, computed degrees and model. See
-`docs/math_categories.md` for comparison hypotheses and counterexamples.
+the [category and comparison guide](https://www.tamerop.com/math_categories.html)
+for comparison hypotheses and counterexamples.
 
 This file stays thin on purpose: it owns include order and the public surface,
 while implementation lives in `src/derived_functors/`.
@@ -28,6 +29,7 @@ include("derived_functors/algebras.jl")
 include("derived_functors/spectral_sequences.jl")
 include("derived_functors/backends.jl")
 include("derived_functors/public_api.jl")
+include("derived_functors/local_betti.jl")
 include("derived_functors/representative_complex.jl")
 
 end

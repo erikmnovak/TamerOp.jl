@@ -4,7 +4,7 @@
 const _VISUAL_DATA_BASE_TYPES = Dict{String,Any}(string(T)=>T for T in
     (Any,Nothing,Missing,Bool,Char,Int8,Int16,Int32,Int64,Int128,
      UInt8,UInt16,UInt32,UInt64,UInt128,BigInt,Float16,Float32,Float64,
-     BigFloat,Rational,AlgebraicReal,String,Symbol,Tuple,NamedTuple,Array,
+     BigFloat,Rational,AlgebraicReal,String,Symbol,Tuple,Tuple{},NamedTuple,Array,
      Dict,Pair,UnitRange,StepRange,LinRange,AbstractFloat,Real,Number))
 const _VISUAL_DATA_RECORDS = (:HeatmapLayer,:RectLayer,:PolygonLayer,:Polygon3Layer,
     :SegmentLayer,:PolylineLayer,:PointLayer,:Point3Layer,:TextLayer,:MatrixLayer,

@@ -18,6 +18,3 @@ jobs:
       - uses: JuliaRegistries/TagBot@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          # Enable only after configuring a write-enabled deploy key, e.g. when
-          # tags need to trigger a documentation workflow. See https://github.com/erikmnovak/TamerOp-site/blob/main/docs/releasing.md.
-          # ssh: ${{ secrets.DOCUMENTER_KEY }}

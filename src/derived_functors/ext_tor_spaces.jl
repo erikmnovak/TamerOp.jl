@@ -237,6 +237,8 @@ module ExtTorSpaces
         basis::Union{Nothing,Vector{PMorphism{K}}}
         basis_matrix::Matrix{K}  # columns are vectorizations of basis morphisms
         offsets::Vector{Int}     # per vertex block offsets in the vectorization
+        algorithm::Symbol
+        variables::Int
     end
 
     function Base.getproperty(H::HomSpace{K}, s::Symbol) where {K}
@@ -337,19 +339,15 @@ module ExtTorSpaces
       call returns.
     - Ask for `basis(H)` only when you actually need explicit morphisms.
 
-    Performance notes
-    - This function used to assemble a dense constraint matrix A=zeros(K,neqs,nvars)
-    and then call FieldLinAlg.nullspace(field, A). That is prohibitively expensive when nvars is
-    large, even though each constraint row is very sparse.
-    - Exact fields stream naturality equations without materializing A. Rational
-      equations use primitive integer echelon rows and final back substitution;
-      finite fields use sparse RREF. Real fields assemble sparse constraints and use
-      field-aware numerical nullspaces, retaining the supplied tolerances.
+    Exact fields use generator-image coordinates when these substantially
+    reduce the system; other requests stream cover-edge naturality equations.
+    Rational projective sources on rooted forests admit a factored transport
+    route. Numerical fields retain field-aware nullspaces and their tolerances.
+    `hom_summary(H)` reports the selected algorithm and number of unknowns.
 
-    Mathematical content
-    - Unknowns are the entries of the vertex maps F_u : M_u -> N_u for all u.
-    - Constraints are the naturality equations along cover edges (u <. v):
-        N_{uv} * F_u - F_v * M_{uv} = 0.
+    Every route returns the same Hom space, including full vertex-map bases.
+    Generator coordinates are reconstructed before the result is returned;
+    `basis(H)` lazily materializes the individual `PMorphism` objects.
     """
     function Hom(M::PModule{K}, N::PModule{K}) where {K}
         Q = M.Q
@@ -361,12 +359,29 @@ module ExtTorSpaces
 
         # Degenerate case: all vertex dimensions are zero.
         if nvars == 0
-            return HomSpace{K}(M, N, PMorphism{K}[], zeros(K, 0, 0), offs)
+            return HomSpace{K}(M, N, PMorphism{K}[], zeros(K, 0, 0), offs, :zero, 0)
         end
         if M.field isa RealField
-            return HomSpace{K}(M, N, nothing, _hom_numerical_basis(M, N, offs), offs)
+            return HomSpace{K}(M, N, nothing, _hom_numerical_basis(M, N, offs), offs, :numerical, nvars)
         end
 
+        if _hom_generator_candidate(M, N, nvars)
+            plan = _hom_generator_plan(M, N)
+            if 4plan.offsets[end] <= nvars
+                forest = _hom_projective_forest(M, plan)
+                B = forest ? _hom_forest_basis(M, N, offs, plan) :
+                             _hom_generator_basis(M, N, offs, plan)
+                return HomSpace{K}(M, N, nothing, B, offs,
+                                   forest ? :projective_forest : :generators, plan.offsets[end])
+            end
+        end
+        return HomSpace{K}(M, N, nothing, _hom_naturality_basis(M, N, offs),
+                           offs, :naturality, nvars)
+    end
+
+    function _hom_naturality_basis(M::PModule{K}, N::PModule{K}, offs) where {K}
+        Q = M.Q
+        nvars = offs[end]
         dM = M.dims
         dN = N.dims
 
@@ -442,8 +457,10 @@ module ExtTorSpaces
 
         basis_matrix = fullrank ? zeros(K, nvars, 0) : _nullspace_from_pivots(R, nvars)
 
-        return HomSpace{K}(M, N, nothing, basis_matrix, offs)
+        return basis_matrix
     end
+
+    include("hom_generators.jl")
 
     Hom(H::FringeModule{K}, N::PModule{K}) where {K} =
         Hom(pmodule_from_fringe(H), N)
@@ -2513,6 +2530,8 @@ module ExtTorSpaces
     @inline function hom_summary(H::HomSpace)
         return (
             kind=:hom_space,
+            algorithm=H.algorithm,
+            variables=H.variables,
             provenance=provenance(H),
             field=H.dom.field,
             nvertices=nvertices(H.dom.Q),

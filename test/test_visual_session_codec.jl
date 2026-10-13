@@ -29,6 +29,8 @@ end
         @test eltype(_a100_codec_roundtrip(M))===eltype(M)
     end
     @test _a100_codec_roundtrip((x=1//3,y=(2,3),kind=:exact)).x==1//3
+    @test _a100_codec_roundtrip(Tuple)===Tuple
+    @test _a100_codec_roundtrip(Tuple{})===Tuple{}
     @test_throws ArgumentError S.visual_data_to_json(identity)
     @test_throws ArgumentError S.visual_data_to_json((nested=(callback=identity,),))
     @test_throws ArgumentError S.visual_data_to_json(Ref(3))
@@ -37,6 +39,7 @@ end
 @testset "A100 typed arrays, sparse matrices and layout ranges" begin
     S=TamerOp.Serialization
     values=(zeros(0,3),reshape(Any[],2,0,4),reshape([1//2],()),
+        [(context=(;),observation=(;))],Tuple{}[()],
         Union{Nothing,Int}[nothing,2],[(label=:one,ids=(1,2)),(label=:two,ids=(3,4))],
         NamedTuple{(:x,:y)}[(x=1,y=:a),(x=1//2,y=(1,2))],
         Dict{Symbol,Any}(:a=>[1,2],:b=>(0//1,2//3)),Int32(2):Int32(4),2:1,1:3:10,

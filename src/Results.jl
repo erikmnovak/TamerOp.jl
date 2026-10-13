@@ -68,7 +68,8 @@ that the producer did not supply the information; it is not an exactness claim.
 
 For derived objects, resolution independence is within the reported finite
 category. `ambient_identification=:not_asserted` does not identify that result
-with Ext or Tor in an ambient persistence category. See `docs/math_categories.md`.
+with Ext or Tor in an ambient persistence category. See the
+[category and comparison guide](https://www.tamerop.com/math_categories.html).
 The same report appears in `describe(result).provenance`.
 """
 function provenance end

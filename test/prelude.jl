@@ -53,9 +53,13 @@ const _TEST_SURFACE_MODULES = (
     TamerOp.Visualization,
     TamerOp.Invariants,
     TamerOp.IntervalDecompositions,
+    TamerOp.IndecomposableDecompositions,
     TamerOp.Workflow,
     TamerOp.DataIngestion,
     TamerOp.OrdinaryPersistence,
+    TamerOp.ZigzagPersistence,
+    TamerOp.Interleavings,
+    TamerOp.Pruning,
     TamerOp.Featurizers,
 )
 
@@ -84,6 +88,9 @@ const PLP = TamerOp.PLPolyhedra
 const PLB = TamerOp.PLBackend
 const CC  = TamerOp.ChainComplexes
 const OP  = TamerOp.OrdinaryPersistence
+const ZZ  = TamerOp.ZigzagPersistence
+const IL  = TamerOp.Interleavings
+const PR  = TamerOp.Pruning
 const OPT = TamerOp.Options
 const DT  = TamerOp.DataTypes
 const DI  = TamerOp.DataIngestion
@@ -91,6 +98,7 @@ const EC  = TamerOp.EncodingCore
 const RES = TamerOp.Results
 const QQ  = TamerOp.CoreModules.QQ
 const CM  = TamerOp.CoreModules
+include("fixtures/pruning.jl")
 const IC  = TamerOp.InvariantCore
 const Inv = TamerOp.Invariants
 const SM  = TamerOp.SignedMeasures

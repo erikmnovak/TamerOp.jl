@@ -53,7 +53,11 @@ function _check_linked_inspection!(issues::Vector{String}, spec::VisualizationSp
     expected_widgets = session isa SummandInspectionSession ? (:summand_selection,:summand_gallery,:summand_hom) : session isa EnsembleInspectionSession ? (:ensemble_view,:ensemble_sample,:ensemble_probe) : session isa FieldInspectionSession ? (:field_point,:field_planes,:field_layer) : session isa GeneralizedRankInspectionSession ? (:rank_region,:rank_witness,:gril_layer) : session isa ModuleEditorSession ? (:editor_draft,:editor_history,:editor_export) : session isa CollectionInspectionSession ? (:collection_view,:collection_sample,:collection_feature) : session isa ComparisonInspectionSession ? (:comparison_view,:comparison_probe,:comparison_baseline) : session isa ComponentInspectionSession ? (:component_scale,:component_selection,:component_event) : session isa TransportInspectionSession ? (:transport_selection,:transport_view) : session isa ChainInspectionSession ? (:chain_degree,:chain_vector,:chain_map) : session isa ComplexInspectionSession ? (:complex_parameter,:complex_cell,:complex_dimensions) : session isa SpectralInspectionSession ? (:spectral_page,:spectral_differential) : session isa SignedInspectionSession ? (:signed_term,:signed_query,:signed_smoothing) : session isa MatchingInspectionSession ? (:matching_pair,:matching_slice,:matching_optimum) : session isa IntervalInspectionSession ?
         (:interval_selection, :interval_member, :interval_representative) :
         (:inspection_selection, :inspection_view, :inspection_basis, :inspection_slice)
+    session isa SourceLaboratorySession && (expected_widgets = (:source_draft,:source_rebuild,:source_history))
+    session isa PathInspectionSession && (expected_widgets = (:path_frame,:path_track,:path_playback))
+    session isa RelativeInspectionSession && (expected_widgets = (:relative_selection,:relative_query,:relative_witness))
     session isa AtlasInspectionSession && (expected_widgets = (:atlas_states,:atlas_event,:atlas_witness))
+    session isa CertificateInspectionSession && (expected_widgets = (:certificate_location,:certificate_equations))
     get(spec.interaction, :widgets, ()) == expected_widgets ||
         push!(issues, "Unsupported linked-inspector widget contract.")
     return issues

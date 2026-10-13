@@ -216,3 +216,45 @@ persistence_diagram_json_summary(path::AbstractString) =
 """Validate an owned persistence result and return a serialization report; `throw=true` rejects invalid files."""
 check_persistence_diagram_json(path::AbstractString;throw::Bool=false) =
     _check_owned_json(path,"PersistenceDiagram",()->load_persistence_diagram_json(path),:check_persistence_diagram_json;throw)
+
+"""Save an extended result with its exact scalar values, interval types,
+endpoint decorations, source boundaries and two-phase pair. Uses an owned
+schema distinct from ordinary persistence, so interval types cannot be lost."""
+function save_extended_persistence_json(path::AbstractString,diagram;profile::Symbol=:compact,pretty::Union{Nothing,Bool}=nothing)
+    output_pretty=_resolve_owned_json_pretty(profile,pretty)
+    OP=_persistence_owner()
+    diagram isa OP.ExtendedPersistenceDiagram || throw(ArgumentError("expected an ExtendedPersistenceDiagram"))
+    data=OP.extended_persistence_data(diagram)
+    obj=Dict("kind"=>"ExtendedPersistenceDiagram","schema_version"=>1,
+        "field_characteristic"=>data.field.p,"order"=>String(data.order),
+        "interval_counts"=>length.(data.intervals),"data"=>_pd_encode(data))
+    return _json_write(path,obj;pretty=output_pretty)
+end
+
+"""Load an extended result and recheck its intervals by reducing the stored
+pair. The allowlisted scalar codec preserves exact grades, including BigFloat
+precision. No source text is evaluated."""
+function load_extended_persistence_json(path::AbstractString)
+    try
+        obj=JSON3.read(read(path,String))
+        _pd_keys(obj,("kind","schema_version","field_characteristic","order","interval_counts","data"))
+        obj["kind"]=="ExtendedPersistenceDiagram" && obj["schema_version"] isa Integer &&
+            !(obj["schema_version"] isa Bool) && obj["schema_version"]==1 || throw(ArgumentError("unsupported extended schema"))
+        obj["field_characteristic"] isa Integer && !(obj["field_characteristic"] isa Bool) &&
+            all(n->n isa Integer && !(n isa Bool) && n>=0,obj["interval_counts"]) || throw(ArgumentError("invalid extended header"))
+        d=_persistence_owner().extended_persistence_from_data(_pd_decode(obj["data"]))
+        s=describe(d)
+        s.field.p==obj["field_characteristic"] && String(s.order)==obj["order"] &&
+            collect(s.interval_counts)==obj["interval_counts"] || throw(ArgumentError("extended header disagrees with data"))
+        return d
+    catch err
+        err isa InterruptException && rethrow()
+        throw(ArgumentError("invalid extended persistence JSON: $(sprint(showerror,err))"))
+    end
+end
+"""Inspect an extended-result header without constructing its quotient maps."""
+extended_persistence_json_summary(path::AbstractString)=
+    _expect_artifact_kind(inspect_json(path),"ExtendedPersistenceDiagram",:extended_persistence_json_summary)
+"""Validate a saved extended result, including its source pair and reduction."""
+check_extended_persistence_json(path::AbstractString;throw::Bool=false)=
+    _check_owned_json(path,"ExtendedPersistenceDiagram",()->load_extended_persistence_json(path),:check_extended_persistence_json;throw)

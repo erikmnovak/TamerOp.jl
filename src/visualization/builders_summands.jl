@@ -95,6 +95,26 @@ function summand_collection(M::Modules.PModule,pieces;inclusions,projections,
     c
 end
 
+"""
+    summand_collection(result::IndecomposableDecompositionResult;
+        budget=Advanced.IndecomposableDecompositionBudget())
+
+Validate a certified decomposition with retained witnesses, then pass its actual
+individual summands and splitting maps to the existing gallery/inspector. The
+collection reports checked reconstruction; each input result separately retains
+its indecomposability certificates. No support approximation is inferred.
+"""
+function summand_collection(r::IndecomposableDecompositions.IndecomposableDecompositionResult;
+        budget=IndecomposableDecompositions.IndecomposableDecompositionBudget())
+    w = IndecomposableDecompositions.decomposition_maps(r)
+    IndecomposableDecompositions.check_indecomposable_decomposition(r;budget,throw=true)
+    ib = IntervalDecompositions.IntervalDecompositionBudget(max_vertices=budget.max_vertices,
+        max_dimension=budget.max_dimension,max_matrix_entries=budget.max_matrix_entries,
+        max_candidates=budget.max_dimension)
+    return summand_collection(IndecomposableDecompositions.source_module(r),w.summands;
+        inclusions=w.inclusions,projections=w.projections,budget=ib)
+end
+
 function summand_collection(r::IntervalDecompositions.IntervalDecompositionResult;
         budget=IntervalDecompositions.IntervalDecompositionBudget())
     w=IntervalDecompositions.decomposition_maps(r)
@@ -209,7 +229,8 @@ describe(d::SummandSupportDrawing)=(;kind=:supplied_support_drawing,blocks=lengt
     geometry=:unverified,provenance=d.provenance,error_statement=d.error_statement,boundaries=:lower_closed_upper_open)
 Base.show(io::IO,d::SummandSupportDrawing)=print(io,"SummandSupportDrawing(blocks=",length(d.boxes),", geometry=unverified)")
 
-const _SummandInput=Union{SummandCollection,IntervalDecompositions.IntervalDecompositionResult}
+const _SummandInput=Union{SummandCollection,IntervalDecompositions.IntervalDecompositionResult,
+    IndecomposableDecompositions.IndecomposableDecompositionResult}
 const _SUMMAND_OPTIONS=(:selected,:focus,:vertex,:pair,:layout,:sort_by,:min_value,:type_filter,:limit,
     :scale,:shared_scale,:hom,:hom_pair,:basis_index,:matrix_limit)
 available_visuals(::_SummandInput)=(:summand_gallery,)
@@ -512,6 +533,9 @@ _visual_request_cost(::_SummandInput,::Symbol)=(;work=:checked_direct_sum,geomet
 function _append_visual_request_issues!(issues::Vector{String},input::_SummandInput,::Symbol;kwargs...)
     input isa IntervalDecompositions.IntervalDecompositionResult &&
         !IntervalDecompositions.interval_decomposition_summary(input).witnesses && push!(issues,"The gallery needs witnesses=true in interval_decomposition.")
+    input isa IndecomposableDecompositions.IndecomposableDecompositionResult &&
+        !IndecomposableDecompositions.indecomposable_decomposition_summary(input).witnesses &&
+        push!(issues,"The gallery needs witnesses=true in indecomposable_decomposition or bipath_decomposition.")
     for (key,allowed) in ((:layout,(:facets,:overlay,:outline,:isolate)),
             (:sort_by,(:index,:multiplicity,:support_vertices,:total_dimension,:max_dimension,:generators,:relations)),
             (:type_filter,(:all,:interval,:thin,:thick)),(:scale,(:linear,:log)))

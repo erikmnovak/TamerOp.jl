@@ -136,9 +136,18 @@ Best practices
 @inline function _zero_composition(field::AbstractCoeffField,
                                    g::PMorphism,
                                    f::PMorphism)::Bool
-    n = min(length(g.comps), length(f.comps))
-    @inbounds for v in 1:n
-        _is_zero_matrix(field, g.comps[v] * f.comps[v]) || return false
+    f.cod === g.dom || throw(ArgumentError("zero composition: incompatible middle modules"))
+    n = nvertices(f.dom.Q)
+    length(g.comps) == length(f.comps) == n ||
+        throw(DimensionMismatch("zero composition: expected one component per vertex"))
+    for v in 1:n
+        size(f.comps[v]) == (f.cod.dims[v], f.dom.dims[v]) &&
+            size(g.comps[v]) == (g.cod.dims[v], g.dom.dims[v]) ||
+            throw(DimensionMismatch("zero composition: incompatible component sizes at vertex $v"))
+        # Keep the operands: relative roundoff is measured against the
+        # multiplication scale, not the already cancelled residual. This is
+        # the same relation check used for module complexes and field changes.
+        Modules._coefficient_product_zero(field, g.comps[v], f.comps[v]) || return false
     end
     return true
 end
@@ -3439,10 +3448,7 @@ function is_exact(ses::ShortExactSequence{K}; cache::Union{Symbol,CoverCache}=:a
 
     # p o i = 0
     field = B.field
-    for u in 1:nvertices(B.Q)
-        comp = p.comps[u] * i.comps[u]
-        _is_zero_matrix(field, comp) || (ses.checked = true; ses.exact = false; return false)
-    end
+    _zero_composition(field, p, i) || (ses.checked = true; ses.exact = false; return false)
 
     # i mono, p epi
     if !_is_monomorphism(i) || !_is_epimorphism(p)

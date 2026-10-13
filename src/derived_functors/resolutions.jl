@@ -25,7 +25,7 @@ module Resolutions
     using ...FiniteFringe: AbstractPoset, FinitePoset, FringeModule, Upset, cover_edges, is_subset,
                            leq, nvertices, poset_equal, upset_indices, downset_indices
     using ...AbelianCategories: kernel_with_inclusion, _KernelIncrementalEntry, _CokernelIncrementalEntry,
-                                 is_zero_morphism
+                                 _zero_composition
     using ...IndicatorResolutions: projective_cover, pmodule_from_fringe
     using  ...IndicatorResolutions: _injective_hull, _cokernel_module, _nonzero_dim_vertices,
                                     _indicator_new_array_memo, _new_resolution_workspace
@@ -1612,6 +1612,8 @@ module Resolutions
     shapes, and the chain relation `d_a * d_(a+1) = 0`. When `check_cover=true`,
     the report also records whether the built-in minimality diagnostics certify
     the cover stage, but a nonminimal resolution is not treated as invalid.
+    For `RealField`, chain relations use the field tolerances scaled by the
+    operands of each composition; exact fields require exact vanishing.
     """
     function check_projective_resolution(
         res::ProjectiveResolution{K};
@@ -1648,11 +1650,11 @@ module Resolutions
         if isempty(issues)
             try
                 for a in 1:max(0, length(res.d_mor) - 1)
-                    is_zero_morphism(compose(res.d_mor[a], res.d_mor[a + 1])) ||
+                    _zero_composition(res.M.field, res.d_mor[a], res.d_mor[a + 1]) ||
                         push!(issues, "d_$a * d_$(a + 1) must vanish.")
                 end
 
-                isempty(res.d_mor) || is_zero_morphism(compose(res.aug, res.d_mor[1])) ||
+                isempty(res.d_mor) || _zero_composition(res.M.field, res.aug, res.d_mor[1]) ||
                     push!(issues, "augmentation must kill the first differential.")
             catch error
                 push!(issues, "differential composition is malformed: " * sprint(showerror, error))
@@ -1689,6 +1691,8 @@ module Resolutions
     shapes, and the chain relation `d^(b+1) * d^b = 0`. When `check_hull=true`,
     the report also records whether the built-in minimality diagnostics certify
     the hull stage, but a nonminimal resolution is not treated as invalid.
+    For `RealField`, chain relations use the field tolerances scaled by the
+    operands of each composition; exact fields require exact vanishing.
     """
     function check_injective_resolution(
         res::InjectiveResolution{K};
@@ -1721,11 +1725,11 @@ module Resolutions
         if isempty(issues)
             try
                 for b in 1:max(0, length(res.d_mor) - 1)
-                    is_zero_morphism(compose(res.d_mor[b + 1], res.d_mor[b])) ||
+                    _zero_composition(res.N.field, res.d_mor[b + 1], res.d_mor[b]) ||
                         push!(issues, "d^$b * d^$((b - 1)) must vanish.")
                 end
 
-                isempty(res.d_mor) || is_zero_morphism(compose(res.d_mor[1], res.iota0)) ||
+                isempty(res.d_mor) || _zero_composition(res.N.field, res.d_mor[1], res.iota0) ||
                     push!(issues, "first differential must kill the coaugmentation.")
             catch error
                 push!(issues, "differential composition is malformed: " * sprint(showerror, error))

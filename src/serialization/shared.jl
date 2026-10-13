@@ -445,6 +445,10 @@ function inspect_json(path::AbstractString)
             profile_hint = _owned_profile_hint(pretty_hint),
             size_bytes = size_bytes,
         )
+    elseif kind == "ExtendedPersistenceDiagram"
+        (kind=kind,schema_version=schema,field="Fp",
+            field_characteristic=get(obj,"field_characteristic",missing),order=get(obj,"order",missing),
+            interval_counts=get(obj,"interval_counts",missing),profile_hint=_owned_profile_hint(pretty_hint),size_bytes=size_bytes)
     elseif kind == "PersistenceDiagram"
         (
             kind = kind, schema_version = schema,

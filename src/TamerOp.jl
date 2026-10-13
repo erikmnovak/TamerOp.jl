@@ -89,7 +89,10 @@ include("PLBackend.jl")
 include("ChainComplexes.jl")
 include("DerivedFunctors.jl")
 include("ModuleComplexes.jl")
+include("H0Presentations.jl")
 include("ChangeOfPosets.jl")
+include("Interleavings.jl")
+include("Pruning.jl")
 
 # 11) JSON IO layer (internal formats + external adapters)
 include("Serialization.jl")
@@ -102,6 +105,7 @@ include("Fibered2D.jl")
 include("MultiparameterImages.jl")
 include("Invariants.jl")
 include("IntervalDecompositions.jl")
+include("IndecomposableDecompositions.jl")
 
 # 13) High-level workflow orchestration wrappers
 include("Workflow.jl")
@@ -139,6 +143,8 @@ include("DataIngestion.jl")
 
 # 16) Ordinary one-parameter persistence helpers
 include("OrdinaryPersistence.jl")
+include("ZigzagPersistence.jl")
+include("CohomologyProducts.jl")
 
 # 17) Synthetic data generators
 include("SyntheticData.jl")
@@ -267,13 +273,19 @@ import ..DerivedFunctors.Backends
 import ..DerivedFunctors.HomExtEngine
 import ..DerivedFunctors.Utils
 import ..ModuleComplexes
+import ..H0Presentations
 import ..ChangeOfPosets
 import ..Invariants
 import ..IntervalDecompositions
+import ..IndecomposableDecompositions
 import ..Workflow
 import ..DataFileIO
 import ..DataIngestion
 import ..OrdinaryPersistence
+import ..ZigzagPersistence
+import ..CohomologyProducts
+import ..Interleavings
+import ..Pruning
 import ..Featurizers
 
 export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
@@ -282,8 +294,8 @@ export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
        PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
        HomExtEngine, Utils,
-       ModuleComplexes, ChangeOfPosets, Invariants, IntervalDecompositions, Workflow, DataFileIO, DataIngestion,
-       OrdinaryPersistence, Featurizers
+       ModuleComplexes, H0Presentations, ChangeOfPosets, Invariants, IntervalDecompositions, IndecomposableDecompositions, Workflow, DataFileIO, DataIngestion,
+       OrdinaryPersistence, ZigzagPersistence, CohomologyProducts, Interleavings, Pruning, Featurizers
 
 # -----------------------------------------------------------------------------
 # Static curated API binding (no dynamic lifting).

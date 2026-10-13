@@ -23,6 +23,9 @@ jobs:
       TAMEROP_STATIC_HTML: ${{ github.workspace }}/test/browser/artifacts/static.html
       TAMEROP_SOURCE_PREVIEW_HTML: ${{ github.workspace }}/test/browser/artifacts/source-preview.html
       TAMEROP_BATCHED_HTML: ${{ github.workspace }}/test/browser/artifacts/batched.html
+      TAMEROP_SOURCE_LAB_HTML: ${{ github.workspace }}/test/browser/artifacts/source-laboratory.html
+      TAMEROP_PATH_HTML: ${{ github.workspace }}/test/browser/artifacts/path.html
+      TAMEROP_RELATIVE_HTML: ${{ github.workspace }}/test/browser/artifacts/relative.html
       TAMEROP_ATLAS_HTML: ${{ github.workspace }}/test/browser/artifacts/atlas.html
       TAMEROP_A87_HTML: ${{ github.workspace }}/test/browser/artifacts/summands.html
       TAMEROP_BROWSER_OUTPUT: ${{ github.workspace }}/test/browser/test-results/live

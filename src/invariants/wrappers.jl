@@ -24,10 +24,8 @@ rank_map(M::PModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), cac
 rank_map(H::FringeModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), cache=nothing, memo=nothing) where {K} =
     rank_map(H, pi, x, y, opts; cache = cache, memo = memo)
 
-rank_query(M::PModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+rank_query(M::Union{PModule{K},FringeModule{K}}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
     rank_query(M, pi, x, y, opts; kwargs...)
-rank_query(H::FringeModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
-    rank_query(H, pi, x, y, opts; kwargs...)
 
 hilbert_distance(M, N, pi; opts::InvariantOptions=InvariantOptions(), kwargs...) =
     hilbert_distance(M, N, pi, opts; kwargs...)

@@ -11,6 +11,7 @@ using ..ExactReals: AlgebraicReal
 import ..SliceInvariants: bottleneck_distance, bottleneck_matching, wasserstein_distance,
     persistence_landscape, persistence_image, persistence_silhouette, barcode_entropy, barcode_summary
 using ..DataTypes: GradedComplex, ImageNd
+import ..DataTypes
 using ..Options: ConstructionOptions
 import ..DataIngestion
 import ..ChainComplexes: describe
@@ -1559,5 +1560,11 @@ end
 
 include("ordinary_persistence/filtered_geometry.jl")
 include("ordinary_persistence/relative.jl")
+include("ordinary_persistence/spatial_pairs.jl")
+include("ordinary_persistence/extended.jl")
+include("ordinary_persistence/extended_analysis.jl")
+include("ordinary_persistence/incremental.jl")
+include("ordinary_persistence/incremental_updates.jl")
+include("ordinary_persistence/incremental_witnesses.jl")
 
 end # module OrdinaryPersistence

@@ -71,6 +71,8 @@ function _request_inspection!(s, owner; status=(_,_)->nothing, kwargs...)
     nothing
 end
 
+_apply_inspection_request!(s;kwargs...) = select_inspection!(s;kwargs...)
+
 function _run_inspection_requests!(s)
     q=s.requests
     try
@@ -86,7 +88,7 @@ function _run_inspection_requests!(s)
             work===nothing && break
             result_error=nothing
             try
-                select_inspection!(work.transaction;work.request.kwargs...)
+                _apply_inspection_request!(work.transaction;work.request.kwargs...)
             catch err
                 err isa InterruptException && rethrow()
                 result_error=sprint(showerror,err)
@@ -113,7 +115,9 @@ function _run_inspection_requests!(s)
                 end
                 lock(s.lock) do
                     if !s.closed && q.generation==work.request.generation
-                        work.request.status(result_error===nothing ? :committed : :error,result_error)
+                        # A notebook or a new linked view may supply a callback
+                        # defined after this worker started.
+                        Base.invokelatest(work.request.status,result_error===nothing ? :committed : :error,result_error)
                     end
                 end
             end

@@ -123,8 +123,10 @@ function visual_source_to_json(object;max_vertices=10_000)
             "backend"=>String(object.backend))
     elseif object isa OP.PersistenceDiagram
         Dict("source_kind"=>"persistence_diagram","diagram"=>_visual_owned_source_payload(save_persistence_diagram_json,object))
+    elseif object isa OP.ExtendedPersistenceDiagram
+        Dict("source_kind"=>"extended_persistence","diagram"=>_visual_owned_source_payload(save_extended_persistence_json,object))
     else
-        throw(ArgumentError("no owned visual source format for $(typeof(object)); supported sources are PModule, EncodingResult and PersistenceDiagram"))
+        throw(ArgumentError("no owned visual source format for $(typeof(object)); supported sources are PModule, EncodingResult, PersistenceDiagram and ExtendedPersistenceDiagram"))
     end
     return _visual_data_canonical_json(Dict("kind"=>"VisualSource","schema_version"=>1,"payload"=>payload))
 end
@@ -169,6 +171,9 @@ function visual_source_from_json(text::AbstractString;max_vertices=10_000)
         elseif p["source_kind"]=="persistence_diagram"
             _visual_data_keys(p,("source_kind","diagram"),"persistence source payload")
             return _visual_owned_source_restore(load_persistence_diagram_json,p["diagram"])
+        elseif p["source_kind"]=="extended_persistence"
+            _visual_data_keys(p,("source_kind","diagram"),"extended persistence source payload")
+            return _visual_owned_source_restore(load_extended_persistence_json,p["diagram"])
         end
         throw(ArgumentError("unsupported source kind $(p["source_kind"])"))
     catch err

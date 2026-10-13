@@ -167,7 +167,8 @@ principal supports, target rows/source columns, marked order-forced zeros,
 selected active stalks, and an optional invertible graded basis change satisfying
 A*S=T*B. Degree 0/1 selects generators/relations (dually cogenerators/corelations).
 Their represented constructions are cokernel/kernel, not the fringe image.
-See `docs/src/reference/visualization.md` and the executable resolution guide.
+See the [resolution and presentation reference](https://www.tamerop.com/reference/visualization.html#resolutions-and-presentation-incidence)
+and the executable [resolution guide](https://www.tamerop.com/guides/resolutions.html).
 
 Signed observables support `kind=:signed_cancellation`: a rank pair query is
 `query=(p=(x,y),q=(x,y))`, cumulative atoms use `query=(x,y)` with an explicit
@@ -176,9 +177,10 @@ Signed observables support `kind=:signed_cancellation`: a rank pair query is
 ID and `max_terms` limits drawing only. Rectangle `smoothing=(epsilon_x,epsilon_y)` shifts the
 upper endpoint, with inclusive grid versus half-open physical boundaries kept
 explicit; `:signed_diagonals` and `:signed_prominence` offer linked alternate
-views. A named background must share axes and units. See the signed-observable
-section of `docs/src/reference/visualization.md` for all endpoint and cost
-contracts, and `inspection_session` for live selection and query reuse.
+views. A named background must share axes and units. See the
+[signed observable reference](https://www.tamerop.com/reference/visualization.html#signed-observables-and-cancellation)
+for the endpoint and cost contracts, and `inspection_session` for live selection
+and query reuse.
 # Refinement and transport
 
     visual_spec(result; sources=nothing, joint=nothing, comparison=nothing,

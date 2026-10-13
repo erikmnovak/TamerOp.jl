@@ -3041,7 +3041,7 @@ method is intended for modest coordinate grids. Reuse barcode caches for
 repeated module comparisons; use the sampled method for quick exploration.
 The final `Float64` conversion can underflow or overflow at extreme scales;
 exact optimization does not enlarge that output format's numerical range.
-See `docs/exact_matching.md` for the proof and its implementation checklist.
+See the [proof of coverage](https://www.tamerop.com/guides/exact_matching.html#proof-of-coverage).
 
 Set `witness=true` to return a `MatchingDistanceResult2D` retaining the exact
 scalar, chosen line, its weight and the actual bottleneck assignment. The default

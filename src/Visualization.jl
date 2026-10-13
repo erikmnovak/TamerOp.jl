@@ -54,12 +54,16 @@ import ..CoreModules
 import ..FieldLinAlg
 import ..Invariants
 import ..IntervalDecompositions
+import ..IndecomposableDecompositions
+import ..Interleavings
+import ..Pruning
 import ..SignedMeasures
 import ..InvariantCore
 import ..IndicatorResolutions
 import ..IndicatorTypes
 using ..ExactReals: AlgebraicReal
 using ..FiniteFringe: AbstractPoset, ProductOfChainsPoset, GridPoset, ProductPoset, nvertices, leq
+import ..Options
 import ..DataTypes
 import ..DataIngestion
 import ..OrdinaryPersistence
@@ -111,6 +115,7 @@ include("visualization/rendering.jl")
 include("visualization/region_geometry.jl")
 include("visualization/builders_encoding.jl")
 include("visualization/builders_invariants.jl")
+include("visualization/builders_extended.jl")
 include("visualization/builders_signed.jl")
 include("visualization/hasse_layout.jl")
 include("visualization/builders_modules.jl")
@@ -139,6 +144,8 @@ include("visualization/builders_matchings.jl")
 include("visualization/inspection_matchings.jl")
 include("visualization/inspection_signed.jl")
 include("visualization/inspection_spectral.jl")
+include("visualization/builders_certificates.jl")
+include("visualization/inspection_certificates.jl")
 include("visualization/filtration_controls.jl")
 include("visualization/inspection_complexes.jl")
 include("visualization/inspection_chains.jl")
@@ -153,6 +160,11 @@ include("visualization/inspection_fields.jl")
 include("visualization/parameter_atlas.jl")
 include("visualization/builders_atlas.jl")
 include("visualization/inspection_atlas.jl")
+include("visualization/persistence_paths.jl")
+include("visualization/builders_paths.jl")
+include("visualization/inspection_paths.jl")
+include("visualization/builders_relative.jl")
+include("visualization/inspection_relative.jl")
 include("visualization/inspection_rendering.jl")
 include("visualization/composition.jl")
 include("visualization/builders_comparisons.jl")
@@ -162,6 +174,8 @@ include("visualization/inspection_collections.jl")
 include("visualization/builders_ensembles.jl")
 include("visualization/inspection_ensembles.jl")
 include("visualization/module_editor.jl")
+include("visualization/source_laboratory.jl")
+include("visualization/builders_source_laboratory.jl")
 include("visualization/session_composition.jl")
 include("visualization/session_html.jl")
 include("visualization/saved_sessions.jl")

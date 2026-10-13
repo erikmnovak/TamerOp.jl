@@ -74,18 +74,18 @@ const _CHANGE_OF_POSETS_USE_PRODUCT_PROJECTION_FASTPATH = Ref(true)
 const _CHANGE_OF_POSETS_USE_FUSED_PRODUCT_TRANSLATION = Ref(true)
 const _CHANGE_OF_POSETS_USE_DIRECT_HOM_COMMON_REFINEMENT = Ref(true)
 const _CHANGE_OF_POSETS_USE_DERIVED_LEFT_COEFF_FASTPATH = Ref(true)
-const _CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH = Ref(false)
-const _CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH = Ref(false)
+const _CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH = Ref(true)
+# Tiny systems retain the field-specific nullspace route.
+const _CHANGE_OF_POSETS_RIGHT_KAN_SELECTOR_MIN_VARIABLES = Ref(64)
 const _CHANGE_OF_POSETS_USE_RIGHT_KAN_QQ_SUMMARY_SELECTOR = Ref(true)
 const _CHANGE_OF_POSETS_USE_RIGHT_KAN_DIRECT_CSC = Ref(true)
-const _CHANGE_OF_POSETS_USE_LEFT_KAN_QQ_SUMMARY_QUOTIENT = Ref(false)
-const _CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL = Ref(false)
+const _CHANGE_OF_POSETS_USE_RIGHT_KAN_ACTIVE_BLOCKS = Ref(true)
+const _CHANGE_OF_POSETS_USE_LEFT_KAN_QQ_SUMMARY_QUOTIENT = Ref(true)
+const _CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS = Ref(true)
 const _CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE = Ref(true)
 const _CHANGE_OF_POSETS_USE_LEFT_DERIVED_DIFFS_FROM_DATA = Ref(true)
 const _CHANGE_OF_POSETS_USE_LEFT_DERIVED_COHOMOLOGY_SHORTCUT = Ref(true)
-const _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE = Ref(true)
 const _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_DIFFS_FROM_DATA = Ref(true)
-const _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE = Ref(true)
 const _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_SHARED_RESOLUTION_FASTPATH = Ref(true)
 const _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_IDENTITY_MAP_FASTPATH = Ref(true)
 
@@ -742,10 +742,6 @@ end
 
 @inline _translation_left_coeff_key(pi::EncodingMap, dom_bases, cod_bases) =
     (:left_derived_coeff_plan, UInt(objectid(dom_bases)), UInt(objectid(cod_bases)),
-     UInt(objectid(pi.Q)), UInt(objectid(pi.P)))
-
-@inline _translation_right_coeff_key(pi::EncodingMap, dom_bases, cod_bases) =
-    (:right_derived_coeff_plan, UInt(objectid(dom_bases)), UInt(objectid(cod_bases)),
      UInt(objectid(pi.Q)), UInt(objectid(pi.P)))
 
 # Pre-populate the FiniteFringe cover-edges cache for the cartesian product poset.
@@ -2473,7 +2469,8 @@ function _nullspace_selector_summary(field::AbstractCoeffField, C::SparseMatrixC
     if nvars == 0
         return zeros(K, 0, 0), zeros(K, 0, 0)
     end
-    if field isa RealField || !_CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[]
+    if field isa RealField || !_CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[] ||
+       nvars < _CHANGE_OF_POSETS_RIGHT_KAN_SELECTOR_MIN_VARIABLES[]
         Kp = FieldLinAlg.nullspace(field, C)
         return Kp, _left_inverse_full_column(field, Kp)
     end
@@ -2515,7 +2512,8 @@ function _nullspace_selector_summary(field::QQField, C::SparseMatrixCSC{QQ,Int})
         end
         return Kp, _selector_left_inverse(QQ, free_cols, nvars)
     end
-    if !_CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[]
+    if !_CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[] ||
+       nvars < _CHANGE_OF_POSETS_RIGHT_KAN_SELECTOR_MIN_VARIABLES[]
         Kp = FieldLinAlg.nullspace(field, C)
         return Kp, _left_inverse_full_column(field, Kp)
     end
@@ -3144,7 +3142,7 @@ function _pushforward_left_morphism_from_data(
     comps = Vector{Matrix{K}}(undef, length(fibers))
 
     @inline function _left_pushforward_comp(p::Int)
-        local Vd, Vc, Fp, fiber, offs_dom, offs_cod, Lp, Wp, q, dd, dc, rd, cc, max_dc, tmp, tmpv, Lblock, Wblock
+        local Vd, Vc, Fp, fiber, offs_dom, offs_cod, Lp, Wp, q, dd, dc, rd, cc, Lblock, Wblock
         Vd = data_dom.dimV[p]
         Vc = data_cod.dimV[p]
         if Vd == 0 || Vc == 0
@@ -3159,27 +3157,6 @@ function _pushforward_left_morphism_from_data(
         Lp = data_cod.L[p]
         Wp = data_dom.W[p]
 
-        if !_CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[]
-            @inbounds for loc in eachindex(fiber.idxs)
-                q = fiber.idxs[loc]
-                dd = f.dom.dims[q]
-                dc = f.cod.dims[q]
-                (dd == 0 || dc == 0) && continue
-
-                rd = (offs_dom[loc] + 1):offs_dom[loc + 1]
-                cc = (offs_cod[loc] + 1):offs_cod[loc + 1]
-                @views Fp .+= Lp[:, cc] * (f.comps[q] * Wp[rd, :])
-            end
-            comps[p] = Fp
-            return
-        end
-
-        max_dc = 0
-        @inbounds for q in fiber.idxs
-            max_dc = max(max_dc, f.cod.dims[q])
-        end
-        tmp = zeros(K, max_dc, Vd)
-
         @inbounds for loc in eachindex(fiber.idxs)
             q = fiber.idxs[loc]
             dd = f.dom.dims[q]
@@ -3188,11 +3165,15 @@ function _pushforward_left_morphism_from_data(
 
             rd = (offs_dom[loc] + 1):offs_dom[loc + 1]
             cc = (offs_cod[loc] + 1):offs_cod[loc + 1]
-            tmpv = @view tmp[1:dc, :]
             Lblock = @view Lp[:, cc]
             Wblock = @view Wp[rd, :]
-            mul!(tmpv, f.comps[q], Wblock)
-            mul!(Fp, Lblock, tmpv, one(K), one(K))
+            # Coordinate sections often vanish on most stalks of the fiber.
+            # Rational arithmetic makes skipping these blocks worthwhile.
+            if _CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[] && f.dom.field isa QQField &&
+               (all(iszero, Wblock) || all(iszero, Lblock))
+                continue
+            end
+            Fp .+= Lblock * (f.comps[q] * Wblock)
         end
         comps[p] = Fp
         return
@@ -3805,6 +3786,30 @@ right_kan_extension(pi::EncodingMap, M::PModule{K};
                     session_cache::Union{Nothing,SessionCache}=nothing) where {K} =
     pushforward_right(pi, M; check=check, threads=threads, session_cache=session_cache)
 
+# Accumulate a coordinate projection without multiplying its zero entries.
+# QQ selectors commonly contain one unit per row; the general exact case is
+# retained for alternative quotient/kernel bases used by the A/B checks.
+function _accumulate_nonzero_product!(out::AbstractMatrix{QQ},
+                                      projection::AbstractMatrix{QQ},
+                                      values::AbstractMatrix{QQ})
+    @inbounds for j in axes(projection, 2), i in axes(projection, 1)
+        a = projection[i, j]
+        iszero(a) && continue
+        if isone(a)
+            for k in axes(values, 2)
+                b = values[j, k]
+                iszero(b) || (out[i, k] += b)
+            end
+        else
+            for k in axes(values, 2)
+                b = values[j, k]
+                iszero(b) || (out[i, k] += a * b)
+            end
+        end
+    end
+    return out
+end
+
 function _pushforward_right_morphism_from_data(
     dom_out::PModule{K},
     cod_out::PModule{K},
@@ -3814,6 +3819,7 @@ function _pushforward_right_morphism_from_data(
     fibers::Vector{_KanFiberPlan};
     threads::Bool,
 ) where {K}
+    sparse_coordinates = _CHANGE_OF_POSETS_USE_RIGHT_KAN_ACTIVE_BLOCKS[] && f.dom.field isa QQField
     comps = Vector{Matrix{K}}(undef, length(fibers))
 
     @inline function _right_pushforward_comp(p::Int)
@@ -3849,8 +3855,16 @@ function _pushforward_right_morphism_from_data(
             tmpv = @view tmp[1:dc, :]
             Lblock = @view Lp[:, cc]
             Kblock = @view Kp[rd, :]
+            if sparse_coordinates &&
+               (all(iszero, Lblock) || all(iszero, Kblock))
+                continue
+            end
             mul!(tmpv, f.comps[q], Kblock)
-            mul!(Fp, Lblock, tmpv, one(K), one(K))
+            if sparse_coordinates
+                _accumulate_nonzero_product!(Fp, Lblock, tmpv)
+            else
+                mul!(Fp, Lblock, tmpv, one(K), one(K))
+            end
         end
         comps[p] = Fp
         return
@@ -4288,31 +4302,6 @@ function _pushforward_right_complex_data(
         comps = Vector{PMorphism{K}}(undef, maxlen + 1)
         @inbounds for k in 1:(maxlen + 1)
             comps[k] = id_morphism(terms_dom[k])
-        end
-    elseif _CHANGE_OF_POSETS_USE_DERIVED_RIGHT_COEFF_FASTPATH[]
-        comps = Vector{PMorphism{K}}(undef, maxlen + 1)
-        coeffs = _lift_injective_chainmap_coeffs(f, res_dom, res_cod; upto=maxlen, check=false)
-        coeff_plans = Vector{_RightCoeffPlan}(undef, maxlen + 1)
-        @inbounds for k in 0:maxlen
-            coeff_plans[k + 1] = _right_pushforward_coeff_plan(
-                pi, res_dom.gens[k + 1], res_cod.gens[k + 1], plan;
-                session_cache=session_cache,
-            )
-        end
-        @inbounds for k in 0:maxlen
-            comps[k + 1] = _pushforward_right_from_downset_coeff(
-                pi,
-                terms_dom[k + 1],
-                terms_cod[k + 1],
-                data_dom[k + 1],
-                data_cod[k + 1],
-                res_dom.gens[k + 1],
-                res_cod.gens[k + 1],
-                coeffs[k + 1],
-                plan;
-                coeff_plan=coeff_plans[k + 1],
-                session_cache=session_cache,
-            )
         end
     else
         comps = Vector{PMorphism{K}}(undef, maxlen + 1)
@@ -5004,35 +4993,7 @@ function _active_upset_indices_from_bases(Q::AbstractPoset, bases::Vector{Int})
     return out
 end
 
-function _active_downset_indices_from_bases(Q::AbstractPoset, bases::Vector{Int})
-    n = nvertices(Q)
-    by_base = Vector{Int}[Int[] for _ in 1:n]
-    for (j, b) in enumerate(bases)
-        push!(by_base[b], j)
-    end
-
-    out = Vector{Vector{Int}}(undef, n)
-    for u in 1:n
-        idxs = Int[]
-        for b in upset_indices(Q, u)
-            append!(idxs, by_base[b])
-        end
-        out[u] = idxs
-    end
-    return out
-end
-
 struct _LeftCoeffPlan
-    act_dom::Vector{Vector{Int}}
-    act_cod::Vector{Vector{Int}}
-    ptr::Vector{Int}
-    block_q::Vector{Int}
-    block_loc::Vector{Int}
-    max_rows::Vector{Int}
-    max_cols::Vector{Int}
-end
-
-struct _RightCoeffPlan
     act_dom::Vector{Vector{Int}}
     act_cod::Vector{Vector{Int}}
     ptr::Vector{Int}
@@ -5109,78 +5070,6 @@ function _left_pushforward_coeff_plan(
     coeff_plan = _LeftCoeffPlan(act_dom, act_cod, ptr, block_q, block_loc, max_rows, max_cols)
     if _CHANGE_OF_POSETS_USE_LEFT_DERIVED_COEFF_PLAN_CACHE[]
         key = _translation_left_coeff_key(pi, dom_bases, cod_bases)
-        return _translation_cache_set!(cache, key, coeff_plan)
-    end
-    return coeff_plan
-end
-
-function _right_pushforward_coeff_plan(
-    pi::EncodingMap,
-    dom_bases::Vector{Int},
-    cod_bases::Vector{Int},
-    plan::_PiTranslationPlan;
-    session_cache::Union{Nothing,SessionCache}=nothing,
-)
-    cache = _translation_cache(session_cache, pi)
-    if _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[]
-        key = _translation_right_coeff_key(pi, dom_bases, cod_bases)
-        cached = _translation_cache_get(cache, key)
-        cached !== nothing && return cached
-    end
-
-    Q = pi.Q
-    nP = nvertices(pi.P)
-    act_dom = _active_downset_indices_from_bases(Q, dom_bases)
-    act_cod = _active_downset_indices_from_bases(Q, cod_bases)
-
-    counts = zeros(Int, nP)
-    max_rows = zeros(Int, nP)
-    max_cols = zeros(Int, nP)
-    total = 0
-    @inbounds for p in 1:nP
-        fiber = plan.right_fibers[p]
-        count = 0
-        mr = 0
-        mc = 0
-        for loc in eachindex(fiber.idxs)
-            q = fiber.idxs[loc]
-            nr = length(act_cod[q])
-            nc = length(act_dom[q])
-            (nr == 0 || nc == 0) && continue
-            count += 1
-            mr = max(mr, nr)
-            mc = max(mc, nc)
-        end
-        counts[p] = count
-        max_rows[p] = mr
-        max_cols[p] = mc
-        total += count
-    end
-
-    ptr = Vector{Int}(undef, nP + 1)
-    ptr[1] = 1
-    @inbounds for p in 1:nP
-        ptr[p + 1] = ptr[p] + counts[p]
-    end
-    block_q = Vector{Int}(undef, total)
-    block_loc = Vector{Int}(undef, total)
-    next = copy(ptr)
-    @inbounds for p in 1:nP
-        fiber = plan.right_fibers[p]
-        for loc in eachindex(fiber.idxs)
-            q = fiber.idxs[loc]
-            isempty(act_cod[q]) && continue
-            isempty(act_dom[q]) && continue
-            pos = next[p]
-            block_q[pos] = q
-            block_loc[pos] = loc
-            next[p] = pos + 1
-        end
-    end
-
-    coeff_plan = _RightCoeffPlan(act_dom, act_cod, ptr, block_q, block_loc, max_rows, max_cols)
-    if _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_PLAN_CACHE[]
-        key = _translation_right_coeff_key(pi, dom_bases, cod_bases)
         return _translation_cache_set!(cache, key, coeff_plan)
     end
     return coeff_plan
@@ -5279,141 +5168,6 @@ function _pushforward_left_from_upset_coeff(
     end
     return PMorphism(dom_out, cod_out, comps)
 end
-
-function _lift_injective_chainmap_coeffs(
-    g::PMorphism{K},
-    res_dom,
-    res_cod;
-    upto::Int,
-    check::Bool=true,
-) where {K}
-    if check
-        @assert g.dom === res_dom.N
-        @assert g.cod === res_cod.N
-    end
-    Q = g.dom.Q
-    coeffs = Vector{Matrix{K}}(undef, upto + 1)
-
-    dom_bases0 = res_dom.gens[1]
-    cod_bases0 = res_cod.gens[1]
-    structure0 = DerivedFunctors.Resolutions._cached_downset_hom_structure(Q, dom_bases0, cod_bases0)
-    rhs0 = PMorphism{K}(g.dom, res_cod.Emods[1], [res_cod.iota0.comps[u] * g.comps[u] for u in 1:nvertices(Q)])
-    coeffs[1] = DerivedFunctors.Resolutions._solve_downset_postcompose_coeff(
-        res_dom.iota0, rhs0, dom_bases0, cod_bases0, structure0.act_dom, structure0.act_cod; check=check
-    )
-    upto == 0 && return coeffs
-
-    if _CHANGE_OF_POSETS_USE_RIGHT_DERIVED_COEFF_MATRIX_RECURRENCE[]
-        cod_diff_coeffs = Vector{SparseMatrixCSC{K,Int}}(undef, upto)
-        rhs_structures = Vector{typeof(structure0)}(undef, upto)
-        @inbounds for k in 1:upto
-            cod_diff_coeffs[k] = DerivedFunctors.Resolutions._coeff_matrix_downsets(
-                Q, res_cod.gens[k], res_cod.gens[k + 1], res_cod.d_mor[k]
-            )
-            rhs_structures[k] = DerivedFunctors.Resolutions._cached_downset_hom_structure(
-                Q, res_dom.gens[k], res_cod.gens[k + 1]
-            )
-        end
-
-        @inbounds for k in 1:upto
-            dom_bases = res_dom.gens[k + 1]
-            cod_bases = res_cod.gens[k + 1]
-            structure = DerivedFunctors.Resolutions._cached_downset_hom_structure(Q, dom_bases, cod_bases)
-            rhs_structure = rhs_structures[k]
-            rhs_coeff = zeros(K, size(cod_diff_coeffs[k], 1), size(coeffs[k], 2))
-            mul!(rhs_coeff, cod_diff_coeffs[k], coeffs[k])
-            rhs = DerivedFunctors.Resolutions._pmorphism_from_downset_coeff(
-                res_dom.Emods[k], res_cod.Emods[k + 1],
-                rhs_structure.act_dom, rhs_structure.act_cod, rhs_coeff
-            )
-            coeffs[k + 1] = DerivedFunctors.Resolutions._solve_downset_postcompose_coeff(
-                res_dom.d_mor[k], rhs, dom_bases, cod_bases, structure.act_dom, structure.act_cod; check=check
-            )
-        end
-        return coeffs
-    end
-
-    phis = Vector{PMorphism{K}}(undef, upto + 1)
-    phis[1] = DerivedFunctors.Resolutions._pmorphism_from_downset_coeff(
-        res_dom.Emods[1], res_cod.Emods[1], structure0.act_dom, structure0.act_cod, coeffs[1]
-    )
-
-    for k in 1:upto
-        dom_bases = res_dom.gens[k + 1]
-        cod_bases = res_cod.gens[k + 1]
-        structure = DerivedFunctors.Resolutions._cached_downset_hom_structure(Q, dom_bases, cod_bases)
-        rhs = PMorphism{K}(res_dom.Emods[k], res_cod.Emods[k + 1],
-                           [res_cod.d_mor[k].comps[u] * phis[k].comps[u] for u in 1:nvertices(Q)])
-        coeffs[k + 1] = DerivedFunctors.Resolutions._solve_downset_postcompose_coeff(
-            res_dom.d_mor[k], rhs, dom_bases, cod_bases, structure.act_dom, structure.act_cod; check=check
-        )
-        phis[k + 1] = DerivedFunctors.Resolutions._pmorphism_from_downset_coeff(
-            res_dom.Emods[k + 1], res_cod.Emods[k + 1], structure.act_dom, structure.act_cod, coeffs[k + 1]
-        )
-    end
-    return coeffs
-end
-
-function _pushforward_right_from_downset_coeff(
-    pi::EncodingMap,
-    dom_out::PModule{K},
-    cod_out::PModule{K},
-    data_dom::RightKanData{K},
-    data_cod::RightKanData{K},
-    dom_bases::Vector{Int},
-    cod_bases::Vector{Int},
-    C::AbstractMatrix{K},
-    plan::_PiTranslationPlan,
-    ;
-    coeff_plan=nothing,
-    session_cache::Union{Nothing,SessionCache}=nothing,
-) where {K}
-    coeff_plan === nothing && (coeff_plan = _right_pushforward_coeff_plan(
-        pi, dom_bases, cod_bases, plan; session_cache=session_cache,
-    ))
-    act_dom = coeff_plan.act_dom
-    act_cod = coeff_plan.act_cod
-    comps = Vector{Matrix{K}}(undef, nvertices(pi.P))
-    @inbounds for p in 1:nvertices(pi.P)
-        Vd = data_dom.dimV[p]
-        Vc = data_cod.dimV[p]
-        if Vd == 0 || Vc == 0
-            comps[p] = zeros(K, Vc, Vd)
-            continue
-        end
-        lo = coeff_plan.ptr[p]
-        hi = coeff_plan.ptr[p + 1] - 1
-        if hi < lo
-            comps[p] = zeros(K, Vc, Vd)
-            continue
-        end
-        offs_dom = data_dom.offsets[p]
-        offs_cod = data_cod.offsets[p]
-        Kp = data_dom.Ksec[p]
-        Lp = data_cod.L[p]
-        Fp = zeros(K, Vc, Vd)
-        scratch = Matrix{K}(undef, coeff_plan.max_rows[p], coeff_plan.max_cols[p])
-        tmp = Matrix{K}(undef, coeff_plan.max_rows[p], Vd)
-        for pos in lo:hi
-            q = coeff_plan.block_q[pos]
-            loc = coeff_plan.block_loc[pos]
-            rows = act_cod[q]
-            cols = act_dom[q]
-            nr = length(rows)
-            nc = length(cols)
-            rd = (offs_dom[loc] + 1):offs_dom[loc + 1]
-            cc = (offs_cod[loc] + 1):offs_cod[loc + 1]
-            Cq = @view scratch[1:nr, 1:nc]
-            tmpv = @view tmp[1:nr, :]
-            _gather_component_matrix!(Cq, C, rows, cols)
-            mul!(tmpv, Cq, @view(Kp[rd, :]))
-            mul!(Fp, @view(Lp[:, cc]), tmpv, one(K), one(K))
-        end
-        comps[p] = Fp
-    end
-    return PMorphism(dom_out, cod_out, comps)
-end
-
 
 """
     _pmorphism_from_upset_coeff(dom, cod, dom_bases, cod_bases, C)

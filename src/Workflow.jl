@@ -223,6 +223,8 @@ using ..FiniteFringe: AbstractPoset, FinitePoset, GridPoset, ProductOfChainsPose
 using ..DerivedFunctors
 using ..Invariants
 import ..IntervalDecompositions
+import ..IndecomposableDecompositions
+import ..H0Presentations
 import ..InvariantCore: _exact_slice_barcodes, _exact_euler_signed_measure,
                         _exact_restricted_hilbert,
                         _exact_rectangle_signed_barcode, _exact_rank_signed_measure
@@ -1449,7 +1451,7 @@ assert_minimal(res::DerivedFunctors.Resolutions.InjectiveResolution{K};
     DerivedFunctors.assert_minimal(res; check_hull=check_hull)
 
 """
-    betti_table(enc::EncodingResult; opts=ResolutionOptions(), cache=:auto, pad_to=nothing) -> Matrix{Int}
+    betti_table(enc::EncodingResult; opts=ResolutionOptions(), cache=:auto, pad_to=nothing, vertices=nothing) -> Matrix{Int}
     betti_table(res::ResolutionResult; pad_to=nothing) -> Matrix{Int}
 
 Cheap workflow wrapper returning a dense Betti table.
@@ -1458,8 +1460,12 @@ This is the canonical notebook-facing path when you want multiplicity data from
 a projective resolution without inspecting resolution internals directly.
 
 Workflow policy
+- `vertices=[v1, v2, ...]` selects columns in the supplied order. With
+  `cache=:auto`, grid encodings use local Koszul queries when supported;
+  other posets retain the full-resolution route. Unpadded selected tables
+  trim their own trailing zero rows,
 - on `EncodingResult`, this builds or reuses a projective resolution through
-  [`resolve`](@ref) and returns the bare dense matrix,
+  [`resolve`](@ref) when a specialized query is unavailable,
 - on `ResolutionResult`, this formats the stored projective resolution directly,
 - use [`resolve`](@ref) when you want the full typed wrapper and provenance.
 
@@ -1491,10 +1497,30 @@ function betti_table(res::ResolutionResult; pad_to::Union{Nothing,Int}=nothing)
     return DerivedFunctors.betti_table(resobj; pad_to=pad_to)
 end
 
+_specialized_betti_table(enc,opts,pad_to) = nothing
+
+betti_table(p::H0Presentations.H0Presentation; kwargs...) = H0Presentations.betti_table(p; kwargs...)
+
+betti_table(M::Union{PModule,FringeModule}; kwargs...) = DerivedFunctors.betti_table(M; kwargs...)
+
 function betti_table(enc::EncodingResult;
                      opts::ResolutionOptions=ResolutionOptions(),
                      cache=:auto,
-                     pad_to::Union{Nothing,Int}=nothing)
+                     pad_to::Union{Nothing,Int}=nothing,
+                     vertices=nothing)
+    if vertices !== nothing
+        ids = DerivedFunctors._betti_vertices(enc.P, vertices)
+        pad_to === nothing || pad_to >= 0 || throw(ArgumentError("betti_table: pad_to must be nonnegative"))
+        cache === :auto && return DerivedFunctors.betti_table(enc.M; vertices=ids, opts, pad_to)
+        # An explicit session retains the full resolution for subsequent Ext
+        # and resolution tasks, as for the existing unselected workflow.
+        res = resolve(enc; kind=:projective, opts, cache)
+        return DerivedFunctors._selected_betti_columns(betti_table(res; pad_to), ids, pad_to)
+    end
+    if cache === :auto
+        specialized = _specialized_betti_table(enc,opts,pad_to)
+        specialized === nothing || return specialized
+    end
     res = resolve(enc; kind=:projective, opts=opts, cache=cache)
     return betti_table(res; pad_to=pad_to)
 end
@@ -2175,6 +2201,12 @@ function resolve(enc::EncodingResult;
     end
 end
 
+function resolve(p::H0Presentations.H0Presentation; opts::ResolutionOptions=ResolutionOptions(), minimality::Bool=false)
+    res = H0Presentations.projective_resolution(p,opts)
+    report = minimality ? DerivedFunctors.minimality_report(res) : nothing
+    return ResolutionResult(res; betti=DerivedFunctors.betti(res), minimality=report, opts=opts, meta=(kind=:projective,))
+end
+
 # -----------------------------------------------------------------------------
 # Complex-level homological algebra
 # -----------------------------------------------------------------------------
@@ -2611,11 +2643,33 @@ rank_invariant(M::Union{PModule{K},FringeModule{K}};
                opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
     rank_invariant(M, opts; kwargs...)
 
-rank_map(M::PModule{K}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
+rank_map(M::Union{PModule{K},FringeModule{K}}, pi, x, y; opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
     rank_map(M, pi, x, y, opts; kwargs...)
-rank_map(M::PModule{K}, pi, x, y, opts::InvariantOptions; kwargs...) where {K} =
+rank_map(M::Union{PModule{K},FringeModule{K}}, pi, x, y, opts::InvariantOptions; kwargs...) where {K} =
     Invariants.rank_map(M, pi, x, y, opts; kwargs...)
-rank_map(M::PModule{K}, a::Int, b::Int; kwargs...) where {K} = Invariants.rank_map(M, a, b; kwargs...)
+rank_map(M::Union{PModule{K},FringeModule{K}}, a::Int, b::Int; kwargs...) where {K} = Invariants.rank_map(M, a, b; kwargs...)
+
+"""
+    rank_map(enc::EncodingResult; source, target)
+    rank_map(enc::EncodingResult, x, y; opts=InvariantOptions())
+
+Query a comparable pair of finite vertex IDs, or locate two parameter points.
+Lazy homology encodings compute only these stalks and their inclusion map.
+Point queries respect `opts.strict` for points outside the encoding.
+"""
+function rank_map(enc::EncodingResult; source::Int, target::Int)
+    return Invariants.rank_map(enc.M, source, target)
+end
+
+function rank_map(enc::EncodingResult, x, y; opts::InvariantOptions=InvariantOptions())
+    a, b = locate(enc.pi, x), locate(enc.pi, y)
+    if a == 0 || b == 0
+        (opts.strict === nothing || opts.strict) &&
+            error("rank_map: points must lie in the encoding")
+        return 0
+    end
+    return rank_map(enc; source=a, target=b)
+end
 
 restricted_hilbert(M::PModule{K}) where {K} = Invariants.restricted_hilbert(M)
 
@@ -2904,6 +2958,43 @@ end
 slice_barcodes(M::PModule{K}, slices;
                opts::InvariantOptions=InvariantOptions(), kwargs...) where {K} =
     slice_barcodes(M, slices, opts; kwargs...)
+
+"""
+    indecomposable_decomposition(M_or_encoding; witnesses=false, backend=:native, kwargs...)
+
+Certified individual indecomposables on the represented finite poset. Encoding
+inputs use `cache=:auto` or a SessionCache. Loading Hecke and selecting
+`backend=:hecke` enables noncommutative rational division-quotient certificates.
+See the owning solver for exact-field scope and explicit search-budget failures.
+"""
+indecomposable_decomposition(M::PModule;kwargs...) = IndecomposableDecompositions.indecomposable_decomposition(M;kwargs...)
+function indecomposable_decomposition(enc::EncodingResult;cache=:auto,kwargs...)
+    enc2 = _encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    return IndecomposableDecompositions.indecomposable_decomposition(pmodule(enc2);kwargs...)
+end
+
+"""
+    bipath_decomposition(M_or_encoding; witnesses=false, kwargs...)
+
+Validate the two-chain finite base and split the full module into thin intervals,
+retaining gluing through actual module maps. Encoding inputs accept `cache`.
+"""
+bipath_decomposition(M::PModule;kwargs...) = IndecomposableDecompositions.bipath_decomposition(M;kwargs...)
+function bipath_decomposition(enc::EncodingResult;cache=:auto,kwargs...)
+    enc2 = _encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    return IndecomposableDecompositions.bipath_decomposition(pmodule(enc2);kwargs...)
+end
+
+"""
+    is_indecomposable(result_or_module; kwargs...)
+
+Check a certified result cheaply, or compute an exact decomposition first.
+Zero is not indecomposable. Budget exhaustion throws rather than returning false.
+"""
+is_indecomposable(r::IndecomposableDecompositions.IndecomposableDecompositionResult) =
+    IndecomposableDecompositions.is_indecomposable(r)
+is_indecomposable(M::Union{PModule,EncodingResult};kwargs...) =
+    is_indecomposable(indecomposable_decomposition(M;kwargs...))
 
 """
     interval_multiplicity(M; vertices, budget=Advanced.IntervalDecompositionBudget())

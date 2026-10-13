@@ -365,7 +365,8 @@ function _exact_matching_cell_max(work::_ExactMatchingWork2D{T}; witness::Bool=f
         # On a geometric wall, coalescing crossings compresses the chain;
         # functoriality preserves its composite maps and only zero-length bars
         # disappear. The closed-cell formulas therefore give the boundary
-        # barcode, without a rounded boundary query. See docs/exact_matching.md.
+        # barcode, without a rounded boundary query. See the proof of coverage:
+        # https://www.tamerop.com/guides/exact_matching.html#proof-of-coverage
         A = [(_exact_matching_value(a,p),_exact_matching_value(b,p)) for (a,b) in work.barsM]
         B = [(_exact_matching_value(a,p),_exact_matching_value(b,p)) for (a,b) in work.barsN]
         distance = _exact_matching_bottleneck(A,B)

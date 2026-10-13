@@ -11,6 +11,7 @@ using JSON3
 struct DummyEncodingMap <: EC.AbstractPLikeEncodingMap
     n::Int
 end
+
 EC.locate(pi::DummyEncodingMap, x::NTuple{1,Int}) =
     (1 <= x[1] <= pi.n ? x[1] : 0)
 EC.locate(pi::DummyEncodingMap, x::AbstractVector{<:Integer}) =
@@ -1224,10 +1225,14 @@ if !(field isa CM.RealField)
         end
     end
 
+    old_min_vars = TO.ChangeOfPosets._CHANGE_OF_POSETS_RIGHT_KAN_SELECTOR_MIN_VARIABLES[]
+    old_right_blocks = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_ACTIVE_BLOCKS[]
     old_selector = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[]
     old_summary = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_QQ_SUMMARY_SELECTOR[]
     old_direct_csc = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_DIRECT_CSC[]
     try
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_RIGHT_KAN_SELECTOR_MIN_VARIABLES[] = 0
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_ACTIVE_BLOCKS[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_QQ_SUMMARY_SELECTOR[] = false
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_DIRECT_CSC[] = false
@@ -1237,12 +1242,15 @@ if !(field isa CM.RealField)
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_QQ_SUMMARY_SELECTOR[] = true
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_DIRECT_CSC[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_ACTIVE_BLOCKS[] = true
         Rmod_fast = TO.pushforward_right(pi, M; threads=false)
         Rmor_fast = TO.pushforward_right(pi, f; threads=false)
 
         _same_module(Rmod_fallback, Rmod_fast)
         _same_morphism(Rmor_fallback, Rmor_fast)
     finally
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_RIGHT_KAN_SELECTOR_MIN_VARIABLES[] = old_min_vars
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_ACTIVE_BLOCKS[] = old_right_blocks
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_SELECTOR_FASTPATH[] = old_selector
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_QQ_SUMMARY_SELECTOR[] = old_summary
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_RIGHT_KAN_DIRECT_CSC[] = old_direct_csc
@@ -1275,15 +1283,15 @@ end
                                                          session_cache=nothing,
                                                          plan=plan)
 
-    old_mul = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[]
+    old_active = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[]
     try
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[] = false
         public_slow = TO.pushforward_left(pi, f; threads=false)
         prebuilt_slow = TO.ChangeOfPosets._pushforward_left_morphism_from_data(
             dom_out, cod_out, f, data_dom, data_cod, plan.left_fibers; threads=false
         )
 
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[] = true
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[] = true
         public_fast = TO.pushforward_left(pi, f; threads=false)
         prebuilt_fast = TO.ChangeOfPosets._pushforward_left_morphism_from_data(
             dom_out, cod_out, f, data_dom, data_cod, plan.left_fibers; threads=false
@@ -1298,7 +1306,7 @@ end
             end
         end
     finally
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[] = old_mul
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[] = old_active
     end
 end
 
@@ -1317,15 +1325,15 @@ if field isa CM.QQField
     f = MD.PMorphism(M, M, [fill(c(2), 1, 1) for _ in 1:Qtri.n])
 
     old_summary = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_QQ_SUMMARY_QUOTIENT[]
-    old_mul = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[]
+    old_active = TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[]
     try
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_QQ_SUMMARY_QUOTIENT[] = false
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[] = false
         Lmod_slow = TO.pushforward_left(pi, M; threads=false)
         Lmor_slow = TO.pushforward_left(pi, f; threads=false)
 
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_QQ_SUMMARY_QUOTIENT[] = true
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[] = false
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[] = false
         Lmod_fast = TO.pushforward_left(pi, M; threads=false)
         Lmor_fast = TO.pushforward_left(pi, f; threads=false)
 
@@ -1340,7 +1348,7 @@ if field isa CM.QQField
         end
     finally
         TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_QQ_SUMMARY_QUOTIENT[] = old_summary
-        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_MORPHISM_MUL[] = old_mul
+        TO.ChangeOfPosets._CHANGE_OF_POSETS_USE_LEFT_KAN_ACTIVE_BLOCKS[] = old_active
     end
 end
 end
@@ -2862,6 +2870,120 @@ end
                     @test owner.pushforward_right(pi, M; threads=threads, session_cache=session_cache) === right
                 end
             end
+        end
+    end
+end
+
+@testset "A32 Kan universal-map oracles" begin
+    owner = TamerOp.ChangeOfPosets
+    with_fields((CM.QQField(), CM.F2(), CM.F3(), CM.Fp(101), CM.RealField(Float64))) do field
+        K = CM.coeff_type(field)
+        eq(A, B) = field isa CM.RealField ? isapprox(Matrix(A), Matrix(B); atol=1e-8, rtol=1e-8) : A == B
+        # A cycle face poset and a separate component. The target includes an
+        # empty lower fiber and nontrivial inclusions of disconnected fibers.
+        order = Matrix{Bool}(I, 7, 7)
+        for (a,b) in ((1,4),(2,4),(2,5),(3,5),(3,6),(1,6))
+            order[a,b] = true
+        end
+        Q = FF.FinitePoset(order); P = chain_poset(3)
+        pi = EN.EncodingMap(Q, P, [2,2,2,2,2,2,3])
+        supports = [trues(7), BitVector([true,true,true,false,false,false,false]),
+                    BitVector([false,false,false,true,true,true,false])]
+        active = [findall(s -> s[q], supports) for q in 1:7]
+        dims = length.(active)
+        maps = Dict((u,v) => K[i==j for i in active[v], j in active[u]] for (u,v) in FF.cover_edges(Q))
+        N = MD.PModule{K}(Q, dims, maps; field)
+        f = MD.PMorphism(N, N, [Matrix(Diagonal(K[CM.coerce(field,j) for j in a])) for a in active])
+        @test MD.check_morphism(f).valid
+        for threads in (false,true), sc in (nothing,CM.SessionCache())
+            for side in (:left,:right)
+                data_op = side == :left ? owner._left_kan_data : owner._right_kan_data
+                op = side == :left ? owner.pushforward_left : owner.pushforward_right
+                out, data = data_op(pi,N;threads,session_cache=sc)
+                pushed = op(pi,f;threads,session_cache=sc)
+                @test MD.check_module(out).valid
+                @test MD.check_morphism(pushed).valid
+                @test out.dims == (side == :left ? [0,4,5] : [5,5,1])
+                ids = [findall(q -> side == :left ? pi.pi_of_q[q]<=p : p<=pi.pi_of_q[q], 1:7) for p in 1:3]
+                for p in 1:3
+                    offsets = cumsum(vcat(0,dims[ids[p]]))
+                    total = offsets[end]
+                    blocks = Dict(q => (offsets[j]+1:offsets[j+1]) for (j,q) in enumerate(ids[p]))
+                    relations = Matrix{K}[]; constraints = Matrix{K}[]
+                    for (u,v) in FF.cover_edges(Q)
+                        haskey(blocks,u) && haskey(blocks,v) || continue
+                        A = zeros(K,total,dims[u]); A[blocks[u],:] = Matrix{K}(I,dims[u],dims[u])
+                        A[blocks[v],:] -= maps[u,v]; push!(relations,A)
+                        B = zeros(K,dims[v],total); B[:,blocks[v]] = Matrix{K}(I,dims[v],dims[v])
+                        B[:,blocks[u]] -= maps[u,v]; push!(constraints,B)
+                    end
+                    rel = isempty(relations) ? zeros(K,total,0) : hcat(relations...)
+                    con = isempty(constraints) ? zeros(K,0,total) : vcat(constraints...)
+                    ambient = zeros(K,total,total)
+                    for q in ids[p]; ambient[blocks[q],blocks[q]] = f.comps[q]; end
+                    L = data.L[p]
+                    if side == :left
+                        @test eq(L*data.W[p], Matrix{K}(I,out.dims[p],out.dims[p]))
+                        @test eq(L*rel, zeros(K,out.dims[p],size(rel,2)))
+                        @test out.dims[p] == total-FL.rank(field,rel)
+                        @test eq(pushed.comps[p]*L, L*ambient)
+                    else
+                        S = data.Ksec[p]
+                        @test eq(L*S, Matrix{K}(I,out.dims[p],out.dims[p]))
+                        @test eq(con*S, zeros(K,size(con,1),out.dims[p]))
+                        @test out.dims[p] == total-FL.rank(field,con)
+                        @test eq(S*pushed.comps[p], ambient*S)
+                    end
+                end
+                for (u,v) in FF.cover_edges(P)
+                    # Explicit ambient inclusion/restriction identifies the
+                    # maps, independently of the bases selected by elimination.
+                    small,big = side == :left ? (u,v) : (v,u)
+                    a,b = data.offsets[small],data.offsets[big]
+                    J = zeros(K,b[end],a[end])
+                    for (i,q) in enumerate(ids[small])
+                        j = findfirst(==(q),ids[big])
+                        J[b[j]+1:b[j+1],a[i]+1:a[i+1]] = Matrix{K}(I,dims[q],dims[q])
+                    end
+                    if side == :left
+                        @test eq(MD.map_leq(out,u,v)*data.L[u],data.L[v]*J)
+                    else
+                        @test eq(data.Ksec[v]*MD.map_leq(out,u,v),transpose(J)*data.Ksec[u])
+                    end
+                end
+                identity = op(pi,MD.id_morphism(N);threads,session_cache=sc)
+                @test all(eq(A,Matrix{K}(I,size(A)...)) for A in identity.comps)
+                if sc !== nothing
+                    @test op(pi,f;threads,session_cache=sc) === pushed
+                    CM._clear_session_cache!(sc)
+                    rebuilt = op(pi,f;threads,session_cache=sc)
+                    @test rebuilt !== pushed
+                    @test all(eq(A,B) for (A,B) in zip(rebuilt.comps,pushed.comps))
+                end
+            end
+        end
+        # Redundant rows, empty axes, zero/full rank, and characteristic two.
+        rng = MersenneTwister(32)
+        moderate = rand(rng, -2:2, 13, 21)
+        moderate[13,:] = moderate[1,:] + moderate[2,:]
+        if field isa CM.QQField
+            accumulated = K[1 2;3 4]
+            @test owner._accumulate_nonzero_product!(accumulated,
+                K[0 -2 1;3 0 1], K[5 0;0 7;2 -3]) === accumulated
+            @test accumulated == K[3 -15;20 1]
+        end
+        boundary = [hcat(Matrix{Int}(I,3,3), zeros(Int,3,n-3)) for n in (63,64)]
+        for A in boundary; A[1,end]=1; end
+        for raw in ([1 1 0;0 1 1;1 2 1], [2 0;0 0], zeros(Int,0,3),
+                    zeros(Int,3,0), Matrix{Int}(I,3,3), moderate, boundary...)
+            A = sparse(Matrix{K}(CM.coerce.(Ref(field),raw)))
+            S,L = owner._nullspace_selector_summary(field,A)
+            @test eq(A*S,zeros(K,size(A,1),size(S,2)))
+            @test eq(L*S,Matrix{K}(I,size(S,2),size(S,2)))
+            @test size(S,2)==size(A,2)-FL.rank(field,A)
+            W,Qmap = owner._left_kan_quotient_summary(field,A)
+            @test eq(Qmap*transpose(A),zeros(K,size(Qmap,1),size(A,1)))
+            @test eq(Qmap*W,Matrix{K}(I,size(Qmap,1),size(Qmap,1)))
         end
     end
 end

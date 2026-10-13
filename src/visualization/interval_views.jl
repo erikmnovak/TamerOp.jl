@@ -248,7 +248,7 @@ function _interval_panels(records; window=nothing, interval=nothing, max_interva
         layers=bars,axes=_default_axes_2d(xlabel="Parameter",
             ylabel=view.total_groups == view.total_multiplicity ? "Interval" : "Interval group",xlimits=view.limits,
             ylimits=(0.3,max(1,view.displayed_groups)+0.7),aspect=:auto,xticks=ticks,
-            yticks=(Float64.(1:view.displayed_groups),["#$(r.id)" * (r.multiplicity == 1 ? "" : " x$(r.multiplicity)") for r in view.displayed_records])),
+            yticks=(Float64.(1:view.displayed_groups),String["#$(r.id)" * (r.multiplicity == 1 ? "" : " x$(r.multiplicity)") for r in view.displayed_records])),
         metadata=merge(common,(;interval_segments=view.bar_segments,
             figure_size=(760,clamp(300 + 24*view.displayed_groups,360,780)),
             barcode_endpoint_layers=(left=Tuple(endpoint_layers.left),right=Tuple(endpoint_layers.right)))),

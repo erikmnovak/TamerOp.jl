@@ -83,7 +83,9 @@ import ..AbelianCategories
 using ..AbelianCategories: kernel_with_inclusion, image_with_inclusion, _cokernel_module, is_zero_morphism
 
 using ..FlangeZn: Face, IndFlat, IndInj, Flange
-import ..Workflow: encode, fringe_presentation, flange_presentation
+import ..Workflow: encode, fringe_presentation, flange_presentation, _specialized_betti_table
+import ..H0Presentations
+import ..H0Presentations: h0_presentation
 import ..ChainComplexes: describe, filtration_summary
 
 include("data_ingestion/provenance.jl")
@@ -5691,6 +5693,7 @@ function _lazy_h0_rank_from_component_roots(vertex_births::Vector{NTuple{N,Int}}
 end
 
 include("data_ingestion/exact_h0_backends.jl")
+include("data_ingestion/h0_presentations.jl")
 
 function _simplex_tree_dim01_h0_payload(ST::SimplexTreeMulti{1,T}) where {T}
     _simplex_tree_is_onecritical(ST) || return nothing
@@ -13866,6 +13869,7 @@ function encode(path::AbstractString, spec::FiltrationSpec;
     return run_ingestion(plan; stage=plan.stage, degree=degree)
 end
 
+include("data_ingestion/local_queries.jl")
 include("data_ingestion/filtered_geometry.jl")
 include("data_ingestion/geometric_inspection.jl")
 include("data_ingestion/source_chains.jl")

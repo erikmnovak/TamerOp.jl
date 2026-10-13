@@ -45,6 +45,7 @@ import Base: show, values
 using ..Options: InvariantOptions
 using ..EncodingCore: CompiledEncoding, locate
 using ..FieldLinAlg
+using ..CoreModules: RealField
 import ..FiniteFringe: FringeModule, nvertices, build_cache!, _preds, leq
 import ..Modules: PModule, map_leq,
                  _get_cover_cache, _chosen_predecessor

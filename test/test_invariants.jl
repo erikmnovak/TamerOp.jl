@@ -6901,3 +6901,63 @@ end
     @test Inv.interval_coefficients(GRExamples.signed) == [-1,1,1,1]
     @test Inv.gril_values(GRExamples.landscape) == reshape(QQ[4,0,2,0,1,0],1,2,3)
 end
+
+@testset "A31 selected fringe ranks" begin
+    rng=MersenneTwister(31031)
+    for field in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(101),CM.RealField(Float64))
+        K=CM.coeff_type(field);P=FF.ProductOfChainsPoset((3,3))
+        U=[FF.principal_upset(P,v) for v in (1,2,4)]
+        E=[FF.principal_downset(P,v) for v in (9,8,6)]
+        for sparse_input in (false,true)
+            A=K[CM.coerce(field,rand(rng,-2:2)) for i in 1:3,j in 1:3]
+            H=FF.FringeModule{K}(P,U,E,sparse_input ? sparse(A) : A;field)
+            M=IR.pmodule_from_fringe(H)
+            for a in 1:9,b in 1:9
+                FF.leq(P,a,b) || continue
+                expected=FL.rank(field,MD.map_leq(M,a,b))
+                @test TamerOp.rank_map(H,a,b)==expected
+                @test IC.rank_map(H,a,b;memo=Dict())==expected
+            end
+            @test_throws ErrorException TamerOp.rank_map(H,2,4)
+            @test_throws ErrorException TamerOp.rank_map(H,0,1)
+            @test_throws ErrorException TamerOp.rank_map(H,1,10)
+        end
+    end
+    # A raw RealField submatrix can resurrect a direction discarded from the
+    # source image. Retain the image-basis convention instead of applying the
+    # exact-field shortcut to this deliberately ill-scaled presentation.
+    field=CM.RealField(Float64;rtol=1e-8);P=FF.ProductOfChainsPoset((2,))
+    H=FF.FringeModule{Float64}(P,[FF.principal_upset(P,1),FF.principal_upset(P,1)],
+        [FF.principal_downset(P,1),FF.principal_downset(P,2)], [1. 0.;0. 1e-12];field)
+    M=IR.pmodule_from_fringe(H)
+    @test TamerOp.rank_map(H,1,2)==IC.rank_map(M,1,2)==0
+end
+
+@testset "A31 fringe point queries and retained rank cache" begin
+    field=CM.QQField();K=CM.coeff_type(field)
+    flange=FZ.Flange{K}(1,[FZ.IndFlat(TO.face(1,[]),[0])],
+        [FZ.IndInj(TO.face(1,[]),[3])],ones(K,1,1))
+    P,H,pi=TamerOp.ZnEncoding.encode_from_flange(flange,OPT.EncodingOptions(backend=:zn))
+    M=IR.pmodule_from_fringe(H);cache=IC.RankQueryCache(pi)
+    for encoding in (pi,EC.compile_encoding(P,pi))
+        for (x,y) in (([0],[2]),([-1],[2]),([1],[4]),([0],[0]))
+            opts=OPT.InvariantOptions()
+            expected=IC.rank_map(M,encoding,x,y,opts)
+            @test IC.rank_map(H,encoding,x,y,opts)==expected
+            @test TamerOp.Invariants.rank_query(H,encoding,x,y,opts;rq_cache=cache)==expected
+            a,b=EC.locate(encoding,x),EC.locate(encoding,y)
+            @test TamerOp.Invariants.rank_query(H,encoding,a,b;rq_cache=cache)==expected
+            @test TamerOp.Invariants.rank_query(H,encoding,a,b,opts;rq_cache=cache)==expected
+        end
+    end
+    @test IC.rank_cache_size(cache)>0
+    IC._clear_rank_query_cache!(cache)
+    @test IC.rank_cache_size(cache)==0
+    @test TamerOp.Invariants.rank_query(H,pi,[0],[2];rq_cache=cache)==1
+    Q=FF.ProductOfChainsPoset((2,))
+    H2=FF.one_by_one_fringe(Q,FF.principal_upset(Q,1),FF.principal_downset(Q,2),one(K);field)
+    grid=EC.GridEncodingMap(Q,([0.,1.],))
+    @test TamerOp.Invariants.rank_query(H2,grid,[0.],[1.])==1
+    @test TamerOp.Invariants.rank_query(H2,grid,[-1.],[1.];opts=OPT.InvariantOptions(strict=false))==0
+    @test_throws ErrorException TamerOp.Invariants.rank_query(H2,grid,[-1.],[1.])
+end

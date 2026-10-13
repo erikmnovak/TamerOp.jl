@@ -177,7 +177,7 @@ Changes prepared for the next release. Once a finite encoded module has been
 constructed, its retained algebra should support further questions without
 repeating work. These updates make dimensions, bases and coordinates cheaper
 to obtain while preserving the existing basis conventions and the
-[finite-poset interpretation of Ext and Tor](docs/math_categories.md).
+[finite-poset interpretation of Ext and Tor](https://www.tamerop.com/math_categories.html).
 
 ### Spectral pages and differential inspection
 
@@ -453,7 +453,7 @@ to obtain while preserving the existing basis conventions and the
 - Expand precompilation to explicit Hom maps and positive-degree projective Ext
   on a branching poset, covering work missed by the earlier two-vertex example.
 
-See [lazy inspection and reuse](docs/lazy_inspection.md) for the resulting query
+See [lazy inspection and reuse](https://www.tamerop.com/guides/lazy_inspection.html) for the resulting query
 behavior. No new public cache option or query-count threshold is required.
 
 ### Correctness and validation
@@ -480,7 +480,7 @@ An earlier targeted algebra integration run passed 12,466 assertions with
 Julia 1.12.1, four threads, and QQ, F2, F3, F5 and Real64 selected. Independent exact checks
 also verified complete Hom kernels and unchanged ordered Ext representatives
 on 16 before/after fixture exports. This was a focused run, not a rerun of the
-full repository suite; see [testing](docs/testing.md) for validation scope.
+full repository suite; see [testing](https://www.tamerop.com/contributing/testing.html) for validation scope.
 
 For the shared-product and Yoneda-table implementation, focused product and
 integration runs passed 24,525 assertions. After the finite-coefficient and
@@ -590,7 +590,7 @@ measurements do not establish a speedup for every operation or input.
   barcode and persistence-diagram views, and numerical heatmaps. Batch exports
   accept a default style and a separate override for each requested figure.
 
-See [visualization](docs/visualization.md#rendering-and-saving) for examples.
+See [visualization](https://www.tamerop.com/guides/visualization.html#rendering-and-saving) for examples.
 
 ### Documentation
 
@@ -601,8 +601,8 @@ See [visualization](docs/visualization.md#rendering-and-saving) for examples.
   tameness and the project's origin as an implementation of Ezra Miller's theory.
 - Center the README and Julia help on the finite encoded object and the
   computations it supports.
-- Add a [finite-encoding introduction](docs/finite_encodings.md) and a
-  [writing guide](docs/writing.md) for connected, approachable exposition.
+- Add a [finite-encoding introduction](https://www.tamerop.com/finite_encodings.html) and a
+  [writing guide](https://www.tamerop.com/contributing/writing.html) for connected, approachable exposition.
 - Give existing guides question-driven introductions while retaining their
   mathematical hypotheses and detailed operation requirements.
 
@@ -610,7 +610,7 @@ See [visualization](docs/visualization.md#rendering-and-saving) for examples.
 
 This section describes the first planned package release. It does not announce
 a published tag or General registration. The release procedure and validation
-requirements are in [the maintainer guide](docs/releasing.md).
+requirements are in [the maintainer guide](https://www.tamerop.com/contributing/releasing.html).
 
 ### Mathematical capabilities
 
@@ -618,17 +618,17 @@ requirements are in [the maintainer guide](docs/releasing.md).
   graphs and hand-built presentations, with field-aware algebra and explicit
   construction budgets.
 - Homology, invariants, resolutions, Ext/Tor and their maps, with category and
-  encoding hypotheses documented in [the mathematical-category guide](docs/math_categories.md).
+  encoding hypotheses documented in [the mathematical-category guide](https://www.tamerop.com/math_categories.html).
 - Exact algebraic grades for supported geometric constructions, with
-  [multicover backend and degeneracy contracts](docs/multicover.md) and
-  [exact-grade semantics](docs/exact_grades.md).
+  [multicover backend and degeneracy contracts](https://www.tamerop.com/guides/multicover.html) and
+  [exact-grade semantics](https://www.tamerop.com/guides/exact_grades.html).
 - One-parameter persistent homology over F₂, including cubical sublevel and
   superlevel filtrations, exact finite endpoints and periodic axes. Other
   coefficient fields are rejected by this reducer; see
-  [ordinary persistence](docs/ordinary_persistence.md).
+  [ordinary persistence](https://www.tamerop.com/ordinary_persistence.html).
 - A finite-window exact two-dimensional matching-distance implementation and
   separately identified sampled computations. See the
-  [exact-matching scope](docs/exact_matching.md).
+  [exact-matching scope](https://www.tamerop.com/guides/exact_matching.html).
 
 ### Installation and use
 
@@ -636,7 +636,7 @@ requirements are in [the maintainer guide](docs/releasing.md).
   environments, `import TamerOp as OP`, selective imports and advanced access.
 - Optional plotting, table/file and ecosystem integrations loaded through
   Julia's native package extensions. Core installation does not install a
-  renderer; the [integration guide](docs/optional_integrations.md) lists the
+  renderer; the [integration guide](https://www.tamerop.com/guides/optional_integrations.html) lists the
   additional packages and imports.
 - Persistence diagrams and barcodes, with CairoMakie PNG/SVG output and WGLMakie
   HTML export. Browser interaction after Julia exits is a separate validation
@@ -672,7 +672,7 @@ requirements are in [the maintainer guide](docs/releasing.md).
 
 Julia compatibility starts at 1.12. A completed test run certifies only its
 recorded Julia version, platform, dependencies, fields and execution settings;
-see [testing](docs/testing.md). This candidate's validation must pass before it
+see [testing](https://www.tamerop.com/contributing/testing.html). This candidate's validation must pass before it
 is registered or tagged. No comparative speedup or universal correctness claim
 is attached to this release summary. Version 0.1.0 is pre-1.0 software and its
 public API can change in later minor versions.

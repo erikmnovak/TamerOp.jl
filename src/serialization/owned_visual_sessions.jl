@@ -79,11 +79,11 @@ end
 
 function _visual_source_artifact(text::AbstractString)
     kind = get(JSON3.read(text), "kind", nothing)
-    if kind == "PersistenceDiagram"
+    if kind in ("PersistenceDiagram","ExtendedPersistenceDiagram")
         return mktempdir() do dir
             path = joinpath(dir, "diagram.json")
             write(path, text)
-            load_persistence_diagram_json(path)
+            kind=="PersistenceDiagram" ? load_persistence_diagram_json(path) : load_extended_persistence_json(path)
         end
     elseif kind == "FiniteEncodingFringe"
         return _load_encoding_json_v1(codeunits(text); output=:encoding_result, validation=:strict)

@@ -59,6 +59,8 @@ jobs:
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_encoding.jl --prefix='A16 Kan maps respect module-owned caches on equal posets' --fields=QQ,F2,F3,F5,Real64
       - name: Invariants owner
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_invariants.jl --fields=QQ,F2,F3,F5,Real64
+      - name: Native indecomposable decomposition
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_indecomposable_decompositions.jl
       - name: Behavioral option contracts across owners
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_zn_backend.jl --file=test_pl_backend.jl --file=test_derived_functors.jl --file=test_poset_interface.jl --prefix=A14 --fields=QQ,F2,F3,F5,Real64
       - name: Public onboarding contracts
@@ -100,7 +102,7 @@ jobs:
               Pkg.develop(path=root)
               Pkg.instantiate()
               Pkg.status()
-              append!(ARGS, ["--file=test_extensions.jl", "--file=test_featurizers.jl", "--file=test_visualization.jl", "--file=test_ordinary_persistence.jl", "--file=test_examples.jl"])
+              append!(ARGS, ["--file=test_extensions.jl", "--file=test_featurizers.jl", "--file=test_visualization.jl", "--file=test_ordinary_persistence.jl", "--file=test_examples.jl", "--file=test_indecomposable_decompositions.jl"])
               append!(ARGS, ["--require-extension=" * name for name in sort!(collect(keys(project["extensions"])))])
               include(joinpath(root, "test", "runtests.jl"))
             end'

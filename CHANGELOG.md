@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Inspect checked summands through support galleries, selected/complement
+  dimensions, ranking and optional ordinary Hom tables. Extend the decomposition
+  lesson and executable guide with these views.
+
+- Compare declared parameter states with aligned atlas figures and linked
+  selection. Inspect actual endpoint maps, source-cell entries, and optional
+  cycles and fillings; preserve sampled coverage and incomparable-state
+  semantics in static and portable exports.
+
+- Scrub retained filtrations with scalar sliders, exact event steps and a
+  draggable parameter cursor; move encoded-module slices with line handles.
+  Coalesce requests, discard superseded results and preserve compatible
+  source axes while cells change. Keep exact entry and committed readouts,
+  with shared-view lifecycle checks and browser interaction measurements.
+
 - Compute exact interval-summand multiplicities on finite posets, prune candidates
   with top/socle data, and decide interval-decomposability with explicit search
   budgets. Retain simultaneous splitting maps on request, with a lesson,

@@ -8411,6 +8411,14 @@ target_binding = "TamerOp.Advanced.AbstractVisualizationLayer"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "AtlasInspectionSession"
+owner_binding = "TamerOp.Visualization.AtlasInspectionSession"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.AtlasInspectionSession"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "BarcodeLayer"
 owner_binding = "TamerOp.Visualization.BarcodeLayer"
 owner_defined = true
@@ -8539,6 +8547,14 @@ target_binding = "TamerOp.Advanced.ModuleEditorSession"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "ParameterAtlas"
+owner_binding = "TamerOp.Visualization.ParameterAtlas"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.ParameterAtlas"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "Point3Layer"
 owner_binding = "TamerOp.Visualization.Point3Layer"
 owner_defined = true
@@ -8632,6 +8648,38 @@ owner_binding = "TamerOp.Visualization.SpectralInspectionSession"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.SpectralInspectionSession"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "SummandCollection"
+owner_binding = "TamerOp.Visualization.SummandCollection"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.SummandCollection"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "SummandInspectionSession"
+owner_binding = "TamerOp.Visualization.SummandInspectionSession"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.SummandInspectionSession"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "SummandSupportDrawing"
+owner_binding = "TamerOp.Visualization.SummandSupportDrawing"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.SummandSupportDrawing"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "SummandValidationSummary"
+owner_binding = "TamerOp.Visualization.SummandValidationSummary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.SummandValidationSummary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -8731,6 +8779,30 @@ target_binding = "TamerOp.Advanced.VisualizationValidationSummary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "atlas_states"
+owner_binding = "TamerOp.Visualization.atlas_states"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.atlas_states"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "atlas_summary"
+owner_binding = "TamerOp.Visualization.atlas_summary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.atlas_summary"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "atlas_transition"
+owner_binding = "TamerOp.Visualization.atlas_transition"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.atlas_transition"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "check_inspection_selection"
 owner_binding = "TamerOp.Visualization.check_inspection_selection"
 owner_defined = true
@@ -8752,6 +8824,22 @@ owner_binding = "TamerOp.Visualization.check_module_editor"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.check_module_editor"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "check_parameter_atlas"
+owner_binding = "TamerOp.Visualization.check_parameter_atlas"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_parameter_atlas"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "check_summand_collection"
+owner_binding = "TamerOp.Visualization.check_summand_collection"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.check_summand_collection"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -8952,6 +9040,46 @@ owner_binding = "TamerOp.Visualization.select_inspection!"
 owner_defined = true
 table = "ADVANCED_ONLY_API_BINDINGS"
 target_binding = "TamerOp.Advanced.select_inspection!"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_collection"
+owner_binding = "TamerOp.Visualization.summand_collection"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.summand_collection"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_maps"
+owner_binding = "TamerOp.Visualization.summand_maps"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.summand_maps"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_module"
+owner_binding = "TamerOp.Visualization.summand_module"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.summand_module"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_session"
+owner_binding = "TamerOp.Visualization.summand_session"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.summand_session"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_summary"
+owner_binding = "TamerOp.Visualization.summand_summary"
+owner_defined = true
+table = "ADVANCED_ONLY_API_BINDINGS"
+target_binding = "TamerOp.Advanced.summand_summary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -11051,6 +11179,14 @@ target_binding = "TamerOp.overlay_visuals"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
+name = "parameter_atlas"
+owner_binding = "TamerOp.Visualization.parameter_atlas"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.parameter_atlas"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
 name = "save_visual"
 owner_binding = "TamerOp.Visualization.save_visual"
 owner_defined = true
@@ -11072,6 +11208,30 @@ owner_binding = "TamerOp.Visualization.save_visuals"
 owner_defined = true
 table = "SIMPLE_API_BINDINGS"
 target_binding = "TamerOp.save_visuals"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_collection"
+owner_binding = "TamerOp.Visualization.summand_collection"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.summand_collection"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_session"
+owner_binding = "TamerOp.Visualization.summand_session"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.summand_session"
+target_matches_owner = true
+[[curated_binding_rows]]
+declaration_owner = "TamerOp.Visualization"
+name = "summand_summary"
+owner_binding = "TamerOp.Visualization.summand_summary"
+owner_defined = true
+table = "SIMPLE_API_BINDINGS"
+target_binding = "TamerOp.summand_summary"
 target_matches_owner = true
 [[curated_binding_rows]]
 declaration_owner = "TamerOp.Visualization"
@@ -57404,6 +57564,41 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Visualization.AbstractVisualizationLayer"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.AtlasInspectionSession", "TamerOp.Visualization.AtlasInspectionSession"]
+canonical_binding = "TamerOp.Visualization.AtlasInspectionSession"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "AtlasInspectionSession"
+    qualified_name = "TamerOp.Advanced.AtlasInspectionSession"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "AtlasInspectionSession"
+    qualified_name = "TamerOp.Visualization.AtlasInspectionSession"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.BarcodeLayer", "TamerOp.Visualization.BarcodeLayer"]
 canonical_binding = "TamerOp.Visualization.BarcodeLayer"
 canonical_owner = "TamerOp.Visualization"
@@ -57976,6 +58171,41 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Visualization.ModuleEditorSession"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.ParameterAtlas", "TamerOp.Visualization.ParameterAtlas"]
+canonical_binding = "TamerOp.Visualization.ParameterAtlas"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "ParameterAtlas"
+    qualified_name = "TamerOp.Advanced.ParameterAtlas"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "ParameterAtlas"
+    qualified_name = "TamerOp.Visualization.ParameterAtlas"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.Point3Layer", "TamerOp.Visualization.Point3Layer"]
 canonical_binding = "TamerOp.Visualization.Point3Layer"
 canonical_owner = "TamerOp.Visualization"
@@ -58406,6 +58636,146 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Visualization"
     name = "SpectralInspectionSession"
     qualified_name = "TamerOp.Visualization.SpectralInspectionSession"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.SummandCollection", "TamerOp.Visualization.SummandCollection"]
+canonical_binding = "TamerOp.Visualization.SummandCollection"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = false
+    module = "TamerOp.Advanced"
+    name = "SummandCollection"
+    qualified_name = "TamerOp.Advanced.SummandCollection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "SummandCollection"
+    qualified_name = "TamerOp.Visualization.SummandCollection"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.SummandInspectionSession", "TamerOp.Visualization.SummandInspectionSession"]
+canonical_binding = "TamerOp.Visualization.SummandInspectionSession"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "SummandInspectionSession"
+    qualified_name = "TamerOp.Advanced.SummandInspectionSession"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "SummandInspectionSession"
+    qualified_name = "TamerOp.Visualization.SummandInspectionSession"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.SummandSupportDrawing", "TamerOp.Visualization.SummandSupportDrawing"]
+canonical_binding = "TamerOp.Visualization.SummandSupportDrawing"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "SummandSupportDrawing"
+    qualified_name = "TamerOp.Advanced.SummandSupportDrawing"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "SummandSupportDrawing"
+    qualified_name = "TamerOp.Visualization.SummandSupportDrawing"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.SummandValidationSummary", "TamerOp.Visualization.SummandValidationSummary"]
+canonical_binding = "TamerOp.Visualization.SummandValidationSummary"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "type"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "SummandValidationSummary"
+    qualified_name = "TamerOp.Advanced.SummandValidationSummary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "SummandValidationSummary"
+    qualified_name = "TamerOp.Visualization.SummandValidationSummary"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.TextLayer", "TamerOp.Visualization.TextLayer"]
@@ -58912,6 +59282,111 @@ tiers = ["advanced", "qualified"]
     qualified_name = "TamerOp.Visualization.VisualizationValidationSummary"
     scope = "owner"
 [[objects]]
+aliases = ["TamerOp.Advanced.atlas_states", "TamerOp.Visualization.atlas_states"]
+canonical_binding = "TamerOp.Visualization.atlas_states"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "atlas_states"
+    qualified_name = "TamerOp.Advanced.atlas_states"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "atlas_states"
+    qualified_name = "TamerOp.Visualization.atlas_states"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.atlas_summary", "TamerOp.Visualization.atlas_summary"]
+canonical_binding = "TamerOp.Visualization.atlas_summary"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "atlas_summary"
+    qualified_name = "TamerOp.Advanced.atlas_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "atlas_summary"
+    qualified_name = "TamerOp.Visualization.atlas_summary"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.atlas_transition", "TamerOp.Visualization.atlas_transition"]
+canonical_binding = "TamerOp.Visualization.atlas_transition"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "atlas_transition"
+    qualified_name = "TamerOp.Advanced.atlas_transition"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "atlas_transition"
+    qualified_name = "TamerOp.Visualization.atlas_transition"
+    scope = "owner"
+[[objects]]
 aliases = ["TamerOp.Advanced.available_visuals", "TamerOp.Visualization.available_visuals", "TamerOp.available_visuals"]
 canonical_binding = "TamerOp.Visualization.available_visuals"
 canonical_owner = "TamerOp.Visualization"
@@ -59062,6 +59537,76 @@ tiers = ["advanced", "qualified"]
     module = "TamerOp.Visualization"
     name = "check_module_editor"
     qualified_name = "TamerOp.Visualization.check_module_editor"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.check_parameter_atlas", "TamerOp.Visualization.check_parameter_atlas"]
+canonical_binding = "TamerOp.Visualization.check_parameter_atlas"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_parameter_atlas"
+    qualified_name = "TamerOp.Advanced.check_parameter_atlas"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "check_parameter_atlas"
+    qualified_name = "TamerOp.Visualization.check_parameter_atlas"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.check_summand_collection", "TamerOp.Visualization.check_summand_collection"]
+canonical_binding = "TamerOp.Visualization.check_summand_collection"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "check_summand_collection"
+    qualified_name = "TamerOp.Advanced.check_summand_collection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "check_summand_collection"
+    qualified_name = "TamerOp.Visualization.check_summand_collection"
     scope = "owner"
 [[objects]]
 aliases = ["TamerOp.Advanced.check_visual_request", "TamerOp.Visualization.check_visual_request"]
@@ -60225,6 +60770,53 @@ tiers = ["simple", "advanced", "qualified"]
     qualified_name = "TamerOp.overlay_visuals"
     scope = "root"
 [[objects]]
+aliases = ["TamerOp.Advanced.parameter_atlas", "TamerOp.Visualization.parameter_atlas", "TamerOp.parameter_atlas"]
+canonical_binding = "TamerOp.Visualization.parameter_atlas"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = []
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "parameter_atlas"
+    qualified_name = "TamerOp.Advanced.parameter_atlas"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "parameter_atlas"
+    qualified_name = "TamerOp.Visualization.parameter_atlas"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "parameter_atlas"
+    qualified_name = "TamerOp.parameter_atlas"
+    scope = "root"
+[[objects]]
 aliases = ["TamerOp.Advanced.redo_module_edit!", "TamerOp.Visualization.redo_module_edit!"]
 canonical_binding = "TamerOp.Visualization.redo_module_edit!"
 canonical_owner = "TamerOp.Visualization"
@@ -60493,6 +61085,217 @@ tiers = ["advanced", "qualified"]
     name = "select_inspection!"
     qualified_name = "TamerOp.Visualization.select_inspection!"
     scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.summand_collection", "TamerOp.Visualization.summand_collection", "TamerOp.summand_collection"]
+canonical_binding = "TamerOp.Visualization.summand_collection"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "summand_collection"
+    qualified_name = "TamerOp.Advanced.summand_collection"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS", "SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "summand_collection"
+    qualified_name = "TamerOp.Visualization.summand_collection"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "summand_collection"
+    qualified_name = "TamerOp.summand_collection"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.summand_maps", "TamerOp.Visualization.summand_maps"]
+canonical_binding = "TamerOp.Visualization.summand_maps"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "summand_maps"
+    qualified_name = "TamerOp.Advanced.summand_maps"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "summand_maps"
+    qualified_name = "TamerOp.Visualization.summand_maps"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.summand_module", "TamerOp.Visualization.summand_module"]
+canonical_binding = "TamerOp.Visualization.summand_module"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "summand_module"
+    qualified_name = "TamerOp.Advanced.summand_module"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "summand_module"
+    qualified_name = "TamerOp.Visualization.summand_module"
+    scope = "owner"
+[[objects]]
+aliases = ["TamerOp.Advanced.summand_session", "TamerOp.Visualization.summand_session", "TamerOp.summand_session"]
+canonical_binding = "TamerOp.Visualization.summand_session"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "summand_session"
+    qualified_name = "TamerOp.Advanced.summand_session"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS", "SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "summand_session"
+    qualified_name = "TamerOp.Visualization.summand_session"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "summand_session"
+    qualified_name = "TamerOp.summand_session"
+    scope = "root"
+[[objects]]
+aliases = ["TamerOp.Advanced.summand_summary", "TamerOp.Visualization.summand_summary", "TamerOp.summand_summary"]
+canonical_binding = "TamerOp.Visualization.summand_summary"
+canonical_owner = "TamerOp.Visualization"
+declaration_owners = ["TamerOp.Visualization"]
+defining_module = "TamerOp.Visualization"
+has_docstring = true
+intended_public = true
+kind = "function"
+tiers = ["simple", "advanced", "qualified"]
+
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS"]
+    declaration_sources = ["ADVANCED_API"]
+    declared_advanced = true
+    declared_simple = false
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp.Advanced"
+    name = "summand_summary"
+    qualified_name = "TamerOp.Advanced.summand_summary"
+    scope = "advanced"
+    [[objects.bindings]]
+    curated_sources = ["ADVANCED_ONLY_API_BINDINGS", "SIMPLE_API_BINDINGS"]
+    declaration_sources = []
+    declared_advanced = false
+    declared_simple = false
+    defined = true
+    exported = false
+    has_docstring = true
+    module = "TamerOp.Visualization"
+    name = "summand_summary"
+    qualified_name = "TamerOp.Visualization.summand_summary"
+    scope = "owner"
+    [[objects.bindings]]
+    curated_sources = ["SIMPLE_API_BINDINGS"]
+    declaration_sources = ["SIMPLE_API"]
+    declared_advanced = false
+    declared_simple = true
+    defined = true
+    exported = true
+    has_docstring = true
+    module = "TamerOp"
+    name = "summand_summary"
+    qualified_name = "TamerOp.summand_summary"
+    scope = "root"
 [[objects]]
 aliases = ["TamerOp.Advanced.undo_module_edit!", "TamerOp.Visualization.undo_module_edit!"]
 canonical_binding = "TamerOp.Visualization.undo_module_edit!"
@@ -75695,7 +76498,7 @@ undefined_curated_owner_bindings = []
 
 [source]
 algorithm = "sha256"
-fingerprint = "199bcc2a3752955c45fe2fc577c189bac305fcb25f860be97ad150b6efdb7dbe"
+fingerprint = "ac4202bc41fd3b1b2d46bde91c64aa22e46ca42375a11bf87416385b9a7eaa83"
 
     [source.files]
     "Project.toml" = "e6f1e19b1411f840f913b138ec417cbda1acdd92ea0c041c7cd389962d3f9c89"
@@ -75713,30 +76516,33 @@ fingerprint = "199bcc2a3752955c45fe2fc577c189bac305fcb25f860be97ad150b6efdb7dbe"
     "ext/TamerOpParquet2Ext.jl" = "9fa38fe2d4fec466793f32f23d5f1d302e45dd3fa39b71eeef9bcdbfe268120b"
     "ext/TamerOpProgressLoggingExt.jl" = "e7dcb7dd63d2209563f0509f7e46d3d5678beda995fe7da674cfe2982ac5f5d4"
     "ext/TamerOpTablesExt.jl" = "dd15be7a229c9a21fcdf7fdd95e7d0361bb7286d992ba88421ba578f112e05d3"
-    "ext/TamerOpWGLMakieExt.jl" = "3b9b279a4dc44d98a17ecdf6c3b6e5febdd2996e9e323f7876d689ae806c8be5"
-    "ext/visualization_makie_annotations.jl" = "4d885ccdae166ef2cabe37ae16ec1cf08e4c153de4774317d4daf7aec6ab10c8"
+    "ext/TamerOpWGLMakieExt.jl" = "595396a72569822589c442a41212879105688b8a73f5fae7900a6c37d30342ce"
+    "ext/visualization_makie_annotations.jl" = "b36ec22922568146c9184b658c08236b5e4c2aa0ddff141ae9ab12fe57e6ed23"
     "ext/visualization_makie_batches.jl" = "2d30b2fd9e620fdec402ecea15758834cdc5176d480339003b9b2f4ec4c34f2b"
     "ext/visualization_makie_common.jl" = "2db90d1c3fd2f853b674d4d8ccef0c89c865960515d87c3b06bd0e3d67121250"
     "ext/visualization_makie_composition.jl" = "597c4f278ee6b93df88bab956fcc5c32b3425f81ef02629927ecfcaf74978873"
-    "ext/visualization_makie_retained.jl" = "c25e3b097e5ecd040433717338940d9f6fc82e2edc26e22c7ca8465161403380"
+    "ext/visualization_makie_retained.jl" = "89f557db131cc23109015a14c02e8521c57be65fa322bb559956227439d895fa"
+    "ext/visualization_wgl_atlas.jl" = "a91b05472f81b8afcd146859aa5d3f0beed1203af5299b5b5f067db515b4c7bf"
     "ext/visualization_wgl_chains.jl" = "b1c23efb0d13ba7ea10e3401bce11cac829471c9500a16528ea95f9af4ff6c49"
     "ext/visualization_wgl_collections.jl" = "035eaeb31b1100ba3ed4f690a470a796adb7fbd359366efb877dc71b3f4825b9"
     "ext/visualization_wgl_comparisons.jl" = "f520bd0b2a1d5d3012426e2ce257fb117f81f08ba8d7722f74b2e681d57bb199"
-    "ext/visualization_wgl_complexes.jl" = "2529b7208f8ab4577c8fc7be2279c24c75341487339e4f1d9962f4b9c28f351c"
+    "ext/visualization_wgl_complexes.jl" = "57d7a1950884de83c6299800bdbc428310366b5048768ac0169e059f918744ac"
     "ext/visualization_wgl_components.jl" = "438aba4d60ca368074cdfdef5f44a8474b60a4cfe9951ac4e38b1fe07a63dca1"
+    "ext/visualization_wgl_controls.jl" = "3067908296c63c7b59a8aa7699a1e14f7420433d38399b800029456dfdcdb50a"
     "ext/visualization_wgl_editor.jl" = "24749db4f7e8ae60a16c51fef56a1a6fd53dc60643b4ad936d46e4246209cd8d"
     "ext/visualization_wgl_ensembles.jl" = "aee71967c513574d678e7c01f0c957a4986083885dad36ba49424c70caafadb5"
     "ext/visualization_wgl_fields.jl" = "70d38f6b287576487ad5ffe20509e7d529a6dc3bb14429e76cc343a8a6d6d98e"
     "ext/visualization_wgl_generalized_rank.jl" = "1a91fdc4970fdfbc9ce159dc419d57dfa08e382a052fbbf9710efd339dafe93c"
-    "ext/visualization_wgl_inspection.jl" = "9bbe3279e331d2ee1c55bd52aec292f14da48a83ab5836f615755974c5050408"
+    "ext/visualization_wgl_inspection.jl" = "48fb7a41b03d1cd24ef30fec534ec81c69d5c72bc5f9592ba3d506ce7843a13f"
     "ext/visualization_wgl_intervals.jl" = "5e679dbbf21856b2ff576175bb278db05a0f492fb32aa3af4985f31ab44a1696"
     "ext/visualization_wgl_matchings.jl" = "5377f171ba767fd004f97ef57372c4666252fa9343476f7551a5fa479ea4b14b"
     "ext/visualization_wgl_signed.jl" = "50622dd2a58c30bdf911bcd095300c6133152b9c0a44e882ff357624f424330e"
-    "ext/visualization_wgl_slices.jl" = "71b9420b96fcfd3ee62161bc0aee1b1831b025229c4dffabd9face1d3f82b6f5"
+    "ext/visualization_wgl_slices.jl" = "4c871bdf612a553b98fbc8c919d7fb7bc5ab680ff86d209f0a7f91bdc5acd826"
     "ext/visualization_wgl_spectral.jl" = "ad8dfa328bb0100b87b1d424228d9c5413db4e3b8ab18ce01d800735ce05bcec"
+    "ext/visualization_wgl_summands.jl" = "d283d2d6ec972c79e55cac727b772fdb2448dbedae71b456eb5b8fd5f97abef5"
     "ext/visualization_wgl_transport.jl" = "dc6b18077bb897e5fcabb46f98e81c2ea5910105319370abca0c3a922f7390e3"
     "ext/visualization_wgl_volume.jl" = "cbe75432738b7cabc362b95755d52156346885fa5b300ca60c10311e3e892ac4"
-    "src/APISurface.jl" = "e93e3cd0ae6fc531fc9ed175244d4057209c9a8e140abc01bc06b7fad52c9756"
+    "src/APISurface.jl" = "118111867f63d3e70ff1dfbaa3b01fe7828df4aa49127eb998d315f366d533c9"
     "src/AbelianCategories.jl" = "2d826aa95e053ed62d3f94db5a0a6859fc483c49f6787250a788605b3dfedb14"
     "src/ChainComplexes.jl" = "e30868db78287f0056dcc82d5f03c4060369e62216a9f8a7ee648156e3b5e3bf"
     "src/ChangeOfPosets.jl" = "3909e66df5ad7f885caa0d8a972969a0c9d622b011ca04932be4d68e3a0e9c46"
@@ -75774,7 +76580,7 @@ fingerprint = "199bcc2a3752955c45fe2fc577c189bac305fcb25f860be97ad150b6efdb7dbe"
     "src/Stats.jl" = "5dd777f4143962b57221bc1f524a51b88a1bc8ed16aeed0ac1ececa6dc5ef668"
     "src/SyntheticData.jl" = "b7f6b0c438fc5a513d9ab0c6067a5f1f16eb08e9fde2a677afb8278251feb4e7"
     "src/TamerOp.jl" = "350d8ab1c1ba517d52357b4d630c8dc8f988849e17f4d0da5eff915aee7ec3cc"
-    "src/Visualization.jl" = "2d2b45d3f689663b8b200cfeca35bbdcc538dc422e4ce3bbfdc8141ee2daa0d9"
+    "src/Visualization.jl" = "4d849ff3fedcdea1b8e97b976e8ded2b76a2f2fa97fbd7e87555be941de746de"
     "src/Workflow.jl" = "3ebbc67066cad4c59eeef017a676af3f0624c9dbf89d194a0727a69967c01fef"
     "src/ZnEncoding.jl" = "d2c58dca25a61a87dffd6981eee479b1a7477b850d5ae56354057098864af256"
     "src/abelian_categories/propagation.jl" = "6ecfc1899fed19c8be98db8c8e57386f9e2a4351df19e06269b25e5d54292494"
@@ -75870,19 +76676,20 @@ fingerprint = "199bcc2a3752955c45fe2fc577c189bac305fcb25f860be97ad150b6efdb7dbe"
     "src/serialization/owned_visual_values.jl" = "cc80d9afd3ee1604b8e0118328e2d2c82792c26c5a69e4aa84f063e19acd8bc0"
     "src/serialization/shared.jl" = "6950635d0314f5469074ad9a91036b4c701209328530daf2a89e443a3f9e34b6"
     "src/slice_invariants/exact_grades.jl" = "d3b8822e033156e2349953e492e1c801d62e2b12ae2d9ec7d7c09151296f3544"
+    "src/visualization/builders_atlas.jl" = "11a7334355ca94467e4d93d454e73a98a0902d38db7fced409aaab06dbd07151"
     "src/visualization/builders_chains.jl" = "292f1e256d7344ee1d95d39a3fe7f4fb02762ea7d8a02182790a3452bc95b9ed"
     "src/visualization/builders_collections.jl" = "0965107c468ccdb893a4297f7f732016f13fe6906860cd8b96c2ddaa09c5e5b9"
     "src/visualization/builders_comparisons.jl" = "d39d8088c631680a240125502798536990e7e1b50ae2dc4ad519ac3ca6f181bf"
-    "src/visualization/builders_complexes.jl" = "e229c1b0f8b8015a12dcb1292c80723ccdfc5c2158cc812694097b44dc3808ad"
+    "src/visualization/builders_complexes.jl" = "f007459c429932fd46eeac274ff6df61fc801dc08483339bf8550e6f9b4a48ec"
     "src/visualization/builders_components.jl" = "5c1caa6c796e5a6eb630d45110f891a5dcceb87eab01b85929c1b26edf826de5"
     "src/visualization/builders_derived.jl" = "32b8059fa56f9df0a6510bc9207bd8392a42a4408885a69c7006e1757d13eac9"
     "src/visualization/builders_encoding.jl" = "eed46da82c8747de3c4da5a407c060a52ddbca49b458d28acf34447d150cc491"
     "src/visualization/builders_ensembles.jl" = "bc1e9fe52774765cb0a01166f88e8ed3768a0b70c647c691cfbcebb6092f9433"
     "src/visualization/builders_fields.jl" = "61a15a946bcd1f2b82d030a929f23b05f8ce5396c072552057e7899b93094cb9"
     "src/visualization/builders_generalized_rank.jl" = "cca984513eac0ef5b62b4c2a23c297162b03639178c9f248eb65f962d85f6729"
-    "src/visualization/builders_geometric.jl" = "d7b36a603b6036547800af5f835a4070b0fcc33b9b851639395f007d6f2a2013"
+    "src/visualization/builders_geometric.jl" = "05adbad5bb3c9c0a063b9c4e67c749549d4571203aa2957ac8460bfba69aac31"
     "src/visualization/builders_ingestion.jl" = "f3ee997b19f8b5e9e0889e2b7ba61466fcf09fa5ce0a17ffa0287923e1430c12"
-    "src/visualization/builders_invariants.jl" = "9d8cadf177ac88615ff288e98571b4acb870177347b2b34ab3df3faa5c7286ea"
+    "src/visualization/builders_invariants.jl" = "8e12b7e9a044b7e0a6aa1db867d17c25d0a68e37f6d6f549fd57e94761f6a257"
     "src/visualization/builders_matchings.jl" = "e8b4a34061a5c426274779fe108b6c646b79e2211f7a3ad68ba6a4f74cc659eb"
     "src/visualization/builders_modules.jl" = "10fe730b3841f9786c3310eb693f2f7274c7c245005b370d5c82c10989fe0021"
     "src/visualization/builders_morphism_comparisons.jl" = "7256a1e4352bc708640ed4718db1b792c15df172d97c720c52520b5f6207134e"
@@ -75893,30 +76700,36 @@ fingerprint = "199bcc2a3752955c45fe2fc577c189bac305fcb25f860be97ad150b6efdb7dbe"
     "src/visualization/builders_resolutions.jl" = "35b742703c76c6c9efd555f590f71b7f1a71851eaf756d18f718b5ff1af3e9e5"
     "src/visualization/builders_signed.jl" = "cba91503f5b76f5f2f6722ffc69a3edd137ba3c7f085c5e5703f8ff72fc09b70"
     "src/visualization/builders_slices.jl" = "6c4e2c03b913fdfcc775a25c4e0e0e0b54fcb8cfa6b9fba8d1dbf97eb4b5a9e1"
-    "src/visualization/builders_source_chains.jl" = "61858e41e6a9e14b7d3f2232f1df327fe11e07bbab819df8cf89f2cd48f35629"
+    "src/visualization/builders_source_chains.jl" = "f0c67ff83d558c25a7266c5f07d12c8f63b57e963767388009052fb1347f8403"
     "src/visualization/builders_spectral.jl" = "64809e6807afc7e6e5425c776047d196cf1d35b61ad4f6a4bb3dfb6793d3b2d5"
+    "src/visualization/builders_summands.jl" = "677a6496bf7c08e5d1e5574c6baf77b15741b00453c5a53fa6751774bf8d124d"
     "src/visualization/builders_transport.jl" = "064ce0d985ab63db4de67b32f0e5884c669b1cd6135ca409c348e84157d96c70"
     "src/visualization/composition.jl" = "00fea02e229b958be56e99605c80a453a04aa2892023babb0dd0077620c95989"
     "src/visualization/editor_export.jl" = "270dbb0672d09f0c323a9b4f5d4c9cea38b8ffe2bd601adb655b364fa2ad42f8"
+    "src/visualization/filtration_controls.jl" = "d72e5e2c6a34218cf8b4e1b9aa1fe6ddd0302b9bec6e2852e6aa37c1c1aa6d40"
     "src/visualization/hasse_layout.jl" = "1ac980228b59e437fddbd03f70c2f2e6805218584b42672b1327fdb390e49c33"
+    "src/visualization/inspection_atlas.jl" = "0ca9b1316d4bc264701224a6d2af345563757f81e6d05a00e52d6b6af67283cd"
     "src/visualization/inspection_chains.jl" = "2758b81e1c2552ee170fffda44a51308d4876370b7cab682ac1944741157815e"
     "src/visualization/inspection_collections.jl" = "09a9f038ebb86654dea7e40f9dc167dfa480cc845455c04885efcd0e6b8853d4"
     "src/visualization/inspection_comparisons.jl" = "94d4ec8dd820887d7588122d16e604f56ee82ec9909f365f38b2e6e22e2b4586"
-    "src/visualization/inspection_complexes.jl" = "dbdc222d84b727af84b86a1006969c8ff06f86f968dd5d32713864551957a4db"
+    "src/visualization/inspection_complexes.jl" = "ad3c264c8f18268ca97218aa88893fd67b04bd5bda8ce9b15b32ef91717469ee"
     "src/visualization/inspection_components.jl" = "adac04b810ec47b88e8f04ff7776646d8bbc70f57cf33a0bc51323e286e449e5"
     "src/visualization/inspection_ensembles.jl" = "459be35c8ac56c2be92cad0e5df25b8444ec8b03d8102a40a0ca3a495c44a376"
     "src/visualization/inspection_fields.jl" = "7517b3f779bb0538ecbd3ea8245cbcccb37ed09bee91ba6416f14ce1b2638c63"
     "src/visualization/inspection_generalized_rank.jl" = "d64ab1e04fb753b1e5a20cd1862e979071674a5642b384b35b255eaa776d1859"
     "src/visualization/inspection_intervals.jl" = "c94577ed01dfa63dbc5ee8ab1d30f3734682d79f12f4098a1f4262fc7706b25a"
     "src/visualization/inspection_matchings.jl" = "93689a1181d61e58a1fe270dc1cd19d12c4c3e83531790d8428614e87090bab7"
-    "src/visualization/inspection_rendering.jl" = "234213eec0281d7d39c9e7f4675eacbb0e813588b7c500fc9022522b93d7d01e"
-    "src/visualization/inspection_session.jl" = "a766cfb53c57f778e0cb59ae586cab7b400ab61a934f22b79ebf8b781002a604"
+    "src/visualization/inspection_rendering.jl" = "344100225d4ac942181c0758ec89c2eb653e426879eb309337b4071423f973a7"
+    "src/visualization/inspection_requests.jl" = "a2f526538e41b01027f13d9d550e9f3d604d28e9f16f7b26f46ba1503338a52d"
+    "src/visualization/inspection_session.jl" = "31735100f5a03f7ba0b68c5731cfbee38ccf191bec84ade7407e747ad22126e6"
     "src/visualization/inspection_signed.jl" = "849e25df0405e223c938cd58112358b293d22d0c62c87ee254371896f70eb598"
     "src/visualization/inspection_slices.jl" = "f6a0158fe1ef5ff027a84076f598ff0aaa00b3b1f3ed55817dfca0729d4cadd4"
     "src/visualization/inspection_spectral.jl" = "7fdb1abc367f861d9d12046f3ad51a8d161f5ab22dd32504d40e85ce9d4d7887"
+    "src/visualization/inspection_summands.jl" = "b1974b876c50fc18c85893d34009d511be3c3700edafb59526657cb0a79f960b"
     "src/visualization/inspection_transport.jl" = "257e863c60a51f75bb7b9c9ead4e11b6c0b3c64fe3b3119233b76b95a64d0674"
     "src/visualization/interval_views.jl" = "cf707d9dd1379c4b33c35e715b12b332ba17437dd78cc132cee4b84a45364d46"
     "src/visualization/module_editor.jl" = "322f8113a5fe8f57da3e35f945c88daaf5801ecbbe991fb9df9cc8d15b1b04c9"
+    "src/visualization/parameter_atlas.jl" = "d599a4c23d93cd31806ebf6f254f793827eef656f9091311586f4f90a057d32e"
     "src/visualization/region_geometry.jl" = "94119445b218c43fcc4d688f95abc94a1dec70ddf1119f700aabe6823bf78f77"
     "src/visualization/rendering.jl" = "d23f513282b15af67951c58e74bacddbdd6b5480f13bc443af23abeb8a114a42"
     "src/visualization/saved_sessions.jl" = "b9eb556464fd37570a7b9266c41d8141fc8e69643079b200cde24bee7f4c7ab7"
@@ -75928,35 +76741,35 @@ fingerprint = "199bcc2a3752955c45fe2fc577c189bac305fcb25f860be97ad150b6efdb7dbe"
     "src/visualization/validation.jl" = "17ca4624984e93912c9e086fde5ba997b4c438cc3a19657b2eafa3d9170820fb"
 
 [totals]
-advanced_binding_names = 1149
-advanced_binding_rows = 1159
-advanced_declarations = 1232
+advanced_binding_names = 1165
+advanced_binding_rows = 1175
+advanced_declarations = 1249
 advanced_exported_constants = 0
-advanced_exported_functions = 1044
+advanced_exported_functions = 1055
 advanced_exported_modules = 38
-advanced_exported_types = 325
+advanced_exported_types = 331
 advanced_exported_undefineds = 0
-advanced_exports = 1407
+advanced_exports = 1424
 canonical_constants = 2
-canonical_functions = 1059
+canonical_functions = 1070
 canonical_modules = 39
-canonical_objects = 1425
-canonical_objects_with_docstrings = 1101
-canonical_types = 325
+canonical_objects = 1442
+canonical_objects_with_docstrings = 1118
+canonical_types = 331
 canonical_undefineds = 0
-intended_public_objects = 1424
-intended_public_objects_with_docstrings = 1100
-inventoried_bindings = 3074
+intended_public_objects = 1441
+intended_public_objects_with_docstrings = 1117
+inventoried_bindings = 3112
 owner_candidates = 771
-public_bindings = 3073
-qualified_curated_owner_bindings = 1391
+public_bindings = 3111
+qualified_curated_owner_bindings = 1408
 reconciliation_only_objects = 1
 root_exported_constants = 2
-root_exported_functions = 185
+root_exported_functions = 189
 root_exported_modules = 1
 root_exported_types = 87
 root_exported_undefineds = 0
-root_exports = 275
-simple_binding_names = 272
-simple_binding_rows = 272
-simple_declarations = 269
+root_exports = 279
+simple_binding_names = 276
+simple_binding_rows = 276
+simple_declarations = 273

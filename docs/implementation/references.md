@@ -225,3 +225,20 @@ with endpoint antichains. Its local multiplicity engine uses the Hom
 composition pairing proved in the [algorithm account](interval_decomposition.md);
 it does not implement this paper's specialized presentation formulas,
 essential covers or filtration-level reductions.
+
+## Parameter atlas figures
+
+David Loiseaux and Hannah Schreiber. **multipers: Multiparameter Persistence
+for Machine Learning.** *Journal of Open Source Software* **9**(103), 6773,
+2024. [DOI: 10.21105/joss.06773](https://doi.org/10.21105/joss.06773).
+
+**Role:** Figure 1 provides a visual precedent for keeping a grid of source
+filtration states visible together in the [atlas inspector](inspection_sessions.md#reuse-a-declared-atlas).
+
+Marc Fersztand and Jan Jendrysiak. **Computing the Skyscraper Invariant.**
+*SoCG 2026*, LIPIcs **367**, 47:1–47:23.
+[DOI: 10.4230/LIPIcs.SoCG.2026.47](https://doi.org/10.4230/LIPIcs.SoCG.2026.47).
+
+**Role:** Figure 3 relates a sampled bifiltration to its homology diagram.
+This motivates the atlas's linked source states and maps; the atlas does not
+compute the Skyscraper invariant.

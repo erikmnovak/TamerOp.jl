@@ -29,6 +29,12 @@ The HTML state selector works without Julia or network access. It switches
 among prepared states; it does not implement arbitrary live selections.
 Embedding a mathematical object does not add a Julia runtime to the browser.
 
+A [parameter atlas](visualization.md#parameter-atlases) is a prepared finite
+selection domain: its live session changes source/target states and retained
+event witnesses without recomputing homology. Its saved selections use the
+snapshot route, including contact sheets, matrices and witness coefficients.
+They do not carry a live atlas reconstruction request.
+
 ## Author a finite module or presentation
 
 `module_editor` constructs an `Advanced.ModuleEditorSession` containing an
@@ -140,7 +146,7 @@ A.close_inspection!(session)
 `inspection_summary` describes retained state, capabilities and lifecycle
 without requesting a new mathematical answer.
 
-Updates are synchronous and validate a candidate before committing it.
+Direct `select_inspection!` calls are synchronous and validate a candidate before committing it.
 An invalid request preserves the previous session selection and snapshot.
 Reentrant updates during notification are rejected. A rendering listener
 failure is recorded after the valid state commits. Inputs and returned
@@ -152,6 +158,36 @@ the selected endpoints and basis opt-in while retaining its view, viewport,
 supports and slice line. Other families can restore their own initial query.
 Closing is idempotent, releases live resources, and leaves the last static
 snapshot inspectable. New queries require a new session.
+
+### Continuous browser requests
+
+Retained-filtration sliders and encoded-module slice gestures share one active
+request and one replaceable pending request across linked viewers. A new gesture
+supersedes the pending one. Work prepares a private transaction; generation and
+revision checks reject an obsolete result before committing selection, snapshot
+or session caches. Until a query commits, the displayed result continues to
+describe the previous parameter. The [control reference](visualization.md#continuous-filtration-controls)
+specifies slider ranges, pointer approximations and exact event steps.
+
+Connected complex controls, including exact entry and Reset, and slice Apply
+also use this queue so drawing can exchange messages with the browser. Applying
+exact text keeps its coordinates unchanged; the pending readout distinguishes
+the request from the result still on screen. A newer queued request can replace
+an earlier one that has not started.
+
+A direct `select_inspection!` or reset supersedes pending gestures. Closing a
+viewer cancels its requests; closing the session cancels every request. An
+algebraic calculation already executing may finish before its private result is
+discarded. A disconnected viewer is disposed before further plot updates;
+other linked viewers retain the shared mathematical session.
+
+For these two session families, `A.inspection_summary(session).requests` reports
+`pending`, `running`, `submitted`, `committed` and `discarded`. The counts concern
+queued browser requests, not direct Julia selections. A replaced or obsolete request counts
+as discarded; a cancelled pending slot or a failed query is not a committed
+answer. Cache limits retain their ordinary meaning, and the queue does not
+create an unbounded history of visited parameters. Capture or save after the
+desired request commits: a pending gesture does not change the static snapshot.
 
 ### Finite modules and encodings
 
@@ -507,3 +543,20 @@ The algorithm uses all contiguous path ranks and finite differences; it is a
 bounded reference barcode computation. For `t` occurrences it requests
 `t*(t+1)/2 + 1` ranks including the region check. Algebra budgets count repeated
 stalks. No ambient interval decomposition or fast zigzag performance is claimed.
+
+## Summands of a finite module
+
+`summand_session(result_or_collection)` explores a checked splitting with a
+shared block/vertex selection. Its snapshot compares the full module, selected
+blocks and complementary dimensions, retaining separate algebraic and geometric
+status. Ranking, type filtering, support layouts and optional ordinary Hom
+queries are specified in the [decomposition reference](decomposition.md#checked-summand-collections-and-visual-inspection).
+The [decomposition guide](../../tutorials/decomposition.ipynb) follows the same
+square from multiplicities to supports and actual maps.
+
+The common selection, validation, reset, close and frozen-state operations
+apply. A source/target pair names a structure map inside the focused block;
+a Hom pair names two summand blocks. These selections have different domains.
+Saved finite states preserve their readouts and figures, but the collection
+has no owned source codec for reopening arbitrary queries. Live browser
+controls need Julia and WGLMakie.

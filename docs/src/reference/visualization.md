@@ -725,11 +725,153 @@ view's callbacks; `close_inspection!` closes the shared session and releases its
 input. The last `inspection_snapshot` remains available for static export.
 Static CairoMakie exports support PNG, SVG and PDF; live widgets need Julia.
 
+### Continuous filtration controls
+
+Each drawable, nonconstant grade coordinate has a labelled slider and exact
+previous/next event buttons. Fixed or unrepresentable ranges instead show an
+explanatory readout, with exact tuple entry still available. Forward follows the coordinate orientation; all cells with the
+same stored grade are queried together. Two nonconstant drawable coordinates
+also have a draggable parameter cursor. Higher parameter dimensions retain one
+slider per coordinate and exact tuple entry. Source geometry still uses the
+explicit `view_dims`; no parameter coordinate is projected away from activity.
+
+Slider ranges come from retained grades and the initial selection, with declared
+radius caps and geometric depth windows where available. They are navigation
+windows, not assertions about the module outside them. Physical radii, squared
+alpha radii and Rips diameters retain their different labels and meanings.
+Geometric depth and stored graph degree controls use integer ticks. The current
+`DegreeRipsFiltration` uses the degree score of the constructed graph with its
+recorded orientation; moving diameter does not recalculate vertex degrees.
+A density control selects stored values without fitting a new estimator.
+
+A continuous slider uses 1,000 equal steps over its navigation window. A pointer
+position is rounded to ten decimal places before the exact activity query;
+discrete coordinates snap to integers. Event buttons retain original grade
+values, including algebraic radii. Exact text entry remains the way to ask a
+boundary question at a supplied coordinate. Invalid gestures leave the previous
+committed result visible. Inactive context is faint and excluded from active
+counts; the displayed counts distinguish the retained complex from the drawn
+skeleton and its budget.
+
+The displayed parameter is the committed one; a pending readout identifies a
+new request. The [session request contract](visual_sessions.md#continuous-browser-requests)
+specifies coalescing, obsolete-result rejection and disposal. Scheduling does
+not make a costly Julia query preemptible or promise video rates for every
+filtration.
+
+Compatible scene updates retain their source axes, including a chosen 3D camera.
+A structural change such as a new legend can require a rebuilt scene. Ordinary
+cell activity performs no persistence calculation. Geometric sessions compute
+their declared invariant; a fixed-depth barcode is reused while only radius
+changes. Use `invariant=:none` for geometry without those algebraic queries.
+Slice controls on an encoded-module session have the same request discipline,
+with the existing bounded slice cache. Exact fields wait for **Apply slice**;
+turning off **Continuous slice updates** also defers slider queries. Releasing a
+line handle commits its displayed decimal coordinates. Interval group identities
+remain local to the resulting line.
+
+The [interaction measurements](../../benchmarks/visual_interaction.md) report
+input-to-picture delays for small and larger retained objects, with the machine,
+rendering conditions and individual observations.
+
 Construction validates the supplied chain/filtration data and can be more
-expensive than plotting. Static queries scan retained cells and their grade
-sets; they do not run persistence. Geometry, source identities and grades consume
+expensive than plotting. Filtered-complex activity queries scan retained cells
+and their grade sets without running persistence. Geometry, source identities and grades consume
 storage in addition to the abstract complex. Display budgets limit rendered
 cells, not the mathematical object or its construction cost.
+
+## Parameter atlases
+
+`parameter_atlas` restricts one retained object to a declared collection of
+states and computes its supported endpoint maps. The
+[source-cell guide](../../tutorials/source_cells.ipynb#keep-several-parameter-states-in-view)
+uses the ring to relate a vanishing class to its filling.
+
+```julia
+atlas = parameter_atlas(cells; parameters=[0, 5], degree=1)
+visualize(atlas)
+change = Advanced.atlas_transition(atlas; source=1, target=2)
+visualize(atlas; target=2)
+```
+
+For a retained `FilteredComplex`, `degree` defaults to zero and `field` to
+`CoreModules.QQField()`. The construction uses all retained cells needed for
+that homology degree, including higher cells that the displayed skeleton may
+omit. It computes ordinary, unreduced homology. Rational and prime fields are
+supported; numerical fields are rejected. A finite `PModule` instead takes
+vertex IDs in `parameters`, and a supported planar `EncodingResult` takes
+coordinate pairs. These module inputs use their stored stalks and field, so
+omit `degree` and `field`.
+
+Supply exactly one of `parameters` and `grid=(xs, ys)`. Parameters must be
+distinct finite real coordinates of the input's parameter dimension, or valid
+finite vertex IDs. Grid axes must be finite, nonempty and distinct internally.
+Grid rows follow the supplied second axis in reverse order, and columns follow
+the first axis. A list is identified as a sampled monotone path only when its
+successive states are ordered in the input's filtration orientation; other
+lists remain sampled collections. Neither route certifies an exhaustive event
+subdivision. Geometry in each source panel uses the same coordinates and bounds;
+`view_dims` selects an explicit projection for geometry above three dimensions.
+
+| Advanced operation | Returned information |
+| --- | --- |
+| `atlas_states(atlas)` | Declared index, parameter, finite label where applicable, dimension, active source IDs and cell counts |
+| `atlas_summary(atlas)` or `describe(atlas)` | Sampling contract, field, degree, budgets, map count and retained matrix entries |
+| `atlas_transition(atlas; source, target)` | Relation, actual target-by-source matrix, rank, kernel/cokernel dimensions and source-cell entries |
+| `check_parameter_atlas(atlas; throw=false)` | Map shapes, identities and all supported composition equations |
+
+Every ordered pair is retained, including identities and nonadjacent maps.
+For incomparable or reversed parameters, `defined=false` and `matrix=nothing`.
+An encoding's label zero produces an unavailable stalk with `dimension=nothing`.
+Neither condition denotes a zero space or a zero map. Original parameter order
+is checked before finite labels, so equal labels do not make incomparable
+parameters comparable. Arrays and the input object are read-only after atlas
+construction.
+
+Cell `entries` are actual source cells active at the target but absent at the
+source. Their source IDs, dimensions, grade sets and signed boundaries remain
+available. Cells entering simultaneously are evaluated together. Kernel and
+cokernel dimensions concern the complete endpoint map, and cannot locate births
+or deaths within an unsampled interval.
+
+Set `witnesses=true` when constructing the atlas to retain chosen `kernel` and
+`cokernel` coordinate bases. Source-complex transitions also contain `killed`
+pairs with a source `cycle` and target `filling`, and `born` target cycles outside
+the image. The filling boundary equals the included cycle. These choices depend
+on quotient coordinates and carry no minimal-support or multiparameter
+decomposition guarantee. Higher-degree witness coefficients remain available
+even though source overlays display only degrees zero through two.
+
+`visualize(atlas; source=1, target=nothing, event=:summary, witness=1)` prepares
+the contact sheet and selected evidence. A target adds a map readout.
+Matrices display at most twelve rows and columns, with a visible truncation
+notice and the complete matrix retained in the transition data.
+`event=:entries` draws newly active source cells; `:kernel` and `:cokernel`
+select a retained witness. Witness selection requires a defined map and an
+index within the appropriate basis. Empty witness families reject selection.
+
+Construction limits default to `max_states=16`, `max_transitions=256`,
+`max_cells=5000` and `max_matrix_entries=2_000_000`. They reject oversized work
+before homology or map preparation. The last limit bounds a conservative count
+of algebra workspace and retained coefficient entries, rather than bytes or
+the size of exact numerators. Reduce the declared states or input before raising
+a budget. `max_cells` bounds the complete input's cells or finite vertices;
+it does not silently truncate the mathematical object.
+
+An atlas session uses `source`, `target`, `event` and `witness` with the common
+`select_inspection!`, reset, close and snapshot operations. Selecting new
+endpoints resets the event to its summary unless an event is supplied explicitly.
+The WGL inspector keeps the contact canvas and its cameras while changing the
+transition detail. Hover reads retained metadata; selection uses precomputed
+maps. Independent viewers of the same session share selections and release
+their own observers on disconnect.
+
+Capture the whole contact sheet and particular explanations with
+`visual_state(Advanced.visual_spec(atlas; ...))` or `visual_state(session)`.
+`save_visual_session` can export these named states as portable HTML with SVG
+and exact selected data. This is a snapshot collection: it does not serialize
+the atlas input or reconstruct a live atlas. See the
+[session reference](visual_sessions.md#choose-the-execution-contract).
 
 ## Source-chain overlays
 
@@ -1099,3 +1241,19 @@ Prepared `EnsembleSummary` objects support sampled bands, physical-coordinate
 frequency maps, retained ordinary diagrams and linked source selections. The
 [ensemble reference](ensembles.md) owns these options and statistical contracts;
 [the guide](../../tutorials/uncertainty.ipynb) develops their interpretation.
+
+## Exact summands and their support drawings
+
+`available_visuals(collection)` and an interval-decomposition result with
+retained witnesses provide `:summand_gallery`. The [decomposition contracts](decomposition.md#checked-summand-collections-and-visual-inspection)
+own the supplied splitting, selected/complement panels, ranking, boundary,
+scale and Hom options. An exact classifier and a supplied support drawing
+have different geometry status even when both accompany a checked split.
+
+The existing `:mpp_decomposition` view draws matched slice tracks. Its metadata
+records `interpretation=:sampled_tracks`, `certification=:not_a_splitting`,
+`identity=:matching_dependent`, and `matching_ambiguity=:not_recorded`.
+The object does not retain alternative tied matchings, so the viewer cannot
+report that a chosen track identity is unique. Signed-summary views likewise
+retain their reconstruction invariant and signed coefficients; neither view
+is promoted to a summand certificate.

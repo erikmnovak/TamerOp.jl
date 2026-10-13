@@ -196,3 +196,39 @@ end
         V.close_inspection!(empty_session)
     end
 end
+
+@testset "A123 queued slices commit exact endpoints and bounded caches" begin
+    V=TamerOp.Visualization
+    for field in (CM.QQField(),CM.F3())
+        K=CM.coeff_type(field)
+        enc=TamerOp.encode([TOA.BoxUpset([0,0]),TOA.BoxUpset([1,1])],
+            [TOA.BoxDownset([2,2]),TOA.BoxDownset([3,3])],K[1 0;0 1],
+            TOA.EncodingOptions(;backend=:pl_backend,poset_kind=:signature,field))
+        s=V.inspection_session(enc;box=([-1,-1],[4,4]),cache_limit=2)
+        owner=Ref(nothing)
+        for offset in (0,1,0)
+            V._request_inspection!(s,owner;slice=(basepoint=(0,offset),direction=(1,1)))
+            @test timedwait(()->s.requests.task===nothing,120;pollint=0.01)==:ok
+            result=V.inspection_snapshot(s).metadata.slice_result
+            @test Set((r.birth,r.death,r.left_closed,r.right_closed,r.multiplicity) for r in result.intervals)==
+                Set(((0,2-offset,true,true,1),(1,3-offset,true,true,1)))
+        end
+        @test V.inspection_summary(s).slice_cache_hits==1
+        @test V.inspection_summary(s).slice_cache_entries==2
+        @test V.check_inspection_session(s).valid
+        old=V.inspection_snapshot(s);cache=copy(s.slice_cache)
+        V._request_inspection!(s,owner;slice=(basepoint=(0,0),direction=(-1,1)))
+        @test timedwait(()->s.requests.task===nothing,120;pollint=0.01)==:ok
+        @test V.inspection_snapshot(s)===old && s.slice_cache==cache
+        V._request_inspection!(s,owner;slice=(basepoint=(0,2),direction=(1,1)))
+        closer=@async begin
+            while s.requests.active===nothing;yield();end
+            V.close_inspection!(s)
+        end
+        @test timedwait(()->s.requests.task===nothing,120;pollint=0.01)==:ok
+        wait(closer)
+        @test V.inspection_snapshot(s)===old
+        @test s.closed && s.object===nothing && isempty(s.slice_cache)
+        @test V.check_inspection_session(s).valid
+    end
+end

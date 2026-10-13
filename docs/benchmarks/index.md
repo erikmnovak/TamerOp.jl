@@ -28,7 +28,7 @@ directly from the filtered complex.
 
 <!-- COLLECTION: benchmarks -->
 
-These comparisons measure **compiled code computing fresh mathematical results**.
+The comparisons above measure **compiled code computing fresh mathematical results**.
 Package loading and compilation are outside the timer, and results from earlier
 queries are discarded. Each report gives its exact timing boundary, tested
 development snapshot, machine, input sizes, and all incomplete comparisons.
@@ -39,6 +39,13 @@ QPA, PHAT, Ripser.py, original C++ Ripser and CubicalRipser have separate comple
 their own reports when their studies are complete. The
 [comparison roadmap](../benchmark_suites.md#planned-competitor-comparisons)
 lists planned studies; a place on that list is not a measured result.
+
+The [continuous-inspection study](visual_interaction.md) asks a different
+question: how much time passes between moving a browser control and seeing
+its committed result? Its measurements include transport and rendering on
+declared retained objects, with first browser use and subsequent queries
+reported separately. That interaction delay is not a cross-tool algebraic
+speed ratio.
 
 ## Reading the results
 

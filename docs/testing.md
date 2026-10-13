@@ -170,8 +170,9 @@ serialization remain separate from manual browser acceptance:
 julia --project=. test/runtests.jl --file=test_visualization.jl --prefix="A40 A41" --require-extension=TamerOpCairoMakieExt --require-extension=TamerOpWGLMakieExt
 ```
 
-In the browser, move both draft sliders and verify that results change only
-after **Apply slice**. Select intervals from each chart and from the dropdown;
+In the browser, move both sliders with continuous updates enabled and verify the
+committed line and intervals. Then disable continuous updates and verify that
+slider drafts change results only after **Apply slice**. Select intervals from each chart and from the dropdown;
 the same group must highlight in both charts and the parameter plane. Check
 singleton and empty slices, invalid input recovery, linked tabs and closure.
 Read exact endpoints when drawing coordinates coincide. The author reports
@@ -1046,7 +1047,41 @@ julia --project=docs docs/build_scripts/check_decomposition.jl --main-path
 The guide checker executes the canonical notebook and can derive a local
 figure gallery with `--gallery=PATH`. It checks the square's known summands,
 a selected retraction and reconstruction, the three-line residual, finite
-encoding forwarding and budgets. Existing module and morphism views display
-the computed data; this introduces no new live visualization family. The
+encoding forwarding and budgets. The guide also executes checked summand
+galleries, classifier supports and ordinary Hom tables. The
 focused mathematical map shares canonical node identities, route validation
 and the accessible outline with the introductory map.
+
+
+For summand inspection, run `test_visualization_a87.jl` in the graphics
+environment and the browser scenario `summands.spec.mjs`. The algebra fixtures
+compare selected/complement dimensions with explicit interval sums, check the
+actual projection columns after a change of basis, and reject maps that match
+dimensions but fail the splitting equations. Geometry fixtures use nonuniform,
+reversed and non-square classifiers. The Hom oracle distinguishes maps into an
+interval from maps out of it. Browser checks exercise real pointer and keyboard
+selection, invalid-input recovery, shared clients and cleanup.
+
+`julia --project=test/browser docs/build_scripts/check_decomposition.jl --record`
+executes and records the canonical guide. Repeat with `--main-path` to check it
+without the optional styling cell. `--gallery=PATH` exports figures from those
+same cells; it does not maintain a separate authored example.
+
+
+## Continuous filtration and slice controls
+
+`continuous.spec.mjs` exercises actual range inputs and native canvas drags,
+including physical radius and integer depth, stored degree thresholds, exact event entry, linked viewers,
+rapid requests and closure. The small image has eight active faces below 5
+and nine at 5. The larger fixture has a 25 by 25 top-cell image and 2,601 total
+cells. Native A123 cases in `test_visualization_a92.jl` check independent
+triangle activity, superlevel events, rejection of obsolete transactions,
+invalid-query rollback and camera retention. Keep these cases in the required
+visualization lane when changing request scheduling or controls.
+
+Interaction timing starts at the browser pointer range-input event and ends after the matching
+committed readout, an advanced renderer frame and two animation frames. The fixture reports first opening,
+first interaction and repeated interactions separately. This measures the visible
+browser response on a declared workload; it is not a proof of a universal frame
+rate. Keep compilation, warmed queries and cache reuse distinct, and report
+concurrent workloads alongside timings. Notebook hosts need their own qualification.

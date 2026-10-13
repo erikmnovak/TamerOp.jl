@@ -94,3 +94,85 @@ splitting and reconstruction equation. Its typed
 `splitting_checked` is false. Validation budget exhaustion is an invalid report;
 `throw=true` raises `ArgumentError`. This is an expensive exact check, unlike
 `describe`. Treat retained source data and witnesses as read-only.
+
+## Checked summand collections and visual inspection
+
+`summand_collection(r)` adapts an interval result with `witnesses=true` into an
+`Advanced.SummandCollection`. One block represents each interval type, retaining
+its multiplicity and its actual inclusion and projection. The adapter rechecks
+the result before extracting the blocks. `summand_summary(c)` and `describe(c)`
+report the field, local block IDs, multiplicities and residual dimensions.
+`Advanced.summand_module(c; id)` and `Advanced.summand_maps(c; id)` return
+the retained block and its inclusion/projection pair. Use `id=:residual` for
+the original residual and `Advanced.source_module(c)` for the full module.
+These accessors return read-only references, not copies.
+
+For supplied general pieces, use
+
+```julia
+c = summand_collection(M, pieces; inclusions, projections,
+    residual=R, residual_inclusion=j, residual_projection=q)
+```
+
+The modules must share the identical finite poset and exact coefficient field.
+There is one inclusion and projection per piece. If no residual is supplied,
+it is the zero module and the pieces must reconstruct all of `M`. Every piece
+has multiplicity one unless it comes from the interval-result adapter; no
+isomorphism grouping or indecomposability test is inferred for supplied pieces.
+`labels` may supply distinct nonempty names. Optional `grades` records have
+`generators` and `relations` lists of planar coordinates, one record per block.
+These are supplied annotations with counts, not a checked presentation.
+
+`Advanced.check_summand_collection(c; throw=false)` returns a
+`SummandValidationSummary` with `valid` and `issues`. It checks functoriality,
+cover naturality, every retraction and mixed zero composite, and reconstruction
+of the identity at every stalk. `throw=true` raises `ArgumentError` for invalid
+storage or equations. Construction accepts `budget=IntervalDecompositionBudget()`;
+the source dimensions, finite order, pair count and matrix work are bounded.
+Retained modules and maps are references and must remain read-only during use.
+
+`visualize(c)` and `visualize(r)` draw the static `:summand_gallery` recipe.
+`summand_session(c; kwargs...)` prepares an `Advanced.SummandInspectionSession`
+with the same options. The [worked guide](../../tutorials/decomposition.ipynb)
+explains the panels; shared lifecycle and saved-state operations are described
+in [visual sessions](visual_sessions.md).
+
+| Option | Meaning |
+| :--- | :--- |
+| `encoding=nothing`, `box=nothing` | An identical-base planar classifier supplies exact fibers in the viewing window. Otherwise the finite order has schematic coordinates. |
+| `drawing=nothing` | Optional `Advanced.SummandSupportDrawing`, mutually exclusive with `encoding`. Its geometry remains unverified. |
+| `selected=nothing` | Candidate block IDs; `nothing` means all, `[]` clears selection. |
+| `focus=nothing`, `vertex=nothing`, `pair=nothing` | Detail block (first displayed by default), stalk (first by default), and optional structure-map source/target labels. `focus=0` clears detail. |
+| `layout=:facets` | `:facets`, `:isolate`, `:overlay`, or `:outline`; the last two require geometric supports. Isolate changes the gallery detail, not the aggregate selected dimensions. |
+| `sort_by=:index`, `min_value=0`, `limit=8` | Rank by `:index`, `:multiplicity`, `:support_vertices`, `:total_dimension`, `:max_dimension`, `:generators` or `:relations`; filter by that statistic, then keep up to 16 blocks. Ties use original IDs. |
+| `type_filter=:all` | `:interval` selects certified interval blocks; `:thin` means maximum stalk dimension at most one, `:thick` means greater than one. Thinness alone is not an interval proof. |
+| `scale=:linear`, `shared_scale=true` | Linear or logarithmic dimension bins. Zero is white; shared scales keep the full module's maximum through selection changes. Independent scales are labelled. |
+| `hom=false`, `hom_pair=nothing`, `basis_index=1` | Ordinary Hom table and optional basis component from the selected source/target blocks. Matrix rows are targets, columns sources. |
+| `matrix_limit=(8,8)` | Displayed row/column limit; retained matrices remain exact. |
+| `max_vertices=120`, `max_summands=128` | Finite diagram and supplied block limits, checked before preparing views. |
+| `max_hom_pairs=64`, `max_hom_entries=1_000_000` | Maximum selected pair count and squared unknown count per Hom solve, accounting for potentially dense bases. |
+
+Ranking, type filtering and the display limit apply in that order. The
+complement panel contains omitted blocks plus the retained residual, so its
+dimensions always add to the selected dimensions to recover the full module.
+The residual alone is reported separately. Finite support counts and total
+stalk dimensions are sensitive to the finite model; neither is ambient area.
+Block IDs are local to the supplied splitting and have no stability or matching
+guarantee across different inputs.
+
+`SummandSupportDrawing(boxes; provenance, error_statement=...)` accepts one
+list of pairs of planar corners per block. Each box is lower closed and upper
+open; overlapping boxes describe a union. At most 10,000 boxes are accepted.
+The supplied error statement is displayed as provenance, not verified as a
+bound. An exact split can therefore have an unverified support drawing. The
+viewer does not provide the separate support-approximation computation.
+
+Live selection uses `Advanced.select_inspection!`, `reset_inspection!` and
+`close_inspection!`. Prepared geometry and the checked split are reused; only
+explicit Hom requests perform additional algebra. Failed updates preserve the
+previous snapshot and selection. Hover reads retained data. Close releases
+inputs, Hom spaces and listeners while retaining `inspection_snapshot`.
+Static PNG/SVG/PDF and saved finite states are supported; arbitrary live
+queries require Julia/WGLMakie. Saved views do not serialize this mathematical
+source for reconstruction, and standalone browser checks do not qualify a
+notebook host.

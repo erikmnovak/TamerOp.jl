@@ -171,6 +171,79 @@ the guarantee applies only to the declared parameter and finite source model.
 This search has exponential cost and deliberately has a hard candidate budget.
 No rendering path invokes it.
 
+## Explain a transition between sampled parameters
+
+An atlas asks a related question without first reducing an ordinary barcode:
+which classes survive the inclusion from a selected parameter $p$ to a
+comparable parameter $q$? The input is one retained filtered complex, so a cell
+has the same identity at both parameters. Its grade set and the filtration's
+sublevel or superlevel orientation determine activity before any coordinates
+are converted for drawing.
+
+For degree $d$, the active columns and rows of the source boundary matrices
+give the two differentials
+
+```math
+C_{d+1}(p) \xrightarrow{D_{d+1}(p)} C_d(p)
+\xrightarrow{D_d(p)} C_{d-1}(p).
+```
+
+The homology owner computes the quotient of $\ker D_d(p)$ by
+$\operatorname{im}D_{d+1}(p)$ and chooses representative columns $Z_p$ for that
+quotient. Shared cell IDs give a sparse inclusion matrix $I_{pq}$: each active
+source cell is sent to the coordinate of that same cell at the target. Reducing
+the columns of $I_{pq}Z_p$ to the target's homology coordinates produces the
+actual map $A_{pq}$. The atlas uses these fixed endpoint bases for every pair,
+so compositions can be compared as literal matrices.
+
+Consider the boundary of a triangle followed by its filled triangle. In degree
+one the endpoint dimensions are one and zero, so $A_{pq}$ has zero rows and
+one column. A vector $v$ in its kernel gives a source cycle $z=Z_pv$. Because
+its target class is zero, there is a filling $b$ satisfying
+
+```math
+D_2(q)b=I_{pq}z.
+```
+
+When witnesses are requested, the implementation solves this equation and checks
+it over the declared exact field before retaining both chains in the full
+source-cell coordinates. A cokernel witness is obtained by extending the image
+columns of $A_{pq}$ with independent target coordinate vectors and lifting the
+added vectors through $Z_q$. The result represents a target class outside the
+image. Neither construction chooses a shortest representative or a canonical
+class decomposition.
+
+This also explains why the cell-entry list is separate. All cells that become
+active at the same grade are included before homology is computed. An edge and
+triangle entering together may create no surviving loop, even though both are
+new cells. Conversely, if a loop appears and fills between two declared samples,
+their endpoint map contains no record of its intervening lifetime. The atlas
+therefore describes its grid or monotone path as sampled, without claiming an
+exhaustive event subdivision.
+
+A finite-module atlas takes its matrices directly from the module owner. A
+planar encoding additionally locates each declared parameter and checks the
+original parameter order before querying the finite map. Incomparable points
+can share a finite label, so label equality alone cannot authorize an ambient
+structure map. This route retains coordinate kernel and cokernel witnesses;
+it does not infer source cycles when the encoding carries no such correspondence.
+
+The construction retains all ordered endpoint maps, including nonadjacent
+composites. It needs at most one homology computation per declared source state;
+subsequent selections reuse its matrices and witnesses. Limits on the number of
+states, ordered pairs, input cells and estimated algebra entries are checked
+before that work begins. Source homology workspace is conservatively estimated
+quadratically in the total retained cell count. Exact coefficient sizes remain
+unbounded by an entry count. The browser and saved-state consequences of this
+choice are described in the [inspection account](inspection_sessions.md#reuse-a-declared-atlas).
+
+The computation is implemented in
+[`parameter_atlas.jl`](../../src/visualization/parameter_atlas.jl), using the
+existing homology-coordinate and particular-solution operations in
+[`ChainComplexes.jl`](../../src/ChainComplexes.jl). The
+[rational-coordinate account](qq_coordinates.md) explains how exact quotient
+coordinates and membership checks are recovered.
+
 ## Costs, reuse and future optimization
 
 Source retention stores cells, geometry and sparse maps in addition to any

@@ -52,6 +52,26 @@ The Chromium sandbox remains enabled. Use a host that supports sandboxed
 Chromium and its system libraries; the configuration does not disable the
 sandbox to work around an unsupported host.
 
+On the Ubuntu GitHub runner, [setup-ci-sandbox.sh](setup-ci-sandbox.sh) installs
+an AppArmor permission for the exact Playwright Chromium executable paths when
+Ubuntu restricts user namespaces. Chromium uses those namespaces to construct
+its sandbox. This leaves the system restriction in place for other programs.
+The script is limited to Linux GitHub Actions runners; local machines need
+their own host configuration, as described in
+[Chromium's AppArmor guidance](https://chromium.googlesource.com/chromium/src/+/main/docs/security/apparmor-userns-restrictions.md).
+
+CI runs [check-sandbox.mjs](check-sandbox.mjs) before preparing Julia. It opens
+the headless shell and the full Chromium build with the zoom extension, so a
+browser startup problem fails at setup rather than after the native checks.
+
+The offline lane checks both the original saved session and A87's saved
+summands through `portable-session.spec.mjs`. Generate their files with
+`TAMEROP_PORTABLE_SESSION_OUTPUT` and `TAMEROP_A87_HTML` set during the native
+owners, then supply `TAMEROP_PORTABLE_SESSION` and `TAMEROP_A87_HTML` when
+running the browser checks. CI sets these paths under `test/browser/artifacts`.
+The atlas owner and its offline scenario use `TAMEROP_ATLAS_HTML` in the same
+way. All these browser checks require the actual exported files.
+
 ## Run the checks
 
 From `test/browser`:
@@ -94,6 +114,13 @@ ordered coordinate planes, global scales and baseline differences, real slider
 and chart input, visible slider synchronization after a remote reset, invalid
 input recovery, narrow chart access and viewer cleanup. The fixture exposes
 read-only selection and native heatmap data; test input goes through the UI.
+
+The `/summands` route uses a checked interval splitting on a nonuniform square
+classifier. Run `npm test -- summands.spec.mjs` to check block selection,
+full/selected/complement dimensions, ranking, support overlays, ordinary Hom
+components, invalid-input recovery, linked viewers and narrow-screen access.
+The controls consume retained splitting maps; they do not compute a new
+decomposition on each selection.
 
 Each page creates a fresh viewer. Pages for the same fixture share its inspection
 session, which allows linked selection and viewer-disconnection checks. Closing
@@ -149,6 +176,9 @@ mkdir -p test/browser/artifacts
 TAMEROP_COMPOSITION_HTML="$PWD/test/browser/artifacts/composition.html" \
 TAMEROP_PORTABLE_SESSION_OUTPUT="$PWD/test/browser/artifacts/session.html" \
 TAMEROP_STATIC_HTML="$PWD/test/browser/artifacts/static.html" \
+TAMEROP_SOURCE_PREVIEW_HTML="$PWD/test/browser/artifacts/source-preview.html" \
+TAMEROP_A87_HTML="$PWD/test/browser/artifacts/summands.html" \
+TAMEROP_ATLAS_HTML="$PWD/test/browser/artifacts/atlas.html" \
 TAMEROP_BATCHED_HTML="$PWD/test/browser/artifacts/batched.html" \
   python test/visualization_contracts.py --run-native
 ```
@@ -159,6 +189,9 @@ After that Julia process exits, run from `test/browser`:
 TAMEROP_COMPOSITION_HTML="$PWD/artifacts/composition.html" \
 TAMEROP_PORTABLE_SESSION="$PWD/artifacts/session.html" \
 TAMEROP_STATIC_HTML="$PWD/artifacts/static.html" \
+TAMEROP_SOURCE_PREVIEW_HTML="$PWD/artifacts/source-preview.html" \
+TAMEROP_A87_HTML="$PWD/artifacts/summands.html" \
+TAMEROP_ATLAS_HTML="$PWD/artifacts/atlas.html" \
 TAMEROP_BATCHED_HTML="$PWD/artifacts/batched.html" npm run test:offline
 ```
 
@@ -423,7 +456,7 @@ TAMEROP_PORTABLE_SESSION_OUTPUT=/tmp/tamerop-saved-view.html \
   --file=test_visual_session_exports.jl --require-extension=TamerOpCairoMakieExt
 cd test/browser
 TAMEROP_PORTABLE_SESSION=/tmp/tamerop-saved-view.html \
-  npx playwright test --config=portable-session.config.mjs portable-session.spec.mjs
+  npx playwright test --config=portable-session.config.mjs portable-session.spec.mjs --grep A100
 ```
 
 The browser copies the file, opens it with networking disabled, changes saved
@@ -467,3 +500,33 @@ keyboard controls, linked-view disconnect, narrow chart scrolling and close.
 Inference is prepared before opening the viewer; selecting a point never reruns
 bootstrap sampling. This standalone Chromium scenario does not qualify a live
 IJulia, Pluto or VS Code host.
+
+
+### Continuous filtration and line controls
+
+Run `continuous.spec.mjs` for radius/grade sliders, exact event stepping,
+parameter-plane and slice-handle drags, physical radius and integer depth,
+discrete stored degrees, linked views,
+rapid input, deferred Apply, responsive layout and closure. The fixtures also
+record browser input to painted-state latency on a 49-cell ring and a 2,601-cell
+image. The JSON attachments separate opening, the first query and warm samples.
+A warm sample still scans cell activity; it is not a stored screenshot. Slice
+queries use their separately bounded mathematical cache.
+
+All actions travel through DOM controls or actual canvas pointer events.
+Telemetry observes committed mathematical state and projected pointer positions.
+Do not replace these actions with direct calls to selection callbacks. Review the
+captured charts as well as state assertions, and record any competing workload
+when quoting timings. The existing manual-check scenarios also retain the
+optional slider draft/Apply behavior with continuous updates disabled.
+
+
+The parameter-atlas owners are `atlas.spec.mjs` and `atlas-offline.spec.mjs`.
+Generate `TAMEROP_ATLAS_HTML` with the focused `test_visualization_a125.jl`
+owner and both graphics extensions required. The live cases inspect actual
+entry groups, kernel/filling and cokernel witnesses, incomparable grid points,
+nonzero adjacent maps with zero composite, fixed canvas identity, rollback,
+keyboard/pointer selection, narrow layout and disposal. The offline case
+reopens the resulting contact/witness collection with networking disabled and
+checks selected data downloads and scrolling. These do not qualify notebook
+frontends or infer unobserved events between the declared samples.

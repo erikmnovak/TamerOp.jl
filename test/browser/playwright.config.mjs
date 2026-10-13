@@ -11,7 +11,7 @@ const project = process.env.TAMEROP_JULIA_PROJECT || directory;
 export default defineConfig({
   testDir: directory,
   testMatch: '*.spec.mjs',
-  testIgnore: ['portable-session.spec.mjs', 'composition-offline.spec.mjs', 'static-export.spec.mjs', 'source-preview-offline.spec.mjs'],
+  testIgnore: ['portable-session.spec.mjs', 'composition-offline.spec.mjs', 'static-export.spec.mjs', 'source-preview-offline.spec.mjs', 'atlas-offline.spec.mjs'],
   fullyParallel: false,
   forbidOnly: true,
   workers: 1,

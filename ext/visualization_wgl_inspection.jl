@@ -1,5 +1,6 @@
 # Live WGL/Bonito controls for backend-independent inspection sessions.
 
+include("visualization_wgl_controls.jl")
 include("visualization_wgl_slices.jl")
 
 const _INSPECTION_UI_HANDLES = WeakKeyDict{Any,Any}()
@@ -240,6 +241,7 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
     support_markers = Any[]
     rank_content = M.Observable{Any}(B.DOM.div())
     rank_figure = Ref{Any}(nothing)
+    rank_key = Ref{Any}(nothing)
     rank_axis = Ref{Any}(nothing)
     rank_observers = Any[]
     draft_source, draft_target = Ref{Any}(nothing), Ref{Any}(nothing)
@@ -382,7 +384,7 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
 
     function refresh()
         state = VIZ.inspection_summary(session)
-        state.closed && return dispose()
+        (state.closed || _inspection_browser_ended(browser_client[])) && return dispose()
         selection = VIZ.inspection_selection(session)
         snapshot = VIZ.inspection_snapshot(session)
         if selection.pair !== nothing
@@ -436,54 +438,61 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
             "Pointer selection: coordinates are approximate. Use the exact fields to decide boundary membership." :
             "Supplied selection; exact coordinate text is classified before drawing conversion."
         support_style[] = selection.view === :presentation ? "display:block" : "display:none"
-        foreach(M.off, rank_observers)
-        empty!(rank_observers)
         if selection.view in (:rank_from, :rank_to) && !isempty(snapshot.metadata.rank_sections)
-            panels = filter(p -> p.kind in (:rank_section_plane, :rank_section_hasse), snapshot.panels)
-            section = VIZ.VisualizationSpec(:rank_section; title=snapshot.title,
-                subtitle=snapshot.subtitle * "\nClick this section to select the varying endpoint; its anchor stays fixed.",
-                panels, legend=snapshot.legend, metadata=(; panel_columns=1, panel_row_weights=[1],
-                    figure_size=(figure_size[1], max(780, figure_size[2])), legend_position=:bottom))
-            old_figure = rank_figure[]
-            rank_figure[] = _HANDLERS.render(section; style)
-            rank_content[] = rank_figure[]
-            old_figure === nothing || empty!(old_figure)
-            rank_axis[] = only(filter(block -> block isa M.Axis, rank_figure[].content))
-            chosen = VIZ._inspection_rank_anchor(selection)
-            function rank_pick()
-                ax = rank_axis[]
-                ax === nothing && return nothing
-                M.is_mouseinside(ax.scene) || return nothing
-                if chosen.domain === :parameter
-                    p = M.mouseposition(ax.scene)
-                    return (Float64(p[1]), Float64(p[2]))
-                end
-                return _inspection_nearest_vertex(ax, positions)
-            end
-            push!(rank_observers, M.on(M.events(rank_figure[].scene).mouseposition) do _
-                closed[] && return nothing
-                picked = rank_pick()
-                picked === nothing && return nothing
-                chosen.domain === :parameter ? hover(; point=picked) : hover(; vertex=picked)
-                return nothing
-            end)
-            push!(rank_observers, M.on(M.events(rank_figure[].scene).mousebutton; priority=100) do event
-                closed[] && return M.Consume(false)
-                if event.button == M.Mouse.left && event.action == M.Mouse.press
-                    picked = rank_pick()
-                    if picked !== nothing
-                        pair = chosen.from ? (chosen.anchor, picked) : (picked, chosen.anchor)
-                        commit() do
-                            chosen.domain === :parameter ?
-                                VIZ.select_inspection!(session; parameter_pair=pair, input=:pointer) :
-                                VIZ.select_inspection!(session; pair, input=:pointer)
-                        end
-                        return M.Consume(true)
+            key=(selection.view,selection.selector,selection.vertex,selection.pair,selection.query_points)
+            # A slice gesture leaves the anchored rank question unchanged.
+            # Keep its canvas and picking observer while updating the slice.
+            if rank_key[] != key
+                foreach(M.off,rank_observers);empty!(rank_observers)
+                panels = filter(p -> p.kind in (:rank_section_plane, :rank_section_hasse), snapshot.panels)
+                section = VIZ.VisualizationSpec(:rank_section; title=snapshot.title,
+                    subtitle=snapshot.subtitle * "\nClick this section to select the varying endpoint; its anchor stays fixed.",
+                    panels, legend=snapshot.legend, metadata=(; panel_columns=1, panel_row_weights=[1],
+                        figure_size=(figure_size[1], max(780, figure_size[2])), legend_position=:bottom))
+                old_figure = rank_figure[]
+                rank_figure[] = _HANDLERS.render(section; style)
+                rank_content[] = rank_figure[]
+                old_figure === nothing || empty!(old_figure)
+                rank_axis[] = only(filter(block -> block isa M.Axis, rank_figure[].content))
+                chosen = VIZ._inspection_rank_anchor(selection)
+                function rank_pick()
+                    ax = rank_axis[]
+                    ax === nothing && return nothing
+                    M.is_mouseinside(ax.scene) || return nothing
+                    if chosen.domain === :parameter
+                        p = M.mouseposition(ax.scene)
+                        return (Float64(p[1]), Float64(p[2]))
                     end
+                    return _inspection_nearest_vertex(ax, positions)
                 end
-                return M.Consume(false)
-            end)
+                push!(rank_observers, M.on(M.events(rank_figure[].scene).mouseposition) do _
+                    closed[] && return nothing
+                    picked = rank_pick()
+                    picked === nothing && return nothing
+                    chosen.domain === :parameter ? hover(; point=picked) : hover(; vertex=picked)
+                    return nothing
+                end)
+                push!(rank_observers, M.on(M.events(rank_figure[].scene).mousebutton; priority=100) do event
+                    closed[] && return M.Consume(false)
+                    if event.button == M.Mouse.left && event.action == M.Mouse.press
+                        picked = rank_pick()
+                        if picked !== nothing
+                            pair = chosen.from ? (chosen.anchor, picked) : (picked, chosen.anchor)
+                            commit() do
+                                chosen.domain === :parameter ?
+                                    VIZ.select_inspection!(session; parameter_pair=pair, input=:pointer) :
+                                    VIZ.select_inspection!(session; pair, input=:pointer)
+                            end
+                            return M.Consume(true)
+                        end
+                    end
+                    return M.Consume(false)
+                end)
+                rank_key[]=key
+            end
         else
+            foreach(M.off,rank_observers);empty!(rank_observers)
+            rank_key[]=nothing
             rank_content[] = B.DOM.div()
             rank_figure[] === nothing || empty!(rank_figure[])
             rank_figure[] = nothing
@@ -619,7 +628,7 @@ function _render_linked_inspector(spec; display::Symbol=:inline, figure=nothing,
         return M.Consume(false)
     end)
     slice_ui[] = _inspection_slice_ui(session,region_axis,prepared;
-        style,figure_size,disabled,closed,updating,commit,listen,control_style,dom_id)
+        style,figure_size,disabled,closed,updating,browser_client,commit,listen,control_style,dom_id)
     session_token[] = VIZ._on_inspection(session, _ -> refresh())
     refresh()
 

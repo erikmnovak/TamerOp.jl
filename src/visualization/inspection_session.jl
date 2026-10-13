@@ -47,6 +47,7 @@ mutable struct InspectionSession{T,P} <: _AbstractInspectionSession
     closed::Bool
     busy::Bool
     lock::ReentrantLock
+    requests::_InspectionRequests
 end
 
 function _inspection_integer(value, name; lower=0)
@@ -250,7 +251,7 @@ function inspection_session(obj::Union{Modules.PModule,EncodingResult}; view=:mo
     session = InspectionSession{typeof(obj),typeof(prepared)}(obj, prepared, state, snapshot,
         limit, capacity, Dict{_InspectionCacheKey,NamedTuple}(), _InspectionCacheKey[],
         0, 0, stratum_limit, slice_result, Dict{Any,NamedTuple}(), Any[], 0, 0,
-        1, Dict{Int,Any}(), 1, String[], capabilities, false, false, ReentrantLock())
+        1, Dict{Int,Any}(), 1, String[], capabilities, false, false, ReentrantLock(), _InspectionRequests())
     slice_result === nothing || _inspection_commit_slice_cache!(session, (state.slice, state.slice_scope), slice_result, false)
     return session
 end
@@ -294,7 +295,7 @@ function inspection_summary(s::InspectionSession)
             selection=s.state, matrix_limit=s.matrix_limit,
             cache_entries=length(s.cache), cache_limit=s.cache_limit,
             cache_hits=s.cache_hits, cache_misses=s.cache_misses,
-            slice_limit=s.slice_limit, slice_cache_entries=length(s.slice_cache),
+            slice_limit=s.slice_limit, slice_cache_entries=length(s.slice_cache), requests=_inspection_request_summary(s),
             slice_cache_hits=s.slice_cache_hits, slice_cache_misses=s.slice_cache_misses,
             slice_active=s.state.slice !== nothing, slice_scope=s.state.slice_scope,
             slice_intervals=s.slice_result === nothing ? 0 : length(s.slice_result.intervals),
@@ -462,6 +463,7 @@ function _inspection_notify(s)
 end
 
 function _inspection_update!(s, candidate_builder)
+    _cancel_inspection_requests!(s)
     lock(s.lock)
     try
         _inspection_require_open(s)
@@ -590,6 +592,7 @@ The final static snapshot and selection remain inspectable/exportable. Closing
 an already closed session is harmless; updates require opening a new session.
 """
 function close_inspection!(s::InspectionSession)
+    _cancel_inspection_requests!(s)
     lock(s.lock)
     try
         s.closed && return s

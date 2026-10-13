@@ -21,6 +21,7 @@ mutable struct ComplexInspectionSession <: _AbstractInspectionSession
     closed::Bool
     busy::Bool
     lock::ReentrantLock
+    requests::_InspectionRequests
 end
 
 function inspection_session(x::DataIngestion.FilteredComplex;kind=:filtered_complex,kwargs...)
@@ -39,7 +40,7 @@ function inspection_session(x::DataIngestion.FilteredComplex;kind=:filtered_comp
     options=merge(options,(;kind))
     snapshot=visual_spec(x;initial...,options...)
     state=merge(initial,(;revision=0))
-    ComplexInspectionSession(x,initial,options,state,snapshot,1,Dict{Int,Any}(),1,String[],false,false,ReentrantLock())
+    ComplexInspectionSession(x,initial,options,state,snapshot,1,Dict{Int,Any}(),1,String[],false,false,ReentrantLock(),_InspectionRequests())
 end
 inspection_selection(s::ComplexInspectionSession)=lock(s.lock) do;s.state;end
 inspection_snapshot(s::ComplexInspectionSession)=lock(s.lock) do;s.snapshot;end
@@ -47,7 +48,7 @@ function inspection_summary(s::ComplexInspectionSession)
     lock(s.lock) do
         m=s.snapshot.metadata
         (;kind=:complex_inspection_session,selection=s.state,revision=s.state.revision,
-          active_counts=m.active_counts,drawn_counts=m.drawn_counts,omitted_count=m.omitted_count,
+          requests=_inspection_request_summary(s),active_counts=m.active_counts,drawn_counts=m.drawn_counts,omitted_count=m.omitted_count,
           closed=s.closed,updating=s.busy,snapshot_builds=s.snapshot_builds,
           listener_count=length(s.listeners),listener_errors=Tuple(s.listener_errors))
     end
@@ -76,6 +77,7 @@ function check_inspection_selection(s::ComplexInspectionSession;throw=false,kwar
     end
 end
 function select_inspection!(s::ComplexInspectionSession;kwargs...)
+    _cancel_inspection_requests!(s)
     lock(s.lock)
     try
         _inspection_require_open(s)
@@ -83,7 +85,14 @@ function select_inspection!(s::ComplexInspectionSession;kwargs...)
         c=_complex_candidate(s;kwargs...)
         s.busy=true
         try
-            snapshot=visual_spec(s.object;parameter=c.parameter,cell=c.cell,dimensions=c.dimensions,activity=c.activity,boundary=c.boundary,s.options...)
+            kwargs=(;parameter=c.parameter,cell=c.cell,dimensions=c.dimensions,activity=c.activity,boundary=c.boundary)
+            snapshot=if s.options.kind===:geometric_filtration
+                cached=s.options.invariant===:barcode && c.parameter[2]==s.state.parameter[2] ?
+                    (s.snapshot.panels[4],s.snapshot.metadata.diagram) : nothing
+                _geometric_view(s.object;kwargs...,Base.structdiff(s.options,(;kind=s.options.kind))...,_cached_barcode=cached)
+            else
+                visual_spec(s.object;kwargs...,s.options...)
+            end
             s.snapshot=snapshot;s.state=c;s.snapshot_builds+=1
         catch;s.busy=false;rethrow();end
     finally;unlock(s.lock);end
@@ -93,6 +102,7 @@ function select_inspection!(s::ComplexInspectionSession;kwargs...)
 end
 reset_inspection!(s::ComplexInspectionSession)=select_inspection!(s;s.initial...)
 function close_inspection!(s::ComplexInspectionSession)
+    _cancel_inspection_requests!(s)
     lock(s.lock)
     try
         s.closed && return s

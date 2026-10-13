@@ -5,8 +5,10 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkOfflineChartScroll } from './helpers.mjs';
 
-const fixture = process.env.TAMEROP_PORTABLE_SESSION;
-if (!fixture) throw new Error('Generate TAMEROP_PORTABLE_SESSION before running the offline lane.');
+const fixtures = [
+  ['A100 moved session reopens offline with exact records, keyboard selections and no Julia', 'TAMEROP_PORTABLE_SESSION'],
+  ['A87 saved summands reopen offline with exact records, keyboard selections and no Julia', 'TAMEROP_A87_HTML'],
+];
 
 async function ready(page, id) {
   await expect(page.locator('html')).toHaveAttribute('data-ready', 'true');
@@ -22,7 +24,10 @@ async function downloaded(page, button) {
   return fs.readFile(await download.path(), 'utf8');
 }
 
-test('A100 moved session reopens offline with exact records, keyboard selections and no Julia', async ({ browser }, info) => {
+for (const [title, variable] of fixtures) {
+test(title, async ({ browser }, info) => {
+  const fixture = process.env[variable];
+  if (!fixture) throw new Error(`Generate ${variable} before running this offline scenario.`);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'tamerop-portable-'));
   const copied = path.join(directory, 'moved-session.html');
   await fs.copyFile(path.resolve(fixture), copied);
@@ -99,7 +104,7 @@ test('A100 moved session reopens offline with exact records, keyboard selections
     expect(await image.getAttribute('src')).toBe(last.image);
     await page.screenshot({ path: info.outputPath('portable-narrow-reopened.png'), fullPage: true });
 
-    // The fixture includes literal markup in its title, caption or state labels.
+    // The original A100 fixture includes literal markup in its labels.
     // It must remain text; CSP also forbids network and active injected scripts.
     expect(await page.evaluate(() => globalThis.a100Injected)).toBeUndefined();
     expect(await page.locator('script:not([type="application/json"])').count()).toBe(1);
@@ -114,3 +119,4 @@ test('A100 moved session reopens offline with exact records, keyboard selections
     await fs.rm(directory, { recursive: true, force: true });
   }
 });
+}

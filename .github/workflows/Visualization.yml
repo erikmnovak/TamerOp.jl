@@ -23,6 +23,8 @@ jobs:
       TAMEROP_STATIC_HTML: ${{ github.workspace }}/test/browser/artifacts/static.html
       TAMEROP_SOURCE_PREVIEW_HTML: ${{ github.workspace }}/test/browser/artifacts/source-preview.html
       TAMEROP_BATCHED_HTML: ${{ github.workspace }}/test/browser/artifacts/batched.html
+      TAMEROP_ATLAS_HTML: ${{ github.workspace }}/test/browser/artifacts/atlas.html
+      TAMEROP_A87_HTML: ${{ github.workspace }}/test/browser/artifacts/summands.html
       TAMEROP_BROWSER_OUTPUT: ${{ github.workspace }}/test/browser/test-results/live
     steps:
       - uses: actions/checkout@v4
@@ -33,14 +35,6 @@ jobs:
         run: |
           python test/visualization_contracts.py
           python -m unittest discover -s test -p 'test_visualization_contracts.py'
-      - uses: julia-actions/setup-julia@v2
-        with:
-          version: '1.12'
-      - uses: julia-actions/cache@v2
-      - name: Prepare required graphics dependencies
-        run: julia --startup-file=no --project=test/browser -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate(); Pkg.precompile()'
-      - name: Mathematical and native renderer contracts for every visual family
-        run: python test/visualization_contracts.py --run-native
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -53,6 +47,16 @@ jobs:
           node --test acceptance-guard.test.mjs
           npm run test:plan
           npx playwright install --with-deps chromium
+          bash setup-ci-sandbox.sh
+          node check-sandbox.mjs
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - name: Prepare required graphics dependencies
+        run: julia --startup-file=no --project=test/browser -e 'using Pkg; Pkg.develop(path=pwd()); Pkg.instantiate(); Pkg.precompile()'
+      - name: Mathematical and native renderer contracts for every visual family
+        run: python test/visualization_contracts.py --run-native
       - name: Real browser controls, coordinates and lifecycle
         working-directory: test/browser
         run: npm test

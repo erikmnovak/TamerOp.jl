@@ -75,7 +75,21 @@ end
 function _complex_layers!(layers,vertices,d,role,opacity)
     D=length(first(vertices));color=_VisualRole(role)
     if D==2
-        d==0 && push!(layers,PointLayer(vertices,color,opacity,9.0))
+        # Consecutive cells with the same paint can share a drawing primitive.
+        # Keep source IDs/picking in metadata and never reorder selected or
+        # inactive cells. Copy point storage: vertices also supplies centroids.
+        previous=isempty(layers) ? nothing : last(layers)
+        if d==0 && previous isa PointLayer && previous.color==color && previous.alpha==opacity &&
+                previous.markersize==9.0 && previous.markerspace===:pixel
+            append!(previous.points,vertices);return
+        elseif d==1 && previous isa PolylineLayer && previous.color==color && previous.alpha==opacity &&
+                previous.linewidth==2.0 && !previous.closed
+            push!(previous.paths,vertices);return
+        elseif d==2 && previous isa PolygonLayer && previous.fill_color==color && previous.alpha==opacity &&
+                previous.stroke_color==color && iszero(previous.linewidth)
+            push!(previous.polygons,vertices);return
+        end
+        d==0 && push!(layers,PointLayer(copy(vertices),color,opacity,9.0))
         d==1 && push!(layers,PolylineLayer([vertices],color,opacity,2.0,false))
         d==2 && push!(layers,PolygonLayer([vertices],color,color,opacity,0.0))
     else

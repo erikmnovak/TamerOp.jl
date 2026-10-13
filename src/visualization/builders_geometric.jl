@@ -157,7 +157,7 @@ function _geometric_barcode(x,o)
     return panel,diagram
 end
 
-function _geometric_view(x;kwargs...)
+function _geometric_view(x;_cached_barcode=nothing,kwargs...)
     o=_geometric_options(x;kwargs...);m=DataIngestion.geometric_data(x)
     base=_visual_spec(x,:filtered_complex;o.complex...)
     chart=base.panels[1]
@@ -206,7 +206,8 @@ function _geometric_view(x;kwargs...)
         "Grade precision: $(m.grade_precision). Construction: $(m.backend).",
         "Drawn cells $(sum(base.metadata.drawn_counts)); active cells $(sum(base.metadata.active_counts))."]
     if o.invariant===:barcode
-        panel,diagrams=_geometric_barcode(x,o);push!(panels,panel)
+        panel,diagrams=_cached_barcode===nothing ? _geometric_barcode(x,o) : _cached_barcode
+        push!(panels,panel)
     end
     betti===nothing ? push!(lines,"Homology not computed (invariant=:none).") :
         push!(lines,"Active complex Betti dimensions H0, H1, ...: $(betti). Selected H$(o.degree): $selected_betti.")
@@ -223,5 +224,6 @@ function _geometric_view(x;kwargs...)
     return VisualizationSpec(:geometric_filtration;title="Explore radius, depth and the finite model",panels,
         metadata=merge(base.metadata,(;geometric=m,geometric_options=o,betti,selected_betti,diagram=diagrams,
             comparison,homology=o.invariant,field=o.field,degree=o.degree,parameter=o.complex.parameter,
+            barcode_reused=_cached_barcode!==nothing,
             panel_columns=2,figure_size=(1250,1250),source_sampling=:display_only)))
 end

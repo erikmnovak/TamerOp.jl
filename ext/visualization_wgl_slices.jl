@@ -1,8 +1,8 @@
 # Live slice controls share the inspection session's transactional selection.
-# Draft changes never compute persistence: the Apply button commits one line.
+# Connected controls use the session queue, including exact Apply.
 
 function _inspection_slice_ui(session, region_axis, prepared;
-                              style, figure_size, disabled, closed, updating,
+                              style, figure_size, disabled, closed, updating, browser_client,
                               commit, listen, control_style, dom_id)
     B, M = WGLMakie.Bonito, WGLMakie.Makie
     summary = VIZ.inspection_summary(session)
@@ -19,8 +19,10 @@ function _inspection_slice_ui(session, region_axis, prepared;
     base_y = B.TextField("0"; attrs("base-y")...)
     dir_x = B.TextField("1"; attrs("direction-x")...)
     dir_y = B.TextField("1"; attrs("direction-y")...)
-    angle = B.Slider(collect(0:90); value=45, attrs("angle")...)
-    offset = B.Slider(collect(-100:100); value=0, attrs("offset")...)
+    angle = _inspection_range(0:90; value=45, attrs("angle")...)
+    offset = _inspection_range(-100:100; value=0, attrs("offset")...)
+    live = B.Checkbox(true; attrs("live")...)
+    request_owner=Ref(nothing)
     scope = B.Dropdown([:window,:global]; option_to_string=x -> x === :window ?
         "Viewing-window restriction" : "Whole line (certified endpoints)", attrs("scope")...)
     apply_button = B.Button("Apply slice"; attrs("apply")...)
@@ -33,6 +35,7 @@ function _inspection_slice_ui(session, region_axis, prepared;
     status_text = M.Observable("No slice computed. Existing stalk and map selections are independent.")
     content = M.Observable{Any}(B.DOM.div())
     slice_figure = Ref{Any}(nothing)
+    retained_chart = Ref{Any}(nothing)
     axes = Ref{Any}(nothing)
     chart_data = Ref{Any}(nothing)
     chart_observers = Any[]
@@ -43,6 +46,7 @@ function _inspection_slice_ui(session, region_axis, prepared;
     selected_bar_point = Ref{Any}(nothing)
     selected_point = Ref{Any}(nothing)
     line_points = M.Observable(M.Point2d[])
+    handle_points = M.Observable(M.Point2d[])
     selected_region = M.Observable(M.Point2d[])
     selected_region_point = M.Observable(M.Point2d[])
     line_color = VIZ._visual_color(style, VIZ._VisualRole(:foreground))
@@ -54,10 +58,26 @@ function _inspection_slice_ui(session, region_axis, prepared;
     M.scatter!(region_axis,selected_region_point; color=selection_color, marker=:utriangle,
         markersize=16 * style.markersize_scale, depth_shift=-0.003)
 
+    M.scatter!(region_axis,handle_points;color=selection_color,marker=:rect,markersize=15*style.markersize_scale,depth_shift=-0.004)
+
     xlimits, ylimits = prepared.region.axes.xlimits, prepared.region.axes.ylimits
     center = (xlimits[1]/2+xlimits[2]/2, ylimits[1]/2+ylimits[2]/2)
     radius = hypot(xlimits[2]/2-xlimits[1]/2, ylimits[2]/2-ylimits[1]/2)
     text_fields = (base_x, base_y, dir_x, dir_y)
+    function request_status(stage,error)
+        closed[] && return nothing
+        stage===:error && commit(()->throw(ArgumentError(error)))
+        draft_text[]=stage===:pending ? "Slice query pending. The barcode and solid handles refer to the committed line." :
+            stage===:error ? "Line unchanged: $error" : "Fields and handles show the committed line."
+        nothing
+    end
+    function queue_slice()
+        commit() do
+            values=map(field->VIZ._parse_inspection_coordinate(field.value[]),text_fields)
+            VIZ._request_inspection!(session,request_owner;status=request_status,
+                slice=(basepoint=(values[1],values[2]),direction=(values[3],values[4])),slice_scope=scope.value[])
+        end
+    end
     function draft()
         theta = angle.value[]
         dx, dy = round(cosd(theta); digits=12), round(sind(theta); digits=12)
@@ -72,19 +92,23 @@ function _inspection_slice_ui(session, region_axis, prepared;
         finally
             updating[] = was_updating
         end
-        draft_text[] = "Draft: angle $theta degrees; offset $(offset.value[])% of viewport radius. Apply to recompute. Decimal fields record the chosen approximation."
+        draft_text[] = "Draft: angle $theta degrees; offset $(offset.value[])% of viewport radius. Decimal fields record the chosen approximation."
+        live.value[] && queue_slice()
         return nothing
     end
     function apply_slice()
+        mode=:committed
         ok = commit() do
             values = map(field -> VIZ._parse_inspection_coordinate(field.value[]), text_fields)
-            VIZ.select_inspection!(session; slice=(basepoint=(values[1],values[2]),
+            mode=_inspection_control_selection!(session,request_owner,browser_client[],request_status;
+                slice=(basepoint=(values[1],values[2]),
                 direction=(values[3],values[4])), slice_scope=scope.value[])
         end
-        ok && (draft_text[] = "Fields show the committed line. Sliders draft a new line through the viewport center, shifted by the offset; press Apply slice to compute it.")
+        ok && mode===:committed && (draft_text[] = "Fields show the committed line.")
         return ok
     end
     select_interval(id) = commit(() -> VIZ.select_inspection!(session; interval=id))
+    listen(value->(value ? queue_slice() : VIZ._cancel_inspection_requests!(session,request_owner)),live.value)
     listen(_ -> draft(), angle.value)
     listen(_ -> draft(), offset.value)
     for field in (text_fields...,scope)
@@ -93,15 +117,52 @@ function _inspection_slice_ui(session, region_axis, prepared;
         end
     end
     listen(_ -> apply_slice(), apply_button.value)
-    listen(_ -> commit(() -> VIZ.select_inspection!(session; slice=false)), disable_button.value)
+    listen(_ -> commit(() -> _inspection_control_selection!(session,request_owner,browser_client[],request_status;
+        slice=false)), disable_button.value)
     listen(id -> select_interval(id), interval.value)
 
-    function clear_charts()
+    drag_origin=Ref{Any}(nothing)
+    function move_handle(id,point,final)
+        all(isfinite,point) || return nothing
+        if !(xlimits[1]<=point[1]<=xlimits[2] && ylimits[1]<=point[2]<=ylimits[2])
+            VIZ._cancel_inspection_requests!(session,request_owner)
+            draft_text[]="Line unchanged: keep the handle inside the viewing window."
+            return nothing
+        end
+        ps=something(drag_origin[],handle_points[])
+        length(ps)==2 || return nothing
+        a,b=ps
+        q=M.Point2d(point)
+        if id==1
+            b=b+(q-a);a=q
+        else
+            b=q
+        end
+        direction=b-a
+        if any(<(0),direction) || all(iszero,direction)
+            VIZ._cancel_inspection_requests!(session,request_owner)
+            draft_text[]="Line unchanged: the direction must be nonnegative and nonzero."
+            return nothing
+        end
+        values=map(_inspection_pointer_coordinate,(a[1],a[2],direction[1],direction[2]))
+        was=updating[];updating[]=true
+        try
+            for (field,value) in zip(text_fields,values);field.value[]=string(value);end
+        finally;updating[]=was;end
+        draft_text[]="Pointer draft rounded to ten decimal places; Apply queries these coordinates."
+        (live.value[] || final) && queue_slice()
+        nothing
+    end
+    drag=_inspection_drag_handles!(region_axis,()->handle_points[],move_handle,closed;
+        start=()->(drag_origin[]=copy(handle_points[])))
+
+    function clear_charts(;clear_content=true)
         foreach(M.off, chart_observers)
         empty!(chart_observers)
-        content[] = B.DOM.div()
+        clear_content && (content[] = B.DOM.div())
         slice_figure[] === nothing || empty!(slice_figure[])
         slice_figure[] = nothing
+        retained_chart[] = nothing
         axes[] = nothing
         chart_data[] = nothing
         selected_bar[] = nothing
@@ -142,16 +203,23 @@ function _inspection_slice_ui(session, region_axis, prepared;
     end
 
     function rebuild(result, data)
-        clear_charts()
-        sf = M.Figure(size=(figure_size[1], max(420,round(Int,figure_size[2]))),
-            figure_padding=style.padding,
-            backgroundcolor=VIZ._visual_color(style,VIZ._VisualRole(:background)))
         panels = VIZ._inspection_slice_panels(result, VIZ.inspection_selection(session).interval; highlight=false)
-        bar_layout = sf[1,1] = M.GridLayout()
-        diagram_layout = sf[1,2] = M.GridLayout()
-        bar_axis = _HANDLERS.render_panel(sf,bar_layout,panels[1]; style)
-        diagram_axis = _HANDLERS.render_panel(sf,diagram_layout,panels[2]; style)
-        _HANDLERS.style_figure(sf,style)
+        size=(figure_size[1],max(420,round(Int,figure_size[2])))
+        drawing=VIZ.VisualizationSpec(:inspection_slice_charts;panels=collect(panels),
+            metadata=(;panel_columns=2,figure_size=size))
+        if retained_chart[]!==nothing &&
+                _visual_update_retained!(M,VIZ,_HANDLERS,retained_chart[],drawing;style,replace_plots=true)
+            chart_data[]=data
+            chart_key[]=(result.line,result.window,result.endpoint_semantics,data.interval_ids)
+            return nothing
+        end
+        # Publish one replacement only. An intermediate empty DOM can remove a
+        # canvas before WGL's delayed scene initialization reaches the browser.
+        clear_charts(;clear_content=false)
+        retained_chart[]=_visual_retained_figure(M,VIZ,_HANDLERS,drawing;size,style)
+        sf=retained_chart[].figure
+        bar_axis=retained_chart[].panels[1].axis
+        diagram_axis=retained_chart[].panels[2].axis
         bar_highlight, point_highlight = M.Observable(M.Point2d[]), M.Observable(M.Point2d[])
         bar_point = M.Observable(M.Point2d[])
         M.lines!(bar_axis,bar_highlight; color=selection_color,
@@ -198,6 +266,7 @@ function _inspection_slice_ui(session, region_axis, prepared;
         try
             if result === nothing
                 line_points[] = M.Point2d[]
+                handle_points[]=M.Point2d[]
                 selected_region[] = M.Point2d[]
                 selected_region_point[] = M.Point2d[]
                 interval_disabled[] = true
@@ -210,6 +279,13 @@ function _inspection_slice_ui(session, region_axis, prepared;
                 return nothing
             end
             line_points[] = [M.Point2d(p) for p in data.line_points]
+            if length(line_points[])>=2
+                a,b=first(line_points[]),last(line_points[])
+                # Interior handles stay reachable when a line ends at the frame.
+                handle_points[]=[0.75a+0.25b,0.25a+0.75b]
+            else
+                handle_points[]=M.Point2d[]
+            end
             changed = last_line[] != (result.line,selection.slice_scope)
             if changed
                 for (field,value) in zip(text_fields,(result.line.basepoint...,result.line.direction...))
@@ -217,10 +293,10 @@ function _inspection_slice_ui(session, region_axis, prepared;
                 end
                 scope.option_index[] = selection.slice_scope === :window ? 1 : 2
                 last_line[] = (result.line,selection.slice_scope)
-                # Slider indices remain local drafts. Updating them here would
-                # echo through Bonito's browser-side index -> value listener
-                # after this synchronous refresh and overwrite exact fields.
-                draft_text[] = "Fields show the committed line. Sliders draft a new line through the viewport center, shifted by the offset; press Apply slice to compute it."
+                # A slider chooses a normalized line through the viewport;
+                # exact fields can use a different basepoint and speed along
+                # the same line. Preserve that parameterization on refresh.
+                draft_text[] = "Fields and handles show the committed line. Sliders choose angle and offset through the viewing window."
             end
             key = (result.line,result.window,result.endpoint_semantics,data.interval_ids)
             chart_key[] == key || rebuild(result,data)
@@ -273,6 +349,9 @@ function _inspection_slice_ui(session, region_axis, prepared;
     end
 
     function dispose()
+        VIZ._cancel_inspection_requests!(session,request_owner)
+        foreach(M.off,drag.observers);empty!(drag.observers)
+        handle_points[]=M.Point2d[]
         interval_disabled[] = true
         clear_charts()
         line_points[] = M.Point2d[]
@@ -289,7 +368,9 @@ function _inspection_slice_ui(session, region_axis, prepared;
             style="font:inherit;font-size:$(1.125*style.fontsize)px;font-weight:700"),
         B.DOM.p("Restrict the encoded module to x(t) = basepoint + t * direction. Directions must be nonnegative and nonzero. Choose a viewing-window restriction or certify the whole line. A global query rejects unrepresented parameters."),
         row(label("Slice scope",scope)),
-        row(label("Draft angle (degrees)",angle),label("Draft offset (% of viewport radius)",offset)),
+        row(label("Continuous slice updates",live)),
+        row(label("Slice angle (degrees)",angle.node),label("Slice offset (% of viewport radius)",offset.node)),
+        B.DOM.p("Drag the first square to translate the line and the second to change its direction. Sliders also respond to arrow keys. Queries coalesce while you move; releasing a handle commits its decimal coordinates. Turn off continuous updates to defer slider queries until Apply."),
         row(label("Exact basepoint x",base_x),label("Exact basepoint y",base_y),
             label("Exact direction x",dir_x),label("Exact direction y",dir_y),apply_button,disable_button),
         B.DOM.p(draft_text; id="$dom_id-slice-draft",role="status"),
@@ -298,9 +379,9 @@ function _inspection_slice_ui(session, region_axis, prepared;
         B.DOM.p(status_text; id="$dom_id-slice-status",role="status",style="white-space:pre-line"),
         B.DOM.div(content; style="max-width:100%;overflow:auto",tabindex="0",var"aria-label"="Linked slice barcode and persistence diagram");
         style="margin:$(style.gap)px 0;padding:$(style.padding)px;border:$(style.linewidth_scale)px solid $(_inspection_css_color(style,VIZ._VisualRole(:border)));min-width:0")
-    controls = (; base_x,base_y,dir_x,dir_y,angle,offset,scope,apply=apply_button,disable=disable_button,interval)
-    callbacks = (; draft,apply_slice,select_interval,pick_interval)
+    controls = (; base_x,base_y,dir_x,dir_y,angle,offset,live,scope,apply=apply_button,disable=disable_button,interval)
+    callbacks = (; draft,apply_slice,select_interval,pick_interval,move_handle,queue_slice)
     return (; dom,controls,refresh,dispose,callbacks,figure=slice_figure,axes,content,
-        chart_observers,line_points,selected_region,selected_region_point,selected_bar,selected_bar_point,selected_point,
+        chart_observers,line_points,handle_points,drag,selected_region,selected_region_point,selected_bar,selected_bar_point,selected_point,
         interval_disabled,draft_text,status_text,rebuild_count)
 end

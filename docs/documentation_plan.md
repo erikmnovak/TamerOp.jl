@@ -633,3 +633,17 @@ planned mathematical treatment: develop its sampling counterexamples and add
 it to the focused mathematical reading map when that lesson is authored.
 Continuous-domain confidence claims must have an explicit regularity and grid
 error argument; a sampled display alone is insufficient.
+
+### Summand inspection within the decomposition subject
+
+A87 extends the existing decomposition lesson, guide, reference and B53 account.
+Keep the mathematical distinction between a splitting and a support drawing in
+the lesson; the executable square guide explores selected/complement views,
+classifier boundaries, supplied thick pieces and ordinary Hom tables. The
+reference owns the checked collection, geometry, ranking and session contracts.
+B53 explains block extraction and validation, geometric preparation and reuse.
+The existing focused summands branch remains the mathematical entrance; this
+extension needs no second lesson card or parallel visualization tutorial.
+General indecomposable computation (A50), support approximation (A103), and
+pruning (A107) retain their own algorithmic prerequisites. A supplied result can
+be viewed without declaring those computations implemented.

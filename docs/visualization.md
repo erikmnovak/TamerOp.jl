@@ -500,13 +500,19 @@ The **Exact basepoint** and **Exact direction** fields specify `q(t)=a+t*d`.
 Directions must be coordinatewise nonnegative and nonzero; horizontal and
 vertical lines are allowed. The direction is not normalized, so replacing
 `d` by `2d` rescales the interval parameters. Rational input retains its exact
-meaning. The **Draft angle** and **Draft offset** sliders propose a line using
-decimal approximations; they populate the fields without computing persistence.
-They start from the viewport center and shift perpendicularly to the chosen
-direction. This can change the origin and scale of `t` even when the geometric
-line is unchanged; read the committed equation when comparing endpoints.
-Press **Apply slice** to commit the line and update both charts. Until then,
-the figures describe the previously committed line.
+meaning. The **Slice angle** and **Slice offset** sliders choose a line using
+decimal approximations. They start from the viewport centre and shift
+perpendicularly to the chosen direction. The first square handle translates
+the line; the second changes its direction. This can change the origin and
+scale of `t` even when the geometric line is unchanged; read the committed
+equation when comparing endpoints.
+
+Continuous updates coalesce requests while you move. The charts retain the
+last committed result until the latest query succeeds. Releasing a handle
+queries its coordinates rounded to ten decimal places. Turn off **Continuous
+slice updates** to defer slider queries, then press **Apply slice**. Exact text
+fields always wait for Apply. The bounded slice cache reuses previously
+computed lines; a new line can require a complete restriction calculation.
 
 Click a barcode interval or diagram point to select its group in both charts
 and highlight its segment in the parameter plane. The **Selected interval
@@ -831,6 +837,13 @@ see [Working with complexes and spectral pages](tutorials/complexes.ipynb).
 The [chain inspection reference](src/reference/visualization.md#chain-and-cochain-inspection)
 specifies local quotient bases, field arithmetic, source-cell coordinates and
 linked-view controls.
+
+An atlas keeps several declared parameter states beside one another, with
+their homology spaces and actual transition maps. It can show which source
+cells enter and, when witnesses were requested, a cycle that vanishes together
+with its filling. The [source-cell guide](tutorials/source_cells.ipynb#keep-several-parameter-states-in-view)
+continues the ring example in this direction. The sampled states need not
+include every event between them, and incomparable states have no map.
 
 ## Compare finite descriptions and transported modules
 

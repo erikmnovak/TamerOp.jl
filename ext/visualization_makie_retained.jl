@@ -46,7 +46,12 @@ function _visual_retained_figure(M,V,H,spec;size=nothing,style=V.VisualStyle())
         end
     end
     for (i,(p,plan)) in enumerate(zip(panels,plans))
-        grid=fig[row+div(i-1,columns),mod1(i,columns)]=M.GridLayout()
+        grid=if spec.kind===:complex_inspector
+            length(panels)==1 ? (fig[1,1]=M.GridLayout()) :
+                i==1 ? (fig[1:length(panels)-1,1]=M.GridLayout()) : (fig[i-1,2]=M.GridLayout())
+        else
+            fig[row+div(i-1,columns),mod1(i,columns)]=M.GridLayout()
+        end
         before=length(fig.content);plotrow=H.heading(grid,p,style)
         labels=copy(fig.content[before+1:end])
         ax=H.make_axis(grid[plotrow,1],p;style,headings=false)
@@ -69,7 +74,7 @@ function _visual_retained_figure(M,V,H,spec;size=nothing,style=V.VisualStyle())
     return _VisualRetainedFigure(fig,spec,handles,headings)
 end
 
-function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle())
+function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle(),replace_plots=false)
     isempty(state.panels) && return false
     old=state.spec
     old.kind==spec.kind && isempty(old.panels)==isempty(spec.panels) || return false
@@ -83,12 +88,30 @@ function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle())
     all(_visual_panel_shape(V,a)==_visual_panel_shape(V,b) for (a,b) in zip(os,ps)) || return false
     plans=_visual_retained_plan(H,V,spec,style);plans===nothing && return false
     for (handle,plan) in zip(state.panels,plans)
-        map(_visual_command_shape,handle.plan.commands)==map(_visual_command_shape,plan.commands) || return false
+        replace_plots || map(_visual_command_shape,handle.plan.commands)==map(_visual_command_shape,plan.commands) || return false
         handle.plan.colorbars==plan.colorbars || return false
     end
     # Validate all shapes first. Each plot's arguments and attributes then move
     # together through Makie's public coordinated update API.
     for (h,p,o,plan) in zip(state.panels,ps,os,plans)
+        if replace_plots && map(_visual_command_shape,h.plan.commands)!=map(_visual_command_shape,plan.commands)
+            # Cells enter and leave, but their source coordinate frame remains.
+            # Replacing plots on the same Axis preserves 2D and 3D navigation.
+            for (plot,command) in zip(h.plots,h.plan.commands)
+                if command.kind===:interval_annotations
+                    delete!(h.axis,plot.label)
+                    delete!(h.axis.scene,plot.line)
+                else
+                    delete!(h.axis,plot)
+                end
+            end
+            empty!(h.plots)
+            for c in plan.commands
+                plot=c.kind===:interval_annotations ? _visual_interval_annotations!(M,h.axis,c.args...;c.kwargs...) :
+                    getproperty(M,Symbol(c.kind,:!))(h.axis,c.args...;c.kwargs...)
+                push!(h.plots,plot)
+            end
+        else
         for (plot,c,prev) in zip(h.plots,plan.commands,h.plan.commands)
             isequal(c,prev) && continue
             if c.kind===:interval_annotations
@@ -96,6 +119,7 @@ function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle())
             else
                 M.update!(plot;(Symbol(:arg,i)=>a for (i,a) in enumerate(c.args))...,c.kwargs...)
             end
+        end
         end
         for (label,text) in zip(h.labels,filter(!isempty,[p.title,p.subtitle]))
             label.text[]==text || (label.text[]=text)

@@ -224,3 +224,28 @@ end
     V.close_inspection!(s)
     @test V.inspection_snapshot(s).kind===:geometric_filtration
 end
+
+@testset "A123 geometric queries reuse only the fixed-depth barcode" begin
+    V=TamerOp.Visualization
+    x=_a93_cloud(depth_range=(1,2))
+    s=V.inspection_session(x;kind=:geometric_filtration,parameter=(3//4,1),
+        view_dims=(1,2),invariant=:barcode,sample_resolution=5)
+    diagram=s.snapshot.metadata.diagram
+    V.select_inspection!(s;parameter=(1,1))
+    @test s.snapshot.metadata.diagram===diagram
+    @test s.snapshot.metadata.barcode_reused
+    @test s.snapshot.metadata.betti[1]==1
+    V.select_inspection!(s;parameter=(1,2))
+    @test !s.snapshot.metadata.barcode_reused
+    @test s.snapshot.metadata.geometric_options.complex.parameter==(1,2)
+    controls=V._filtration_controls(x,(1,2))
+    @test controls[1].label=="Physical radius"
+    @test controls[2].discrete && (controls[2].lower,controls[2].upper)==(1,2)
+    @test_throws ArgumentError V._filtration_control_parameter(controls,(1,3))
+    @test_throws ArgumentError V._filtration_control_parameter(controls,(-1,1))
+    capped=_a93_cloud(depth_range=(2,2),radius=0)
+    fixed=V._filtration_controls(capped,(0,2))
+    @test fixed[1].lower==fixed[1].upper==0
+    @test_throws ArgumentError V._filtration_control_parameter(fixed,(1//100,2))
+    V.close_inspection!(s)
+end

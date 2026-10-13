@@ -745,6 +745,9 @@ using SparseArrays
         spec = VIZ.visual_spec(decomp; kind=:mpp_decomposition, layout=layout)
         @test spec.title == "Sampled MPPI tracks"
         @test VIZ.visual_metadata(spec).interpretation == :sampled_tracks
+        @test VIZ.visual_metadata(spec).certification == :not_a_splitting
+        @test VIZ.visual_metadata(spec).identity == :matching_dependent
+        @test VIZ.visual_metadata(spec).matching_ambiguity == :not_recorded
         @test VIZ.visual_metadata(spec).nsummands == 2
         @test VIZ.check_visual_spec(spec).valid
         if layout == :summands
@@ -754,6 +757,7 @@ using SparseArrays
     img = MI.mpp_image(decomp; xgrid=[0.0,1.0], ygrid=[0.0,1.0], sigma=1, threads=false)
     spec = VIZ.visual_spec(img; kind=:mpp_image)
     @test VIZ.visual_metadata(spec).interpretation == :sampled_tracks
+    @test VIZ.visual_metadata(spec).certification == :not_a_splitting
     @test occursin("sampled bottleneck tracks", spec.subtitle)
     @test isapprox(spec.layers[1].values, MI.image_values(img))
 end

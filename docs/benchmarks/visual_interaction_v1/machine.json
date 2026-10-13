@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-12",
+  "cpu": "13th Gen Intel(R) Core(TM) i7-1365U",
+  "memory": "32504408 kB",
+  "system": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+  "base_commit": "1e49c06a6e2e9b2da3b1f6639b22b70b104b9456",
+  "snapshot": "working tree; see source hashes",
+  "julia": "1.12.1",
+  "makie": "0.24.15",
+  "cairomakie": "0.15.15",
+  "wglmakie": "0.13.15",
+  "bonito": "5.2.0",
+  "node": "22.23.3",
+  "playwright": "1.63.0",
+  "julia_threads": 1,
+  "blas_threads": 1,
+  "browser_workers": 1,
+  "heap_size_hint": "2400M",
+  "native_prewarming": "A92/A93/A123/A38 retained owner checks in the same Julia process before serving; fresh fixture sessions",
+  "measurement_conditions": "Shared desktop, with concurrent A46/A118 and documentation Julia tasks observed. Headless Chromium; Playwright action/DOM traces enabled, continuous screenshots disabled; 200 ms read-only fixture telemetry. No CPU isolation, governor control or claim of independent samples.",
+  "slice_native_prewarming": "Additionally A41 live slice retention and A84 rank-owner checks in the same process before fresh slice fixture; the report separates this series from the earlier activity measurements.",
+  "postmeasurement_control_routing": "A subsequent transport repair routes connected exact complex controls and slice Apply/Hide through the existing worker. Timed slider and angle gestures already used that worker; their accepted samples have not been replaced."
+}

@@ -227,12 +227,66 @@ not establish keyboard, pointer, transport or disposal behavior in a browser.
 The [browser-checking guide](../../test/browser/README.md) explains how to
 exercise that separate execution boundary.
 
+## Move a control while a query is running
+
+A filtration cursor or slice handle can produce more requests than Julia can
+compute and the browser can draw. The session therefore retains one executing
+request and one pending request. Another movement replaces the pending request
+with the latest coordinates. This keeps the amount of waiting work bounded even
+when a restriction calculation takes longer than the gesture that requested it.
+
+The worker copies the transaction-owned state and bounded cache containers,
+sharing the read-only mathematical input and prepared geometry. It computes on
+that private transaction. Before publishing the answer, it checks both the
+request generation and the visible session revision. A later gesture changes
+the generation; a direct exact selection changes the revision. Either makes the
+older answer obsolete, so its snapshot and new session cache entries are
+discarded. A valid latest answer passes through the same notification mechanism
+as a synchronous selection.
+
+```mermaid
+flowchart LR
+    move["New coordinates"] --> pending["Replace pending request"]
+    pending --> work["Compute private transaction"]
+    work --> current{"Still current?"}
+    current -->|yes| commit["Commit and draw"]
+    current -->|no| discard["Discard result"]
+```
+
+*The pending coordinates can change while a transaction is being prepared.
+The last check concerns the requested mathematical state, so an old answer
+cannot replace a newer selection merely because it finished later.*
+
+The worker allows a short interval for a burst of events to coalesce before
+starting another query, and yields before its final check. It does not interrupt
+an executing algebraic operation. Closing the requesting viewer invalidates its
+work; closing the shared session also releases the inputs after notification.
+A private calculation that has already started can finish and be discarded.
+Underlying mathematical owners may retain their own benign caches, just as they
+can during an unsuccessful synchronous query.
+
+Connected complex controls and exact slice Apply use this worker as well.
+Inserting a new WGL plot can wait for an acknowledgement from the browser.
+Running that insertion inside Bonito's incoming-message callback would prevent
+the same message task from receiving the acknowledgement. Enqueuing the query
+lets the callback return before drawing begins. Direct Julia selections remain
+synchronous, and exact browser entry keeps the entered coordinates unchanged.
+
+The distinction between activity and persistence remains consequential. Selecting
+cells scans their stored appearance grades. A geometric viewer additionally
+computes the requested invariant. Its radius barcode depends on depth, so the
+current barcode can be reused when only radius or cell selection changes.
+An encoded-module slice uses the existing bounded restriction cache; choosing
+a new line can require new ranks and intervals. Neither path reconstructs the
+source filtration or estimates a new density.
+
 ## Keep drawing objects when the selection changes
 
 Moving the selected point in a coordinate field changes its section values and
 markers, while the axes and colorbars usually have the same roles. Selecting
 another matching pair similarly changes highlighting and readouts within a
-fixed assignment. These two viewers retain their figures and plot buffers.
+fixed assignment. These viewers retain their figures and plot buffers. Retained
+complex viewers also keep compatible source axes as cells enter and leave.
 
 The renderer prepares drawing commands from the committed specification before
 updating the canvas. It first compares panel identities, coordinate planes,
@@ -242,13 +296,75 @@ An unchanged command does no drawing work. Axes retain the reader's viewport
 when their declared coordinate limits have not changed, and existing pointer
 handlers continue to refer to the same scene.
 
-Changing the panel layout, contour legend or drawing structure constructs a new
+For a complex with unchanged panel roles and legends, a changed number of
+cell drawing commands replaces those plots on the existing axis. The axis
+keeps its limits and, in three dimensions, its camera.
+
+Moving a slice similarly updates its barcode and diagram on retained axes.
+Interval counts and endpoint decorations can change, so their drawing commands
+may be replaced while the canvas remains. Picking reads the current interval
+records after each update. This avoids repeatedly replacing browser canvases
+whose asynchronous initialization might still be waiting for delivery.
+The interval axes follow the newly computed endpoint range; the source view
+keeps its own coordinate frame.
+
+Planar source cells with consecutive identical styling share a drawing primitive.
+Faces, edges and vertices keep their paint order; a selected cell or a change
+to faint inactive context separates the groups. Picking still uses the retained
+cell identities and centers, so grouping the drawing does not merge cells in
+the mathematical complex. This also allows a changing active set to update a
+few polygon, path and point buffers when their roles remain the same.
+
+A disconnected browser can release a drawing screen before its final close
+notification reaches the viewer. The refresh checks the browser session before
+inserting plots and disposes an ended viewer. Other viewers continue to use the
+shared mathematical session.
+
+Changing the panel layout or contour legend constructs a new
 figure offscreen and replaces the displayed canvas once. This avoids inserting
 many new graphics objects during a browser event. The old figure and observers
 are released after replacement. Literal matrix layouts and semantic composition
 continue to use their own rendering paths; this retained-buffer mechanism does
 not claim to update every type of figure. Each viewer owns one current drawing
 plan, with no shared scene cache or accumulated selection history.
+
+## Reuse a declared atlas
+
+Keeping several source states visible together helps a reader follow both
+parameter directions. Figure 1 of [Loiseaux and Schreiber's multipers paper](https://doi.org/10.21105/joss.06773)
+uses such a grid, while Figure 3 of [Fersztand and Jendrysiak's Skyscraper paper](https://doi.org/10.4230/LIPIcs.SoCG.2026.47)
+places a sampled bifiltration beside its homology diagram. These are visual
+precedents for the atlas. Its algebra comes from TamerOp's existing homology
+and module-map operations.
+
+An atlas makes its expensive selection domain finite before a browser opens.
+The caller declares a list of parameter states or a small coordinate grid, and
+construction prepares the spaces and all supported endpoint maps. For source
+complexes, the [representative account](source_representatives.md#explain-a-transition-between-sampled-parameters)
+describes the homology inclusions and optional cycle/filling witnesses.
+
+The session retains a source index, target index, event kind and witness index.
+Changing these values selects among prepared mathematical answers; it does not
+recompute homology. A candidate with an unavailable witness or an invalid state
+index rejects before changing the committed snapshot. An incomparable pair is
+a valid selection with no map, which the readout distinguishes from a zero
+matrix for a comparable pair.
+
+Each viewer keeps one contact-sheet canvas throughout selection. The source
+coordinates, finite-poset layout, and cameras therefore remain aligned while
+the reader compares states. Its transition detail contains the selected matrix,
+cell entries, or retained witness charts. A changed detail replaces only that
+figure and releases the previous one. Connected controls use the common request
+worker so browser transport remains available while WGL installs the new plots.
+Hover reads prepared state labels and dimensions without making a request.
+
+Saved atlas selections use the snapshot route. They retain their contact sheet,
+selected matrix, source-cell records and witness coefficients in a portable
+collection, but carry no request for reconstructing the live atlas input.
+Choosing a saved state offline therefore shows another prepared answer rather
+than performing a new parameter query. This distinction is independent of
+whether the original declared samples covered every event; atlas construction
+makes no exhaustive-coverage claim.
 
 ## Freeze data, then choose how it will reopen
 
@@ -333,10 +449,13 @@ meaningful selections over trying to precompute an unbounded inspector.
 | Concern | Source |
 | --- | --- |
 | Exact module state, transactions, cache and lifecycle | [`inspection_session.jl`](../../src/visualization/inspection_session.jl) |
+| Bounded browser requests and obsolete-result rejection | [`inspection_requests.jl`](../../src/visualization/inspection_requests.jl) |
+| Grade ranges, exact events and coordinate conventions | [`filtration_controls.jl`](../../src/visualization/filtration_controls.jl) |
 | Interval groups and retained members | [`inspection_intervals.jl`](../../src/visualization/inspection_intervals.jl) |
 | Signed-query reuse | [`inspection_signed.jl`](../../src/visualization/inspection_signed.jl) |
 | Capture, saved-state access and live reconstruction | [`saved_sessions.jl`](../../src/visualization/saved_sessions.jl) |
 | Browser controls and observers | [`visualization_wgl_inspection.jl`](../../ext/visualization_wgl_inspection.jl) |
+| Continuous controls and native canvas gestures | [`visualization_wgl_controls.jl`](../../ext/visualization_wgl_controls.jl), [`visualization_wgl_slices.jl`](../../ext/visualization_wgl_slices.jl) |
 | Portable SVG states, data controls and offline browser program | [`session_html.jl`](../../src/visualization/session_html.jl) |
 
 ## Linked coordinate sections

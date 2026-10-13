@@ -1554,10 +1554,10 @@ function _visual_spec(decomp::MPPDecomposition, kind::Symbol; layout::Symbol=:ov
         end
         return VisualizationSpec(:mpp_decomposition;
                                  title="Sampled MPPI tracks",
-                                 subtitle="bottleneck tracks in the ambient box",
+                                 subtitle="Matched slice samples; ties may change track identities",
                                  layers=layers,
                                  axes=axes,
-                                 metadata=(; interpretation=:sampled_tracks, nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
+                                 metadata=(; interpretation=:sampled_tracks, certification=:not_a_splitting, identity=:matching_dependent, matching_ambiguity=:not_recorded, nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
                                             layout=:overlay, figure_size=(920, 620), legend_position=:right),
                                  legend=_default_legend(visible=true,
                                                         entries=(; (Symbol("S" * string(i)) => _mpp_summand_color(i) for i in 1:nsummands(decomp))...)))
@@ -1578,14 +1578,14 @@ function _visual_spec(decomp::MPPDecomposition, kind::Symbol; layout::Symbol=:ov
                                             PolylineLayer(paths_k, _mpp_summand_color(k), alpha_k, linewidth_k, false),
                                         ],
                                         axes=axes,
-                                        metadata=(; interpretation=:sampled_tracks, summand=k, weight=float(weights[k]), nsegments=length(paths_k))))
+                                        metadata=(; interpretation=:sampled_tracks, certification=:not_a_splitting, identity=:matching_dependent, matching_ambiguity=:not_recorded, summand=k, weight=float(weights[k]), nsegments=length(paths_k))))
     end
     return VisualizationSpec(:mpp_decomposition;
                              title="Sampled MPPI tracks",
-                             subtitle="one panel per sampled track",
+                             subtitle="One panel per matched sample track; no splitting certificate",
                              panels=panels,
                              axes=axes,
-                             metadata=(; interpretation=:sampled_tracks, nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
+                             metadata=(; interpretation=:sampled_tracks, certification=:not_a_splitting, identity=:matching_dependent, matching_ambiguity=:not_recorded, nsummands=nsummands(decomp), nlines=nlines(decomp), weight_sum=sum(weights),
                                         layout=:summands, panel_columns=min(3, max(1, nsummands(decomp))),
                                         figure_size=(1120, 560)))
 end
@@ -1604,7 +1604,7 @@ function _visual_spec(img::MPPImage, kind::Symbol; kwargs...)
                              axes=_default_axes_2d(xlabel="x1", ylabel="x2",
                                                    xlimits=(minimum(xg), maximum(xg)),
                                                    ylimits=(minimum(yg), maximum(yg))),
-                             metadata=(; interpretation=:sampled_tracks, image_shape=size(image_values(img)), sigma=img.sigma, nsummands=nsummands(decomposition(img))))
+                             metadata=(; interpretation=:sampled_tracks, certification=:not_a_splitting, identity=:matching_dependent, matching_ambiguity=:not_recorded, image_shape=size(image_values(img)), sigma=img.sigma, nsummands=nsummands(decomposition(img))))
 end
 
 function _landscape_aggregate(L::MPLandscape)

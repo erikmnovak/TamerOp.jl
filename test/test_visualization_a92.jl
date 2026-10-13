@@ -14,6 +14,28 @@ function _a92_triangle(;multi=false,ambient=2)
     DI.filtered_complex(G;geometry)
 end
 
+@testset "A123 native control dispatch preserves frontend initialization errors" begin
+    E=Base.get_extension(TamerOp,:TamerOpWGLMakieExt)
+    if E===nothing
+        @test_skip false
+    else
+        V=TamerOp.Visualization;B=E.WGLMakie.Bonito
+        client=B.Session(B.NoConnection();asset_server=B.NoServer())
+        s=V.inspection_session(_a92_triangle())
+        try
+            @test E._inspection_control_selection!(s,Ref(nothing),client,(_,_)->nothing;
+                parameter=(1,))===:committed
+            @test s.state.parameter==(1,) && s.requests.task===nothing
+            client.init_error[]=ErrorException("fixture initialization failed")
+            @test_throws ErrorException E._inspection_control_selection!(s,Ref(nothing),client,
+                (_,_)->nothing;parameter=(2,))
+            @test s.state.parameter==(1,)
+        finally
+            close(client);V.close_inspection!(s)
+        end
+    end
+end
+
 @testset "A92 exact cellular activity and selection" begin
     V=TamerOp.Visualization
     x=_a92_triangle();G=DI.graded_complex(x)
@@ -234,4 +256,146 @@ end
     @test s.object===nothing && isempty(s.listeners)
     @test V.check_inspection_session(s).valid
     @test_throws ArgumentError V.select_inspection!(s;parameter=1)
+end
+
+@testset "A123 continuous retained-filtration transactions" begin
+    V=TamerOp.Visualization
+    ring=DI.filtered_complex([0 0 0;0 5 0;0 0 0];input=:top_cells)
+    chart=V.visual_spec(ring;parameter=5).panels[1]
+    @test length(chart.layers)==3
+    @test length(only(filter(l->l isa V.PolygonLayer,chart.layers)).polygons)==9
+    @test length(only(filter(l->l isa V.PolylineLayer,chart.layers)).paths)==24
+    @test length(only(filter(l->l isa V.PointLayer,chart.layers)).points)==16
+    field=V.visual_spec(ring;parameter=5,field_axis=1).panels[1]
+    field_points=only(filter(l->l isa V.PointLayer && l.color isa Vector,field.layers))
+    @test length(field_points.points)==9
+    @test first(field_points.points)==(1.5,1.5)
+    x=_a92_triangle();s=V.inspection_session(x)
+    owner=Ref(nothing);events=Symbol[]
+    status(stage,error)=push!(events,stage)
+    done()=(@test timedwait(()->s.requests.task===nothing,120;pollint=0.01)==:ok)
+    controls=V._filtration_controls(x,(0,))
+    @test V._filtration_event_parameter(controls,(0,),1,1)==(1,)
+    @test V._filtration_event_parameter(controls,(1,),1,-1)==(0,)
+    @test V._filtration_event_parameter(controls,(2,),1,1)===nothing
+    @test_throws ArgumentError V._filtration_control_parameter(controls,(3,))
+    @test_throws ArgumentError V._filtration_control_parameter(controls,(NaN,))
+    # A burst has one pending slot. All three equal-grade edges appear together.
+    for p in (2,0,2,0,1)
+        V._request_inspection!(s,owner;status,parameter=(p,))
+    end
+    @test s.requests.pending.kwargs.parameter==(1,)
+    done()
+    @test V.inspection_snapshot(s).metadata.active_counts==[3,3,0]
+    @test V.inspection_summary(s).requests.committed==1
+    @test V.inspection_summary(s).requests.discarded==4
+    @test count(==(:committed),events)==1
+    # An incoming selection supersedes an already running private transaction.
+    empty!(events)
+    V._request_inspection!(s,owner;status,parameter=(2,))
+    supersede=@async begin
+        while s.requests.active===nothing;yield();end
+        V._request_inspection!(s,owner;status,parameter=(0,))
+    end
+    done();wait(supersede)
+    @test V.inspection_snapshot(s).metadata.active_counts==[3,0,0]
+    @test count(==(:committed),events)==1
+    @test V.inspection_summary(s).requests.discarded>=5
+    # A failed latest query preserves the last valid snapshot and caches.
+    snapshot=V.inspection_snapshot(s);revision=V.inspection_selection(s).revision
+    V._request_inspection!(s,owner;status,parameter=(NaN,));done()
+    @test V.inspection_snapshot(s)===snapshot
+    @test V.inspection_selection(s).revision==revision
+    @test last(events)==:error
+    # Exact entry just below an event must not be replaced by a slider echo.
+    p=2-big(1)//big(2)^60
+    V._request_inspection!(s,owner;parameter=(2,))
+    V.select_inspection!(s;parameter=(p,));done()
+    @test V.inspection_selection(s).parameter==(p,)
+    @test V.inspection_snapshot(s).metadata.active_counts==[3,3,0]
+    V._request_inspection!(s,owner;parameter=(2,))
+    V.close_inspection!(s);done()
+    @test V.inspection_selection(s).parameter==(p,)
+    @test s.object===nothing && isempty(s.listeners)
+    @test V.check_inspection_session(s).valid
+end
+
+@testset "A123 superlevel controls and discrete stored degrees" begin
+    V=TamerOp.Visualization
+    G=DT.MultiCriticalGradedComplex([[1,2],[3]],[sparse(reshape([-1,1],2,1))],
+        [[(0,4)],[(0,4)],[(1,3),(3,1)]])
+    x=DI.filtered_complex(G;geometry=[[(0,0)],[(1,0)],[(0,0),(1,0)]],orientation=(1,-1))
+    controls=V._filtration_controls(x,(0,4))
+    @test V._filtration_event_parameter(controls,(0,4),2,1)==(0,3)
+    @test V.visual_spec(x;parameter=(1,3)).metadata.active_counts==[2,1]
+    @test V.visual_spec(x;parameter=(1,3+1//100)).metadata.active_counts==[2,0]
+    degree=DI.filtered_complex(DT.GradedComplex([[1,2],[3]],[sparse(reshape([-1,1],2,1))],
+        [(0,1),(0,2),(1,2)]);geometry=x.geometry,
+        provenance=(;requested=:degree_rips,grade_scale=:diameter))
+    c=V._filtration_controls(degree,(0,1))
+    @test c[2].discrete && c[2].label=="Stored graph degree threshold k"
+    @test V._filtration_control_parameter(c,(1//2,2))==(1//2,2)
+    @test_throws ArgumentError V._filtration_control_parameter(c,(1//2,3//2))
+    cloud=DI.PointCloud([0 0;1 0;3 0])
+    for (filtration,label) in (
+            (DI.RipsDensityFiltration(max_dim=1,radius=4,density_k=1,nn_backend=:bruteforce),"Stored density"),
+            (DI.RipsCodensityFiltration(max_dim=1,radius=4,dtm_mass=0.5,nn_backend=:bruteforce),"Stored codensity"))
+        retained=DI.filtered_complex(cloud,filtration)
+        controls=V._filtration_controls(retained,(0,0))
+        @test controls[1].label=="Rips diameter" && controls[2].label==label
+        @test !controls[2].discrete && controls[2].orientation==retained.orientation[2]
+    end
+end
+
+@testset "A123 native continuous controls preserve camera and exact events" begin
+    V=TamerOp.Visualization
+    E=Base.get_extension(TamerOp,:TamerOpWGLMakieExt)
+    if E===nothing
+        @test_skip false
+    else
+        M=E.WGLMakie.Makie
+        for ambient in (2,3)
+            s=V.inspection_session(_a92_triangle(;ambient))
+            app=V.visualize(s;backend=:wglmakie)
+            ui=E._inspection_ui(app);figure=ui.figure[];axis=ui.axis[]
+            if ambient==2
+                M.limits!(axis,-0.5,1.5,-0.5,1.5)
+            else
+                axis.azimuth[]=0.8;axis.elevation[]=0.3
+            end
+            ui.parameter_ui.sliders[1].value[]=1000
+            @test timedwait(()->s.requests.task===nothing,120;pollint=0.01)==:ok
+            @test s.state.parameter==(2,)
+            @test s.snapshot.metadata.active_counts==[3,3,1]
+            @test ui.figure[]===figure && ui.axis[]===axis
+            @test ui.update_count[]>0
+            if ambient==2
+                @test axis.limits[]==((-0.5,1.5),(-0.5,1.5))
+            else
+                @test isapprox(axis.azimuth[],0.8) && isapprox(axis.elevation[],0.3)
+            end
+            ui.parameter_ui.sliders[1].value[]=750
+            @test timedwait(()->s.requests.task===nothing,120;pollint=0.01)==:ok
+            @test s.state.parameter==(3//2,)
+            @test s.snapshot.metadata.active_counts==[3,3,0]
+            V.select_inspection!(s;parameter=(2-big(1)//big(2)^60,))
+            @test s.snapshot.metadata.active_counts==[3,3,0]
+            @test isempty(V.inspection_summary(s).listener_errors)
+            ui.parameter_ui.request((0,))
+            ui.dispose(;close_session=true)
+            @test timedwait(()->s.requests.task===nothing,120;pollint=0.01)==:ok
+            @test s.closed && s.snapshot.metadata.active_counts==[3,3,0]
+        end
+        # Bonito can close transport/screens before calling App.on_close.
+        # A linked update in that interval must dispose the dead viewer.
+        s=V.inspection_session(_a92_triangle())
+        ui=E._inspection_ui(V.visualize(s;backend=:wglmakie))
+        client=E.WGLMakie.Bonito.Session()
+        E.WGLMakie.Bonito.soft_close(client)
+        ui.browser_client[]=client
+        V.select_inspection!(s;parameter=2)
+        @test ui.closed[] && isempty(s.listener_errors)
+        @test !s.closed && s.snapshot.metadata.active_counts==[3,3,1]
+        close(client);V.close_inspection!(s)
+    end
 end

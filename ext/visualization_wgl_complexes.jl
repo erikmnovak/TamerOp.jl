@@ -29,6 +29,15 @@ function _render_complex_inspector(spec;display=:inline,figure=nothing,size=noth
     observers=Any[];pointer_observers=Any[]
     session_token,rebuild_count=Ref(0),Ref(0)
     browser_client=Ref{Any}(nothing);browser_lock=ReentrantLock();app_ref=Ref(WeakRef(nothing))
+    control_owner=Ref(nothing)
+    function control_status(stage,error)
+        closed[] && return nothing
+        error_text[]=stage===:error ? error : ""
+        stage===:pending && (status_text[]="Query pending. The chart shows the last committed selection.")
+        nothing
+    end
+    select_state(;kwargs...)=_inspection_control_selection!(session,control_owner,
+        browser_client[],control_status;kwargs...)
     function commit(f)
         closed[] && return false
         disabled[]=true
@@ -42,6 +51,8 @@ function _render_complex_inspector(spec;display=:inline,figure=nothing,size=noth
             nothing
         end)
     end
+    parameter_ui=_inspection_parameter_ui(session;style,disabled,closed,updating,listen,commit,dom_id)
+    retained=Ref{Any}(nothing);update_count=Ref(0)
     function parse_integer(control,name)
         n=tryparse(Int,strip(control.value[]))
         n === nothing && throw(ArgumentError("Enter an integer $name."))
@@ -62,11 +73,13 @@ function _render_complex_inspector(spec;display=:inline,figure=nothing,size=noth
     end
     function pick(point)
         t=hover(point);t === nothing && return false
-        return commit(()->VIZ.select_inspection!(session;cell=t.index))
+        return commit(()->select_state(;cell=t.index))
     end
     function dispose(;close_session=false)
         closed[] && return nothing
         closed[]=true;disabled[]=true
+        VIZ._cancel_inspection_requests!(session,control_owner)
+        parameter_ui.dispose()
         session_token[]==0 || VIZ._off_inspection!(session,session_token[])
         session_token[]=0
         foreach(M.off,observers);empty!(observers)
@@ -80,49 +93,46 @@ function _render_complex_inspector(spec;display=:inline,figure=nothing,size=noth
         return nothing
     end
     function refresh()
-        VIZ.inspection_summary(session).closed && return dispose()
+        (VIZ.inspection_summary(session).closed || _inspection_browser_ended(browser_client[])) && return dispose()
         snapshot=VIZ.inspection_snapshot(session)
         state=VIZ.inspection_selection(session)
         updating[]=true
         try
-            foreach(M.off,pointer_observers);empty!(pointer_observers)
-            old=fig[]
-            current=M.Figure(size=figure_size,figure_padding=style.padding,
-                backgroundcolor=VIZ._visual_color(style,VIZ._VisualRole(:background)))
             panels=filter(p->get(p.metadata,:panel_style,nothing)!==:text_only,snapshot.panels)
-            for (i,panel) in enumerate(panels)
-                grid = if length(panels)==1
-                    current[1,1]=M.GridLayout()
-                elseif i==1
-                    current[1:(length(panels)-1),1]=M.GridLayout()
-                else
-                    current[i-1,2]=M.GridLayout()
-                end
-                ax=_HANDLERS.render_panel(current,grid,panel;style)
-                if i==1
-                    axis[]=ax;targets[]=panel.metadata.pick_targets
-                end
+            drawing=VIZ.VisualizationSpec(:complex_inspector;panels,metadata=(;panel_columns=2,figure_size))
+            old=fig[]
+            reused=retained[]!==nothing && _visual_update_retained!(M,VIZ,_HANDLERS,retained[],drawing;style,replace_plots=true)
+            if reused
+                current=fig[];update_count[]+=1
+            else
+                foreach(M.off,pointer_observers);empty!(pointer_observers)
+                retained[]=_visual_retained_figure(M,VIZ,_HANDLERS,drawing;size=figure_size,style)
+                current=retained[].figure;fig[]=current;rebuild_count[]+=1
+                axis[]=retained[].panels[1].axis
+                push!(pointer_observers,M.on(M.events(current.scene).mouseposition) do _
+                    closed[] || (M.is_mouseinside(axis[].scene) ? hover(M.events(current.scene).mouseposition[]) : (hover_text[]=""))
+                    nothing
+                end)
+                push!(pointer_observers,M.on(M.events(current.scene).mousebutton;priority=10) do event
+                    if !closed[] && event.button==M.Mouse.left && event.action==M.Mouse.press && M.is_mouseinside(axis[].scene)
+                        return M.Consume(pick(M.events(current.scene).mouseposition[]))
+                    end
+                    M.Consume(false)
+                end)
             end
-            _HANDLERS.style_figure(current,style)
-            fig[]=current;rebuild_count[]+=1
-            push!(pointer_observers,M.on(M.events(current.scene).mouseposition) do _
-                closed[] || (M.is_mouseinside(axis[].scene) ? hover(M.events(current.scene).mouseposition[]) : (hover_text[]=""))
-                nothing
-            end)
-            push!(pointer_observers,M.on(M.events(current.scene).mousebutton;priority=10) do event
-                if !closed[] && event.button==M.Mouse.left && event.action==M.Mouse.press && M.is_mouseinside(axis[].scene)
-                    return M.Consume(pick(M.events(current.scene).mouseposition[]))
-                end
-                M.Consume(false)
-            end)
+            targets[]=panels[1].metadata.pick_targets
+            geometric && parameter_ui.bind_plane(current,retained[].panels[3].axis)
             parameter.value[]=join(string.(state.parameter),", ")
             cell.value[]=state.cell === nothing ? "" : string(state.cell)
             dimensions.value[]=join(state.dimensions,",")
             inactive.value[]=state.activity==:all;boundary.value[]=state.boundary
-            status_text[]="Active counts: $(snapshot.metadata.active_counts). Displayed: $(sum(snapshot.metadata.drawn_counts)); omitted by budget: $(snapshot.metadata.omitted_count)."
+            status_text[]="Committed parameter $(state.parameter). Active counts: $(snapshot.metadata.active_counts) / $(snapshot.metadata.total_counts) total by dimension. Displayed: $(sum(snapshot.metadata.drawn_counts)); omitted by budget: $(snapshot.metadata.omitted_count)."
             hover_text[]=""
-            content[]=current
-            old === nothing || empty!(old)
+            if !reused
+                content[]=current
+                old === nothing || empty!(old)
+            end
+            parameter_ui.refresh()
             readout[]=_inspection_dom_readout(VIZ.VisualizationSpec(:complex_readout;
                 panels=filter(p->get(p.metadata,:panel_style,nothing)===:text_only,snapshot.panels));style)
         finally;updating[]=false;end
@@ -131,21 +141,21 @@ function _render_complex_inspector(spec;display=:inline,figure=nothing,size=noth
     listen(apply.value) do _
         commit() do
             p=Tuple(VIZ._parse_inspection_coordinate(strip(t)) for t in split(parameter.value[],','))
-            VIZ.select_inspection!(session;parameter=p)
+            select_state(;parameter=p)
         end
     end
     listen(apply_dims.value) do _
         commit() do
             ds=tryparse.(Int,strip.(split(dimensions.value[],',')))
             any(isnothing,ds) && throw(ArgumentError("Enter comma-separated dimensions from 0,1,2."))
-            VIZ.select_inspection!(session;dimensions=Int.(ds))
+            select_state(;dimensions=Int.(ds))
         end
     end
-    listen(value->commit(()->VIZ.select_inspection!(session;activity=value ? :all : :active)),inactive.value)
-    listen(value->commit(()->VIZ.select_inspection!(session;boundary=value)),boundary.value)
-    listen(_->commit(()->VIZ.select_inspection!(session;cell=parse_integer(cell,"cell index"))),select.value)
-    listen(_->commit(()->VIZ.select_inspection!(session;cell=nothing)),clear.value)
-    listen(_->commit(()->VIZ.reset_inspection!(session)),reset.value)
+    listen(value->commit(()->select_state(;activity=value ? :all : :active)),inactive.value)
+    listen(value->commit(()->select_state(;boundary=value)),boundary.value)
+    listen(_->commit(()->select_state(;cell=parse_integer(cell,"cell index"))),select.value)
+    listen(_->commit(()->select_state(;cell=nothing)),clear.value)
+    listen(_->commit(()->select_state(;session.initial...)),reset.value)
     listen(_->commit(()->VIZ.close_inspection!(session)),close_button.value)
     session_token[]=VIZ._on_inspection(session,_ -> refresh())
     refresh()
@@ -156,6 +166,7 @@ function _render_complex_inspector(spec;display=:inline,figure=nothing,size=noth
     error_color=_inspection_css_color(style,VIZ._VisualRole(:error))
     dom=B.DOM.div(B.DOM.h2(geometric ? "Radius, depth and the geometric model" : "The filtered complex at a parameter"),
         B.DOM.p("Enter exact coordinates (integers, fractions or decimal text). Select a cell near its center or use its exact index. Hover reads retained cell data only."),
+        parameter_ui.dom,
         row(label("Parameter coordinates",parameter),apply),
         row(label("Cell index",cell),select,clear),
         row(label("Cell dimensions",dimensions),apply_dims,label("Show inactive context",inactive),label("Highlight boundary",boundary)),
@@ -185,6 +196,6 @@ function _render_complex_inspector(spec;display=:inline,figure=nothing,size=noth
     app_ref[]=WeakRef(app)
     _INSPECTION_UI_HANDLES[app]=(;session,figure=fig,axis,targets,controls=(;parameter,apply,cell,select,dimensions,apply_dims,inactive,boundary,clear,reset,close=close_button),
         callbacks=(;pick,hover,refresh),dispose,closed,disabled,observers,pointer_observers,session_token,browser_client,
-        rebuild_count,error_text,status_text,hover_text,readout,dom_id,style,figure_size)
+        parameter_ui,retained,update_count,rebuild_count,error_text,status_text,hover_text,readout,dom_id,style,figure_size)
     return app
 end

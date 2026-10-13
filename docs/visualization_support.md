@@ -51,16 +51,18 @@ The maintained standalone-browser environment requires Bonito 5.2 within major v
 | [Generalized rank regions, boundary zigzags and GRIL](#generalized-rank-regions-boundary-zigzags-and-gril) | N | N | S | B | U |
 | [Coordinate sections and ambient landscapes](#coordinate-sections-and-ambient-landscapes) | N | N | S | B | U |
 | [Repeated invariants and mean uncertainty](#repeated-invariants-and-mean-uncertainty) | N | N | S | B | U |
+| [Checked summands and support galleries](#checked-summands-and-support-galleries) | N | N | S | B | U |
+| [Declared parameter atlases and event witnesses](#declared-parameter-atlases-and-event-witnesses) | N | N | B | B | U |
 
 These entries identify maintained checks, not a claim that a test file proves its latest execution passed. CI supplies a run result and retained artifacts; local acceptance records preserve their environment, failures, reruns and scope. A green shared check does not qualify every possible input, recipe or frontend.
 
 ## Recorded verification
 
-Acceptance recorded on 2026-10-10. Julia 1.12.1, Makie 0.24.15, CairoMakie 0.15.15, WGLMakie 0.13.15, Bonito 5.2.0, Observables 0.5.5; Node 22.23.3, Playwright 1.63.0 and Chromium 153.0.8010.12 (revision 1243). One Julia/BLAS thread and one browser worker.
+Acceptance recorded on 2026-10-12. Julia 1.12.1, Makie 0.24.15, CairoMakie 0.15.15, WGLMakie 0.13.15, Bonito 5.2.0, Observables 0.5.5; Node 22.23.3, Playwright 1.63.0 and Chromium 153.0.8010.12 (revision 1243). One Julia/BLAS thread and one browser worker. A125's 12 October browser run used Chromium 155.0.8059.12 (revision 1247); the earlier recorded browser used revision 1243.
 
-- Native: The earlier 29-owner qualification exercised: 23,860 assertions passed and 12 nested-app stylesheet assertions failed. After repair, a fresh focused run passed 251/251 embedding, style, coordinate, volume and WGL-export assertions. The later saved-HTML readability repair passed 103/103 export assertions in another fresh process. A99 subsequently passed 3,200 focused owner/API assertions with graphics loaded; its final field-label/export-control rendering run passed 14/14. A54 subsequently passed 545 focused checks, including 19 actual Cairo/WGL renderer/export assertions, and an extended 462-assertion boundary-oracle run. A44 subsequently passed 876 focused checks, including 43 native Cairo/WGL assertions. Its separate fresh mathematical regression run passed 1,158 and API guards passed 2,936. These overlapping counts are separate runs, not an aggregate total.
-- Live browser: The earlier 27 standalone Chromium scenarios passed. Both additional A99 editor scenarios passed, including numeric edits, invalid relation recovery, downloads, linked-client cleanup and narrow keyboard scrolling. The strengthened composition-host keyboard scenario also passed against a fresh Julia server, including resize, pointer pan and unchanged correspondence geometry. Both A54 scenarios passed on the final browser run: finite selection, boundary occurrences/bars, matrix toggles, exact rational worm entry, verified pointer centers, layer reuse, linked-client cleanup and narrow keyboard scrolling. The A44 standalone Chromium scenario passed real sliders, native chart selection, plane/layer/baseline changes, invalid-input rollback, two-viewer synchronization with visible slider positions after reset, stale-error clearing, disconnect cleanup, narrow keyboard scrolling and close/release.
-- Offline exports: All 3 scenarios passed with Julia stopped and networking disabled: fixed SVG compositions, saved finite states, and an actually rendered WGL scene with reload. Narrow SVG views preserve their intrinsic size and support keyboard and pointer scrolling.
+- Native: The earlier 29-owner qualification exercised: 23,860 assertions passed and 12 nested-app stylesheet assertions failed. After repair, a fresh focused run passed 251/251 embedding, style, coordinate, volume and WGL-export assertions. The later saved-HTML readability repair passed 103/103 export assertions in another fresh process. A99 subsequently passed 3,200 focused owner/API assertions with graphics loaded; its final field-label/export-control rendering run passed 14/14. A54 subsequently passed 545 focused checks, including 19 actual Cairo/WGL renderer/export assertions, and an extended 462-assertion boundary-oracle run. A44 subsequently passed 876 focused checks, including 43 native Cairo/WGL assertions. Its separate fresh mathematical regression run passed 1,158 and API guards passed 2,936. These overlapping counts are separate runs, not an aggregate total. On 12 October, A125 passed a fresh 158-assertion owner with Cairo/WGL required: exact endpoint maps and compositions over QQ/F2/F3, cycle/filling equations, incomparable and unavailable parameters, zero composites, multicritical superlevel order, a higher-cell filling, budgets, serialized coefficients, actual renderer axes, exports and native lifecycle. Separate source/API guards passed 3,077 checks; these counts overlap earlier runs and are not an aggregate.
+- Live browser: The earlier 27 standalone Chromium scenarios passed. Both additional A99 editor scenarios passed, including numeric edits, invalid relation recovery, downloads, linked-client cleanup and narrow keyboard scrolling. The strengthened composition-host keyboard scenario also passed against a fresh Julia server, including resize, pointer pan and unchanged correspondence geometry. Both A54 scenarios passed on the final browser run: finite selection, boundary occurrences/bars, matrix toggles, exact rational worm entry, verified pointer centers, layer reuse, linked-client cleanup and narrow keyboard scrolling. The A44 standalone Chromium scenario passed real sliders, native chart selection, plane/layer/baseline changes, invalid-input rollback, two-viewer synchronization with visible slider positions after reset, stale-error clearing, disconnect cleanup, narrow keyboard scrolling and close/release. A125 subsequently passed two standalone Chromium scenarios: exact and keyboard controls, entry and class selection, invalid-witness rollback, hover without queries, panel/source/target selection, shared views, disconnect cleanup, retained contact canvas, narrow keyboard scrolling, incomparable grid points and nonzero adjacent maps with zero composite. Rendered frames were inspected; the disconnect check allows Bonito's 30-second reconnection grace period.
+- Offline exports: All 3 scenarios passed with Julia stopped and networking disabled: fixed SVG compositions, saved finite states, and an actually rendered WGL scene with reload. Narrow SVG views preserve their intrinsic size and support keyboard and pointer scrolling. A125 separately passed its contact/filling atlas scenario with its fixture Julia process stopped and networking disabled: saved selections, exact downloads, reload and narrow keyboard/pointer scrolling, with no HTTP/WebSocket requests or browser errors.
 
 This dated record describes the tested revision and environment; current CI results remain the evidence for subsequent changes. The matrix validator checks the record's format, not the truth of an execution claim.
 
@@ -129,11 +131,11 @@ Browser scenarios: [rank-sections.spec.mjs](../test/browser/rank-sections.spec.m
 
 ### Restrictions to lines and slice barcodes
 
-Whole-line certification and window censoring remain different contracts; no between-line class continuation.
+Whole-line certification and window censoring remain different contracts. Continuous sliders and draggable line handles retain exact Apply, bounded requests and slice caches; no between-line class continuation.
 
 Native owners: [test_visualization.jl](../test/test_visualization.jl), [test_visualization_a41_slices.jl](../test/test_visualization_a41_slices.jl), [test_visualization_a41_sessions.jl](../test/test_visualization_a41_sessions.jl), [test_visualization_a41_live.jl](../test/test_visualization_a41_live.jl).
 
-Browser scenarios: [inspectors.spec.mjs](../test/browser/inspectors.spec.mjs), [manual-inspectors.spec.mjs](../test/browser/manual-inspectors.spec.mjs).
+Browser scenarios: [inspectors.spec.mjs](../test/browser/inspectors.spec.mjs), [manual-inspectors.spec.mjs](../test/browser/manual-inspectors.spec.mjs), [continuous.spec.mjs](../test/browser/continuous.spec.mjs).
 
 ### Barcodes and persistence diagrams
 
@@ -203,11 +205,11 @@ Browser scenarios: [source.spec.mjs](../test/browser/source.spec.mjs).
 
 ### Filtered source complexes
 
-Actual cells, grades and source IDs, periodic/3D geometry and explicit skeleton/display budgets.
+Actual cells, grades and source IDs, periodic/3D geometry and explicit skeleton/display budgets. Continuous grade controls and planar cursor use bounded transactional requests; exact event stepping retains stored grades. Stored graph degree scores are not recomputed as radius changes.
 
 Native owners: [test_visualization_a92.jl](../test/test_visualization_a92.jl).
 
-Browser scenarios: [complex.spec.mjs](../test/browser/complex.spec.mjs).
+Browser scenarios: [complex.spec.mjs](../test/browser/complex.spec.mjs), [continuous.spec.mjs](../test/browser/continuous.spec.mjs).
 
 ### Chains, cohomology classes and connecting maps
 
@@ -233,11 +235,11 @@ Browser scenarios: [components.spec.mjs](../test/browser/components.spec.mjs).
 
 ### Multicover and geometric constructions
 
-Uses the complex session; retained construction cells, radius/depth and explicit lifted versus schematic geometry.
+Uses the complex session; retained construction cells, continuous physical radius and integer depth, coordinated geometry/homology and fixed-depth barcode reuse. Distinguish lifted cells from schematic geometry and source reconstruction.
 
 Native owners: [test_visualization_a93.jl](../test/test_visualization_a93.jl).
 
-Browser scenarios: [geometric.spec.mjs](../test/browser/geometric.spec.mjs).
+Browser scenarios: [geometric.spec.mjs](../test/browser/geometric.spec.mjs), [continuous.spec.mjs](../test/browser/continuous.spec.mjs).
 
 ### Field, degree and construction comparisons
 
@@ -302,3 +304,19 @@ Aligned supplied grids and ordinary diagrams; empirical spread/frequency, condit
 Native owners: [test_visualization_a95.jl](../test/test_visualization_a95.jl).
 
 Browser scenarios: [ensemble.spec.mjs](../test/browser/ensemble.spec.mjs).
+
+### Checked summands and support galleries
+
+A46 retained interval splits and supplied exact summands; checked maps, full/selected/complement dimensions, classifier fibers or explicitly unverified support boxes, rank/type filters, matrices and bounded ordinary Hom tables. Live selection requires Julia. Saved states retain figures/readouts, without a summand-source reconstruction codec. General indecomposable and approximation algorithms are separate.
+
+Native owners: [test_visualization_a87.jl](../test/test_visualization_a87.jl).
+
+Browser scenarios: [summands.spec.mjs](../test/browser/summands.spec.mjs), [portable-session.spec.mjs](../test/browser/portable-session.spec.mjs).
+
+### Declared parameter atlases and event witnesses
+
+Budgeted declared states/grids, aligned source geometry, actual rational/prime-field maps, cell entries and opt-in kernel/cokernel witnesses. Incomparable parameters have no map; sample coverage is not exhaustive. Standalone WGL controls and portable prepared HTML have separate acceptance. Live reconstruction from saved atlas inputs and notebook frontend integration are not claimed.
+
+Native owners: [test_visualization_a125.jl](../test/test_visualization_a125.jl).
+
+Browser scenarios: [atlas.spec.mjs](../test/browser/atlas.spec.mjs), [atlas-offline.spec.mjs](../test/browser/atlas-offline.spec.mjs).

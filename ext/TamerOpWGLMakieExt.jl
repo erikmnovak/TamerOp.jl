@@ -28,6 +28,8 @@ include("visualization_wgl_signed.jl")
 include("visualization_wgl_editor.jl")
 include("visualization_wgl_generalized_rank.jl")
 include("visualization_wgl_fields.jl")
+include("visualization_wgl_atlas.jl")
+include("visualization_wgl_summands.jl")
 
 function _render_wgl_visual(spec; kwargs...)
     WGLMakie.activate!(; use_html_widgets=true)
@@ -35,6 +37,8 @@ function _render_wgl_visual(spec; kwargs...)
         return _render_volume_viewer(spec; kwargs...)
     end
     if spec.kind === :linked_inspector
+        spec.metadata.session isa VIZ.AtlasInspectionSession && return _render_atlas_inspector(spec;kwargs...)
+        spec.metadata.session isa VIZ.SummandInspectionSession && return _render_summand_inspector(spec;kwargs...)
         spec.metadata.session isa VIZ.EnsembleInspectionSession && return _render_ensemble_inspector(spec;kwargs...)
         spec.metadata.session isa VIZ.FieldInspectionSession && return _render_field_inspector(spec;kwargs...)
         spec.metadata.session isa VIZ.GeneralizedRankInspectionSession && return _render_generalized_rank_inspector(spec;kwargs...)

@@ -77,7 +77,7 @@ function _visual_spec(c::DataIngestion.SourceChain,kind::Symbol;kwargs...)
             "Coboundary is zero on active original cells. These are cochain values, not a homology cycle." :
             "This is a chain; no cycle equation is asserted.",
         get(c.metadata,:choice,:supplied_coordinates)==:supplied_coordinates ?
-            "Choice: supplied coordinates, lifted by the checked map." : "Choice: noncanonical persistence reduction."]
+            "Choice: supplied coordinates, lifted by the checked map." : get(c.metadata,:choice,nothing)===:homology_quotient ? "Choice: a noncanonical homology quotient basis." : "Choice: noncanonical persistence reduction."]
     any(c.source.provenance.periodic) && push!(lines,"Periodic seams identify opposite faces. Wrap cells are drawn unwrapped, with their original source IDs.")
     if get(c.metadata,:optimization,:none)==:exact_weighted_support
         push!(lines,"Minimum weighted support at this parameter: $(c.metadata.objective), over $(c.metadata.candidates) boundary-image candidates.")

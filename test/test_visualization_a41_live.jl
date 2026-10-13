@@ -1,6 +1,48 @@
 # Native Bonito/Makie event checks. A real browser remains a separate acceptance
 # step; these exercise rendered DOM serialization, selection and cleanup.
 
+@testset "A123 moving slices retain chart canvases and current picking data" begin
+    if Base.find_package("WGLMakie") === nothing
+        @test_skip false
+    else
+        @eval import WGLMakie
+        V=TamerOp.Visualization;A=TamerOp.Advanced
+        E=Base.get_extension(TamerOp,:TamerOpWGLMakieExt)
+        enc=TamerOp.encode([A.BoxUpset([0,0]),A.BoxUpset([1,1])],
+            [A.BoxDownset([2,2]),A.BoxDownset([3,3])],Rational{BigInt}[1 0;0 1],
+            A.EncodingOptions(;backend=:pl_backend,poset_kind=:signature))
+        s=V.inspection_session(enc;box=([-1,-1],[4,4]),
+            slice=(basepoint=(0,0),direction=(1,1)))
+        app=V.visualize(s;backend=:wglmakie);ui=E._inspection_ui(app)
+        figure=ui.slice.figure[];axes=ui.slice.axes[]
+        try
+            for line in ((basepoint=(0,0),direction=(1,2)),
+                         (basepoint=(0,0),direction=(2,1)),
+                         (basepoint=(0,4),direction=(1,1)),
+                         (basepoint=(0,0),direction=(1,1)))
+                V.select_inspection!(s;slice=line)
+                @test isempty(V.inspection_summary(s).listener_errors)
+                @test ui.slice.figure[]===figure
+                @test ui.slice.axes[].barcode===axes.barcode
+                @test ui.slice.axes[].diagram===axes.diagram
+                @test ui.slice.rebuild_count[]==1
+            end
+            V.select_inspection!(s;interval=1)
+            @test length(ui.slice.selected_bar[][])==2
+            @test length(ui.slice.selected_point[][])==1
+            V.select_inspection!(s;point=(1,1),view=:rank_from)
+            rank_figure=ui.rank_figure[]
+            @test rank_figure!==nothing
+            V.select_inspection!(s;slice=(basepoint=(0,0),direction=(1,2)))
+            @test ui.rank_figure[]===rank_figure
+            @test isempty(V.inspection_summary(s).listener_errors)
+        finally
+            E._dispose_inspection_ui!(app)
+            V.close_inspection!(s)
+        end
+    end
+end
+
 @testset "A41 live interval member selection and retained cycles" begin
     if Base.find_package("WGLMakie") === nothing
         @test_skip false

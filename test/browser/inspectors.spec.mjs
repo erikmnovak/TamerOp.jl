@@ -143,6 +143,7 @@ test('slices: certified infinity, window censoring, drafts, canvas selection and
   await apply.click();
   await expect(control(page, 'error')).toBeEmpty();
 
+  await control(page, 'slice-live').uncheck();
   const oldLine = (await state(page)).selection.slice;
   await control(page, 'slice-angle').focus();
   await page.keyboard.press('ArrowRight');

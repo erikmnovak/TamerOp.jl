@@ -11,6 +11,7 @@ const selected=new Set();
 for(const config of ['playwright.config.mjs','portable-session.config.mjs']) {
   // Collection only: nonempty placeholder paths do not satisfy execution.
   const env={...process.env,TAMEROP_PORTABLE_SESSION:process.env.TAMEROP_PORTABLE_SESSION || '/not-executed/session.html',
+    TAMEROP_A87_HTML:process.env.TAMEROP_A87_HTML || '/not-executed/summands.html',
     TAMEROP_STATIC_HTML:process.env.TAMEROP_STATIC_HTML || '/not-executed/static.html',
     TAMEROP_SOURCE_PREVIEW_HTML:process.env.TAMEROP_SOURCE_PREVIEW_HTML || '/not-executed/source-preview.html',
     TAMEROP_BATCHED_HTML:process.env.TAMEROP_BATCHED_HTML || '/not-executed/batched.html'};

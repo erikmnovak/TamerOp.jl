@@ -165,6 +165,7 @@ page = "reading_map.md"
 "implementation/references.md" = "implementation/references.md"
 
 "benchmarks/index.md" = "benchmarks/index.md"
+"benchmarks/visual_interaction.md" = "benchmarks/visual_interaction.md"
 "benchmarks/qpa.md" = "benchmarks/qpa.md"
 "benchmarks/qpa_v1/README.md" = "benchmarks/qpa_v1/README.md"
 "benchmarks/phat.md" = "benchmarks/phat.md"

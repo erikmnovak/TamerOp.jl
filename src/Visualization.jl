@@ -47,11 +47,13 @@ import ..FiniteFringe
 import ..Modules
 import ..AbelianCategories
 import ..DerivedFunctors
+import ..DerivedFunctors: source_module
 import ..ModuleComplexes
 import ..Results
 import ..CoreModules
 import ..FieldLinAlg
 import ..Invariants
+import ..IntervalDecompositions
 import ..SignedMeasures
 import ..InvariantCore
 import ..IndicatorResolutions
@@ -130,20 +132,27 @@ include("visualization/builders_geometric.jl")
 include("visualization/builders_derived.jl")
 include("visualization/builders_components.jl")
 include("visualization/inspection_slices.jl")
+include("visualization/inspection_requests.jl")
 include("visualization/inspection_session.jl")
 include("visualization/inspection_intervals.jl")
 include("visualization/builders_matchings.jl")
 include("visualization/inspection_matchings.jl")
 include("visualization/inspection_signed.jl")
 include("visualization/inspection_spectral.jl")
+include("visualization/filtration_controls.jl")
 include("visualization/inspection_complexes.jl")
 include("visualization/inspection_chains.jl")
 include("visualization/inspection_components.jl")
 include("visualization/inspection_transport.jl")
+include("visualization/builders_summands.jl")
+include("visualization/inspection_summands.jl")
 include("visualization/builders_generalized_rank.jl")
 include("visualization/inspection_generalized_rank.jl")
 include("visualization/builders_fields.jl")
 include("visualization/inspection_fields.jl")
+include("visualization/parameter_atlas.jl")
+include("visualization/builders_atlas.jl")
+include("visualization/inspection_atlas.jl")
 include("visualization/inspection_rendering.jl")
 include("visualization/composition.jl")
 include("visualization/builders_comparisons.jl")

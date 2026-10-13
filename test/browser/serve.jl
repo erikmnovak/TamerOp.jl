@@ -114,7 +114,14 @@ function _navigation_state(ui,data)
         group === nothing ? nothing : (;stalk=group.stalk[],source=group.source[],
             target=group.target[],both=group.both[])
     end
-    return (;hover=ui.hover_text[],mouseposition=M.events(figure.scene).mouseposition[],
+    handles=NamedTuple[]
+    if ui.slice.controls!==nothing && ui.axes.region!==nothing
+        for point in ui.slice.handle_points[]
+            pixel=M.project(ui.axes.region.scene,point)+minimum(M.viewport(ui.axes.region.scene)[])
+            push!(handles,(;x=Float64(pixel[1]/width),y=Float64(1-pixel[2]/height)))
+        end
+    end
+    return (;handles,hover=ui.hover_text[],mouseposition=M.events(figure.scene).mouseposition[],
         figure_size=(width,height),pick_targets=targets,markers=(;region=markers[1],hasse=markers[2]))
 end
 
@@ -266,7 +273,9 @@ include("ensemble-fixtures.jl")
 include("editor-fixtures.jl")
 include("generalized-rank-fixtures.jl")
 include("fields-fixtures.jl")
+include("summand-fixtures.jl")
 include("complex-fixtures.jl")
+include("atlas-fixtures.jl")
 include("source-fixtures.jl")
 include("transport-fixtures.jl")
 include("signed-fixtures.jl")
@@ -312,6 +321,7 @@ function _main()
         for (path,fixture,title,slice,route_style) in (
                 ("/squares",:squares,"A37 spaces, maps and presentations",false,TamerOp.VisualStyle(;fontsize=18)),
                 ("/rank-sections",:squares,"A84 anchored rank sections",false,TamerOp.VisualStyle(;fontsize=18)),
+                ("/continuous-slices",:squares_slices,"Continuous slice gestures",true,TamerOp.VisualStyle(;fontsize=18)),
                 ("/squares-slices",:squares_slices,"A40 finite-window square slices",true,TamerOp.VisualStyle(;fontsize=18)),
                 ("/squares-grayscale",:squares_grayscale,"A35 large grayscale inspector",true,TamerOp.VisualStyle(;fontsize=24,palette=:grayscale)))
             B.route!(servers[2],path => _lazy_squares_app(sessions,tick;
@@ -322,6 +332,13 @@ function _main()
         B.route!(servers[2],"/signed-grayscale" => _signed_browser_app(sessions,tick;style=TamerOp.VisualStyle(palette=:grayscale)))
         B.route!(servers[2],"/source" => _source_browser_app(sessions,tick))
         B.route!(servers[2],"/source-periodic" => _source_browser_app(sessions,tick;periodic=true))
+        B.route!(servers[2],"/atlas" => _atlas_browser_app(sessions,tick))
+        B.route!(servers[2],"/atlas-grid" => _atlas_browser_app(sessions,tick;grid=true))
+        B.route!(servers[2],"/atlas-module" => _atlas_browser_app(sessions,tick;module_input=true))
+        B.route!(servers[2],"/continuous" => _complex_browser_app(sessions,tick))
+        B.route!(servers[2],"/continuous-large" => _complex_browser_app(sessions,tick;larger=true))
+        B.route!(servers[2],"/continuous-degree" => _complex_browser_app(sessions,tick;degree=true))
+        B.route!(servers[2],"/continuous-geometry" => _complex_browser_app(sessions,tick;geometric=true,depths=(1,2)))
         B.route!(servers[2],"/complex" => _complex_browser_app(sessions,tick))
         B.route!(servers[2],"/complex-3d" => _complex_browser_app(sessions,tick;volume=true))
         B.route!(servers[2],"/geometric" => _complex_browser_app(sessions,tick;geometric=true))
@@ -330,6 +347,7 @@ function _main()
         B.route!(servers[2],"/collections" => _collection_browser_app(sessions,tick))
         B.route!(servers[2],"/ensembles" => _ensemble_browser_app(sessions,tick))
         B.route!(servers[2],"/ensemble-fields" => _ensemble_browser_app(sessions,tick;fields=true))
+        B.route!(servers[2],"/summands" => _summand_browser_app(sessions,tick))
         B.route!(servers[2],"/generalized-rank" => _region_browser_app(sessions,tick))
         B.route!(servers[2],"/fields" => _fields_browser_app(sessions,tick))
         B.route!(servers[2],"/gril" => _region_browser_app(sessions,tick;worm=true))

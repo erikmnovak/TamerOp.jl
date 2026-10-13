@@ -56,6 +56,27 @@ $1,1,2$. A change of basis can mix those coordinates at each vertex, but cannot
 change the multiplicities. Inclusions and projections recover a splitting in
 the supplied coordinates; that choice of maps is generally not unique.
 
+## Reading a selection of summands
+
+Select the edge interval and both copies at the sink in the square example.
+Together they contribute dimensions $(0,1,0,3)$, leaving the constant square
+with dimensions $(1,1,1,1)$. At vertex 4 the inclusion picks out a
+three-dimensional subspace of $k^4$, and the projection recovers its three
+coordinates. The same choices commute with all four arrows, which makes the
+selection a submodule with a complement.
+
+[![The full square has dimensions 1,2,1,4. The selected edge and two sink copies contribute 0,1,0,3, and the complementary constant square contributes one dimension at every vertex.](assets/decomposition/selected_summands.svg)](assets/decomposition/selected_summands.svg)
+
+*The dimension equality holds at every vertex. The inclusion and projection
+supply the compatible maps needed to turn these equalities into a splitting.*
+
+If the module has an encoding classifier, we can pull each selected support
+back to the original parameter domain and draw the regions where it is
+present. A picture reconstructed by another approximation procedure has a
+separate accuracy question: exact splitting maps do not certify its boundary.
+For a piece whose stalk dimension varies, a dimension panel also records
+information that a uniformly colored support would omit.
+
 ## A rank on a region asks a different question
 
 Return to $k\xrightarrow{1}k$. Restricting to $I=\{2\}$ gives a

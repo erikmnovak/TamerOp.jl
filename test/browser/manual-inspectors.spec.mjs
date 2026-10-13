@@ -239,7 +239,7 @@ test('previous manual A37 checks: exact spaces, maps, presentation bases, hover 
 });
 
 test('previous manual A40/A41 checks: closed-square slices, singleton and empty restrictions, drafts and integration', async ({ page, context }, testInfo) => {
-  // This case traverses many rebuilt figures. Leave room for cold compilation
+  // This case traverses many selected restrictions. Leave room for compilation
   // and software rendering; individual readout assertions keep their deadlines.
   test.setTimeout(900_000);
   const errors = [];
@@ -256,6 +256,7 @@ test('previous manual A40/A41 checks: closed-square slices, singleton and empty 
   await selected(page, 1);
   await capture(page, testInfo, 'manual-slices-diagonal');
 
+  await control(page, 'slice-live').uncheck();
   const initial = await state(page);
   for (const suffix of ['slice-angle', 'slice-offset']) {
     const previousValue = await control(page, suffix).inputValue();
@@ -271,7 +272,7 @@ test('previous manual A40/A41 checks: closed-square slices, singleton and empty 
   expect(work(drafted.summary)).toEqual(work(initial.summary));
   expect(drafted.ui.rebuild_count).toBe(initial.ui.rebuild_count);
   await clickAndCommit(page, 'slice-apply');
-  expect((await state(page)).ui.rebuild_count).toBe(initial.ui.rebuild_count + 1);
+  expect((await state(page)).ui.rebuild_count).toBe(initial.ui.rebuild_count);
   await selected(page, null);
 
   await line(page, ['0', '1']);
@@ -347,6 +348,41 @@ test('previous manual A40/A41 checks: closed-square slices, singleton and empty 
   expect(query(reset.selection)).toMatchObject({ vertex: null, pair: null, query_points: [] });
   expect(reset.selection.slice).toEqual(beforeView.selection.slice);
   await endpoints(page, [['0', '2'], ['1', '3']]);
+
+  // The second handle rotates the line. With continuous updates disabled,
+  // releasing it still commits the displayed decimal coordinates.
+  const navigation = page.locator('[aria-label="Parameter regions and finite poset"] canvas');
+  async function dragDirection(from, to) {
+    await navigation.scrollIntoViewIfNeeded();
+    let box = await navigation.boundingBox();
+    await page.evaluate(y => window.scrollBy(0, y - innerHeight / 2), box.y + from.y * box.height);
+    box = await navigation.boundingBox();
+    await page.mouse.move(box.x + from.x * box.width, box.y + from.y * box.height);
+    await page.waitForTimeout(180);
+    await page.mouse.down();
+    await page.mouse.move(box.x + to.x * box.width, box.y + to.y * box.height, { steps: 18 });
+    await page.waitForTimeout(180);
+    await page.mouse.up();
+  }
+  const directionHandle = reset.main_ui.handles[1];
+  await dragDirection(directionHandle, { x: directionHandle.x - 0.02, y: directionHandle.y });
+  await expect.poll(async () => (await state(page)).selection.revision).toBeGreaterThan(reset.selection.revision);
+  const rotated = await state(page);
+  expect(rotated.ui.rebuild_count).toBe(reset.ui.rebuild_count);
+  const numeric = value => String(value).split(/\/{1,2}/).map(Number).reduce((a, b) => a / b);
+  const b = rotated.slice.line.basepoint.map(numeric), d = rotated.slice.line.direction.map(numeric);
+  expect(d[0]).toBeGreaterThan(0); expect(d[1]).toBeGreaterThan(0);
+  expect(d[0]).not.toBe(d[1]);
+  expect(rotated.records).toHaveLength(2);
+  for (const [i, lo, hi] of [[0, 0, 2], [1, 1, 3]]) {
+    expect(numeric(rotated.records[i].birth)).toBeCloseTo(Math.max((lo-b[0])/d[0], (lo-b[1])/d[1]), 8);
+    expect(numeric(rotated.records[i].death)).toBeCloseTo(Math.min((hi-b[0])/d[0], (hi-b[1])/d[1]), 8);
+  }
+  await dragDirection(rotated.main_ui.handles[1],
+    { x: rotated.main_ui.handles[0].x - 0.02, y: rotated.main_ui.handles[1].y });
+  await expect(control(page, 'slice-draft')).toContainText('Line unchanged:');
+  expect((await state(page)).selection).toEqual(rotated.selection);
+  await line(page, ['0', '0']);
   await checkNarrowLayout(page, testInfo, 'manual-slices-narrow');
 
   const linked = await context.newPage();

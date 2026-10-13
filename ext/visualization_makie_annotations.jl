@@ -70,7 +70,9 @@ function _visual_interval_annotations!(M, ax, anchors; text, color, font, fontsi
         M.update!(line;arg1=segments)
         nothing
     end
-    M.onany(ax.scene,M.viewport(ax.scene),M.Makie.camera(ax.scene).projectionview;update=true) do _...
+    # The label owns this callback. Replacing its drawing command must release
+    # the layout listener even when the surrounding axis is retained.
+    M.onany(label,M.viewport(ax.scene),M.Makie.camera(ax.scene).projectionview;update=true) do _...
         layout()
     end
     function update(nextanchors; text, color, font, fontsize, linewidth, shrink, kwargs...)

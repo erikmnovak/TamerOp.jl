@@ -1,0 +1,200 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-12",
+  "samples": [
+    {
+      "route": "continuous",
+      "environment": {
+        "browser": "153.0.8010.12",
+        "viewport": {
+          "width": 1440,
+          "height": 1050
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+      },
+      "openMs": 127610.127796,
+      "firstQueryMs": 6882.0999999996275,
+      "warmMs": [
+        466.59999999962747,
+        217.09999999962747,
+        217.69999999925494,
+        223.5,
+        250.8999999994412,
+        221.79999999981374,
+        251.70000000018626,
+        363.5,
+        364.59999999962747,
+        260.70000000018626,
+        266.69999999925494,
+        268.5,
+        238,
+        300.20000000018626,
+        278.79999999981374,
+        313.6000000005588,
+        392.20000000018626,
+        437.20000000018626,
+        373.40000000037253,
+        342.5
+      ],
+      "medianMs": 273.64999999990687,
+      "p95Ms": 437.20000000018626,
+      "method": "actual pointer range input to committed DOM, an advanced renderer frame and two animation frames; first browser query includes remaining compilation; open includes fixture/scene preparation and accessibility checks",
+      "scenario_status": "passed",
+      "run": "browser_v3"
+    },
+    {
+      "route": "continuous-large",
+      "environment": {
+        "browser": "153.0.8010.12",
+        "viewport": {
+          "width": 1440,
+          "height": 1050
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+      },
+      "openMs": 50294.230301,
+      "firstQueryMs": 1542.3999999994412,
+      "warmMs": [
+        10538.700000000186,
+        1044,
+        12667,
+        878.2999999998137,
+        13980.900000000373,
+        1641.5,
+        13260.200000000186,
+        1292.9000000003725,
+        11503.5,
+        759.2999999998137,
+        10966.299999999814,
+        538.9000000003725,
+        8300.700000000186,
+        1023.4000000003725,
+        9147.600000000559,
+        1087.2999999998137,
+        12353.199999999255,
+        1142,
+        10415.900000000373,
+        787.7999999998137
+      ],
+      "medianMs": 4971.100000000093,
+      "p95Ms": 13260.200000000186,
+      "method": "actual pointer range input to committed DOM, an advanced renderer frame and two animation frames; first browser query includes remaining compilation; open includes fixture/scene preparation and accessibility checks",
+      "scenario_status": "passed",
+      "run": "browser_v3"
+    },
+    {
+      "route": "continuous-slices",
+      "environment": {
+        "browser": "153.0.8010.12",
+        "viewport": {
+          "width": 1440,
+          "height": 1050
+        },
+        "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)"
+      },
+      "firstSliceQueryMs": 1917.2999999988824,
+      "warmDistinctLinesMs": [
+        613.0999999996275,
+        616.7000000011176,
+        572.3000000007451,
+        1037,
+        536.5999999996275,
+        621.6999999992549,
+        543.7000000011176,
+        637,
+        591.5999999996275,
+        547.8999999985099,
+        525.6999999992549,
+        543
+      ],
+      "medianMs": 581.9500000001863,
+      "p95Ms": 1037,
+      "cache": {
+        "presentation_available": true,
+        "matrix_limit": [
+          12,
+          12
+        ],
+        "cache_entries": 0,
+        "revision": 13,
+        "view": "module",
+        "cache_misses": 0,
+        "slice_active": true,
+        "slice_limit": 512,
+        "nupsets": 2,
+        "closed": false,
+        "cache_limit": 16,
+        "slice_cache_misses": 14,
+        "slice_intervals": 2,
+        "geometry_preparations": 1,
+        "selection": {
+          "downset": 1,
+          "slice": {
+            "direction": [
+              "529919264233//1000000000000",
+              "212012024039//250000000000"
+            ],
+            "basepoint": [
+              "3//2",
+              "3//2"
+            ]
+          },
+          "revision": 13,
+          "vertex": null,
+          "parameter_relation": "not_applicable",
+          "view": "module",
+          "query_points": [],
+          "pair": null,
+          "interval": null,
+          "selector": "none",
+          "basis": false,
+          "input": "provided",
+          "upset": 1,
+          "slice_scope": "window"
+        },
+        "nvertices": 9,
+        "geometry_available": true,
+        "listener_count": 2,
+        "listener_errors": [],
+        "supported_views": [
+          "module",
+          "presentation",
+          "rank_from",
+          "rank_to"
+        ],
+        "slice_unavailable_reason": "",
+        "slice_cache_entries": 14,
+        "basis": false,
+        "cache_hits": 0,
+        "kind": "inspection_session",
+        "ndownsets": 2,
+        "hasse_preparations": 1,
+        "updating": false,
+        "slice_scope": "window",
+        "slice_cache_hits": 0,
+        "cost": {
+          "slices": "exact_event_strata_with_bounded_cache",
+          "hasse_layout": "prepared_once",
+          "updates": "synchronous",
+          "dimensions": "prepared_once",
+          "geometry": "prepared_once_when_available",
+          "selected_algebra": "bounded_cache",
+          "rank_sections": "bounded_rows_or_columns_with_exact_order_masks",
+          "snapshot": "static"
+        },
+        "slice_available": true,
+        "snapshot_builds": 14,
+        "module_materialized": true,
+        "requests": {
+          "submitted": 13,
+          "running": false,
+          "pending": false,
+          "committed": 13,
+          "discarded": 0
+        }
+      },
+      "method": "actual angle-key input to committed slice readout and two animation frames; distinct new lines after first-use compilation",
+      "scenario_status": "passed"
+    }
+  ]
+}

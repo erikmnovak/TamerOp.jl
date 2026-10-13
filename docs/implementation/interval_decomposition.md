@@ -144,4 +144,57 @@ The result's provenance identifies the finite category and exact coefficient
 field. Pullback carries a supplied splitting along a classifier; completeness
 in an ambient category is a separate mathematical question.
 
+
+## Reading a split through its retained maps
+
+A gallery starts from the same inclusion and projection used by the algebra.
+For an interval result, the coordinates of the extracted part concatenate
+interval blocks at each vertex. Selecting a block therefore selects columns
+of its inclusion and the corresponding rows of its projection. The support
+list determines where that block is present, while its multiplicity determines
+how many coordinates it contributes there. No second decomposition is needed.
+
+The `SummandCollection` adapter checks these maps before preparing a view. It
+also accepts supplied general modules, including pieces with thicker stalks,
+but requires all naturality, retraction, orthogonality and reconstruction
+equations to hold. A selected set of blocks has a complement formed from the
+omitted blocks and the original residual. Adding their stalk dimensions gives
+the dimensions of the full module; the original map equations justify the
+stronger direct-sum statement behind that equality. A supplied piece receives
+no automatic indecomposability label.
+
+The geometry uses a separate source of information. A classifier on the same
+finite base assigns parameter regions to labels. The renderer pulls the
+selected dimensions back along this assignment and merges adjacent pieces
+with the same displayed value, preserving included and excluded faces and the
+viewing window. Exact coordinates remain available even if distinct points
+coincide in the floating drawing. Without a classifier the positions describe
+the finite order. Supplied box unions have their own provenance and remain
+geometrically unverified; a checked projection cannot certify those boxes.
+
+Preparation retains the splitting, geometry and block statistics. Sorting and
+filtering change the displayed IDs and dimension sums, and matrix inspection
+selects components in the stored bases. Optional ordinary Hom tables reuse the
+existing Hom owner, with a squared-unknown bound before each solve. The cache
+is bounded by the last requested table and is pruned when a new table is
+requested. A selected basis element
+is an actual module morphism, whose component can be inspected at a finite
+label. It is unrelated to a Hasse edge or an evaluation-quotient Hom relation.
+
+For $s$ displayed blocks and $n$ finite labels, forming selected dimensions
+takes $O(sn)$ additions. Support layers are rebuilt from the retained cells
+for the aggregate panels and displayed pieces; their cost also depends on
+the geometric subdivision. The live renderer currently replaces the figure
+after a committed selection. It reuses the mathematical preparation but does
+not promise a constant-time drawing update. The separate drawing and Hom
+budgets keep these costs explicit, and leave room for later renderer reuse
+without changing the splitting contract.
+
+A session builds a candidate snapshot before replacing its selected state,
+so a failed request leaves the previous figure usable. Hover uses stored
+readouts. Closing releases the algebra and geometric preparation, while a
+frozen snapshot retains the selected matrices, boundaries and interpretation
+for static export. The drawing owner consumes the algebraic result; it does
+not implement a general indecomposable solver or support-approximation route.
+
 [Bibliography](references.md)

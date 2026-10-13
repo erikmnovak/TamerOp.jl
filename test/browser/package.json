@@ -6,8 +6,7 @@
     "test": "playwright test",
     "test:plan": "node verify-plan.mjs",
     "test:offline": "playwright test --config=portable-session.config.mjs",
-    "test:headed": "playwright test --headed",
-    "test:docs": "node documentation.mjs"
+    "test:headed": "playwright test --headed"
   },
   "devDependencies": {
     "@playwright/mcp": "0.0.83",

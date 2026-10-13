@@ -706,3 +706,6 @@ stage and validation choices.
 Documentation contributions follow the [writing guide](https://tamerop.com/contributing/writing.html).
 It explains the shared narrative about finite encodings, how to introduce unfamiliar
 terms, and how to check that an explanation helps its intended reader.
+
+The website and its documentation sources are maintained in
+[TamerOp-site](https://github.com/erikmnovak/TamerOp-site).

@@ -5,7 +5,7 @@ or a small example whose answer does not look right. You do not need to know
 the whole library to help improve one part of it.
 
 TamerOp is built around finite encodings of persistence modules. The
-[finite-encoding introduction](docs/finite_encodings.md) explains that common
+[finite-encoding introduction](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/finite_encodings.md) explains that common
 object and the questions it supports. Keep this connection visible when
 proposing new capabilities or explaining existing ones.
 
@@ -30,7 +30,7 @@ For a source checkout, `git rev-parse HEAD` in a terminal identifies the commit.
 If the issue concerns a mathematical result, explain how you obtained the
 expected answer. A hand calculation, a cited theorem with its assumptions,
 or an independent computation helps us understand the discrepancy. A
-performance report should follow the [benchmarking manual](docs/benchmarking.md):
+performance report should follow the [benchmarking manual](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/benchmarking.md):
 state the requested output, input size, thread count, compilation state and
 which mathematical results or caches were already available.
 
@@ -77,7 +77,7 @@ editing source files, start a fresh Julia session to load the revised code.
 
 ## Check the part you changed
 
-The [testing guide](docs/testing.md) describes the maintained test runner.
+The [testing guide](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/testing.md) describes the maintained test runner.
 From the repository root, list the available test files with:
 
 ```sh
@@ -109,19 +109,19 @@ change. A prose correction does not require rerunning the entire test suite.
 
 ## Measure performance changes
 
-Read the [benchmarking manual](docs/benchmarking.md) before planning or reporting
+Read the [benchmarking manual](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/benchmarking.md) before planning or reporting
 performance work. Its primary comparison measures compiled code recomputing the
 mathematics without prior results; startup and reuse have separate measurements.
 Use its study brief to define outputs, valid inputs, cache state, correctness
 checks and evidence. External tools may use different algorithms for the same
-verified answer. [Completed reports and result downloads](docs/benchmarks/index.md)
+verified answer. [Completed reports and result downloads](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/benchmarks/index.md)
 are tracked documentation; portable executable reproduction bundles remain
 separate work. The local `benchmark/` and `audit/` directories remain excluded
 from the public package.
 
 ## Write explanations that teach
 
-Follow the [writing guide](docs/writing.md). Begin with the reader's question,
+Follow the [writing guide](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/writing.md). Begin with the reader's question,
 explain the mathematical object being used, and introduce terms and notation
 when they become useful. Show what a result means and why the next step follows.
 

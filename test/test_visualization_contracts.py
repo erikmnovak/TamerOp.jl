@@ -19,7 +19,7 @@ class SupportContractTests(unittest.TestCase):
         for row in self.data['family']:
             paths.update(row['sources']); tests.update(row['native_tests']); browser.update(row['browser_tests'])
         paths |= {f'test/{p}' for p in tests} | {f'test/browser/{p}' for p in browser}
-        paths |= {self.data['workflow'], 'test/runner.jl', 'docs/visualization_support.toml'}
+        paths |= {self.data['workflow'], 'test/runner.jl', 'test/visualization_support.toml'}
         for name in paths:
             target = self.root / name
             target.parent.mkdir(parents=True, exist_ok=True)

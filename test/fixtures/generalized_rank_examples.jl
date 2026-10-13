@@ -1,4 +1,4 @@
-# Run with julia --project=. docs/examples/generalized_rank.jl
+# Run with julia --project=. test/fixtures/generalized_rank_examples.jl
 using TamerOp
 
 const GRExamples = let

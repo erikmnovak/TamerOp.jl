@@ -10,9 +10,9 @@ provide evidence of the rendered result.
 
 This focused browser suite is required in the Visualization CI workflow. It
 does not run the full package suite or certify notebook frontends, Firefox, or
-other browsers. The [support matrix](../../docs/visualization_support.md) records
+other browsers. The [support matrix](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/visualization_support.md) records
 family coverage and the distinction between supported and verified paths. The broader
-[A41 acceptance checklist](../../docs/testing.md#a41-interval-semantics-and-retained-representatives)
+[A41 acceptance checklist](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/testing.md#a41-interval-semantics-and-retained-representatives)
 also includes fixtures and visual checks beyond this harness. Installing the
 tools alone does not establish that any browser check has passed.
 

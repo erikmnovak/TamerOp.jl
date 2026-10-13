@@ -2828,12 +2828,42 @@ end
     end
 end
 
-@testset "A116 novice tutorial executes from public API" begin
-    include(joinpath(@__DIR__,"..","docs","build_scripts","check_ordinary_analysis.jl"))
-    notebook = JSON3.read(read(OrdinaryAnalysisNotebook.NOTEBOOK, String), Dict{String,Any})
-    expected_cells = count(cell -> cell["cell_type"] == "code", notebook["cells"])
-    @test expected_cells > 0
-    @test OrdinaryAnalysisNotebook.check() == expected_cells
+@testset "A116 public analysis of three points" begin
+    # The website executes its notebook separately. These known answers belong
+    # to the package's public API contract and require no website or renderer.
+    public_api = TamerOp
+    filtration = public_api.RipsFiltration(max_dim=1)
+    original = public_api.persistence_diagram(public_api.PointCloud([[0.0],[2.0],[5.0]]),
+        filtration; max_homology_dim=0, cocycles=true)
+    moved = public_api.persistence_diagram(public_api.PointCloud([[0.0],[2.0],[6.0]]),
+        filtration; max_homology_dim=0)
+    @test sort(public_api.finite_intervals(original;dim=0)) == [(0.0,2.0),(0.0,3.0)]
+    @test sort(public_api.finite_intervals(moved;dim=0)) == [(0.0,2.0),(0.0,4.0)]
+    @test public_api.essential_births(original;dim=0) == [0.0]
+    @test public_api.bottleneck_distance(original,moved;dim=0) == 1.0
+    @test public_api.wasserstein_distance(original,moved;dim=0,p=2) == 1.0
+    @test sort(public_api.analysis_barcode(original;dim=0,essential=:cap,essential_cap=6)) ==
+        [(0,2),(0,3),(0,6)]
+    grid = 0.0:0.5:4.0
+    landscape = public_api.persistence_landscape(original;dim=0,essential=:drop,tgrid=grid,kmax=2)
+    @test public_api.Advanced.landscape_values(landscape)[:,3] == [1.0,1.0]
+    silhouette = public_api.persistence_silhouette(original;dim=0,essential=:drop,tgrid=grid)
+    @test silhouette[3] == 1.0 && silhouette[5] == 0.6
+    statistics = public_api.barcode_summary(original;dim=0,essential=:drop)
+    @test statistics.n_intervals == 2 && statistics.total_persistence == 5.0
+    @test public_api.barcode_entropy(original;dim=0,essential=:drop,normalize=false) ≈
+        -(2/5)*log(2/5)-(3/5)*log(3/5)
+    mktempdir() do folder
+        file = joinpath(folder,"diagram.json")
+        public_api.save_persistence_diagram_json(file,original)
+        restored = public_api.load_persistence_diagram_json(file)
+        @test public_api.Advanced.check_persistence_diagram_json(file).valid
+        @test public_api.finite_intervals(restored;dim=0) == public_api.finite_intervals(original;dim=0)
+        @test public_api.essential_births(restored;dim=0) == public_api.essential_births(original;dim=0)
+        @test public_api.bottleneck_distance(restored,original;dim=0) == 0.0
+        @test public_api.Advanced.persistence_cocycle(restored;dim=0,kind=:essential,scale=4) ==
+            public_api.Advanced.persistence_cocycle(original;dim=0,kind=:essential,scale=4)
+    end
 end
 
 

@@ -8,7 +8,7 @@ on:
 
 # TagBot follows registration in General; running it does not register a package.
 # Use repository default permissions as recommended by upstream TagBot.
-# Configuration and release verification: docs/releasing.md.
+# Configuration and release verification: https://github.com/erikmnovak/TamerOp-site/blob/main/docs/releasing.md.
 jobs:
   TagBot:
     if: github.event_name == 'workflow_dispatch' || github.actor == 'JuliaTagBot'
@@ -19,5 +19,5 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           # Enable only after configuring a write-enabled deploy key, e.g. when
-          # tags need to trigger a documentation workflow. See docs/releasing.md.
+          # tags need to trigger a documentation workflow. See https://github.com/erikmnovak/TamerOp-site/blob/main/docs/releasing.md.
           # ssh: ${{ secrets.DOCUMENTER_KEY }}

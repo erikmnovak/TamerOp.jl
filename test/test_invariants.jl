@@ -6895,8 +6895,8 @@ end
     end
 end
 
-@testset "A54 executable documentation examples" begin
-    include(joinpath(@__DIR__,"..","docs","examples","generalized_rank.jl"))
+@testset "A54 generalized-rank worked examples" begin
+    include(joinpath(@__DIR__,"fixtures","generalized_rank_examples.jl"))
     @test TamerOp.generalized_rank(GRExamples.witness) == 1
     @test Inv.interval_coefficients(GRExamples.signed) == [-1,1,1,1]
     @test Inv.gril_values(GRExamples.landscape) == reshape(QQ[4,0,2,0,1,0],1,2,3)

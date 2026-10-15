@@ -3,9 +3,9 @@ function _complex_browser_app(sessions,tick;volume=false,geometric=false,degree=
     instance=Ref{Any}(nothing)
     return B.App(;title=geometric ? "Radius and depth" : "Filtered cells") do client
         if instance[]===nothing
-            if degree
+            if degree!==false
                 cells=TamerOp.filtered_complex(TamerOp.PointCloud([0 0;1 0;2 0;1 1]),
-                    TamerOp.DegreeRipsFiltration(;max_dim=1,radius=1.1))
+                    (degree===:radius ? TamerOp.RadiusDegreeRipsFiltration(;max_dim=1,radius=1.1) : TamerOp.DegreeRipsFiltration(;max_dim=1,radius=1.1)))
                 session=V.inspection_session(cells;parameter=(0,1))
             elseif geometric
                 cells=TamerOp.filtered_complex(TamerOp.PointCloud([0 0;2 0]),TamerOp.RhomboidFiltration(depth_range=depths))

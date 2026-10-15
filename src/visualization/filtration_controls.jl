@@ -27,6 +27,9 @@ function _filtration_controls(x, parameter)
             label=geometric.family===:multicover ? "Coverage depth k" : "Neighbour depth k"
             lo,hi=geometric.depth_window
             discrete=true
+        elseif d==2 && family===:radius_degree_rips
+            label="Minimum neighbors at this diameter k"
+            lo=0;discrete=true
         elseif d==2 && family===:degree_rips
             label="Stored graph degree threshold k"
             lo=0;discrete=true

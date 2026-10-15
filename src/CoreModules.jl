@@ -1114,6 +1114,22 @@ Best practices:
 should treat it as an opaque performance tool rather than inspecting internal
 storage fields directly.
 
+Lifetime and mutation:
+- `empty!(session)` releases session-owned entries after all queries using that
+  session have finished. It preserves independently retained results and other
+  sessions. Reset is not a cancellation operation or safe during active queries.
+- A session intentionally retains its inputs and computed artifacts until reset
+  or until the caller releases the session; there is no automatic eviction.
+- Treat algebraic modules, posets, resolutions and cached results as read-only.
+  Construct a new mathematical object after changing those data. Resetting a
+  session does not repair intrinsic caches on a mutated module or old results.
+- Structural raw-input caches detect supported between-call array changes;
+  mutation during a query or inside an identity-keyed callback is unsupported.
+- `cache_stats(session)` and `describe(session)` inspect entries without doing
+  mathematics. Process-owned caches have the separate advanced interface
+  `runtime_cache_summary()` / `clear_runtime_caches!()`; neither reset unloads
+  compiled code or promises that the allocator returns memory to the OS.
+
 Hierarchy:
 - SessionCache (long-lived, workflow-level)
   - EncodingCache buckets keyed by poset identity
@@ -1124,6 +1140,7 @@ Hierarchy:
   - Zn pushed modules keyed by `(encoding_fingerprint, poset_kind, flange_fingerprint, field_key)`
 """
 mutable struct SessionCache
+    lock::Base.ReentrantLock
     encoding_locks::Vector{Base.ReentrantLock}
     encoding::Vector{Dict{UInt,EncodingCache}}
     module_locks::Vector{Base.ReentrantLock}
@@ -1153,7 +1170,8 @@ const _SESSION_ZN_CACHE_SHARDS = 16
 function SessionCache()
     ncore_shards = _session_cache_nshards()
     nzn_shards = _session_zn_cache_nshards()
-    return SessionCache([Base.ReentrantLock() for _ in 1:ncore_shards],
+    return SessionCache(Base.ReentrantLock(),
+                              [Base.ReentrantLock() for _ in 1:ncore_shards],
                               [Dict{UInt,EncodingCache}() for _ in 1:ncore_shards],
                               [Base.ReentrantLock() for _ in 1:ncore_shards],
                               [Dict{Tuple{UInt,UInt},ModuleCache}() for _ in 1:ncore_shards],
@@ -1174,18 +1192,20 @@ function SessionCache()
 end
 
 @inline function _session_cache_summary_counts(session::SessionCache)
-    return (
-        encoding_buckets=_session_encoding_bucket_count(session),
-        module_buckets=_session_module_bucket_count(session),
-        zn_encoding_artifacts=_session_zn_encoding_artifact_count(session),
-        zn_pushforward_plans=_session_zn_pushforward_plan_count(session),
-        zn_pushforward_fringes=_session_zn_pushforward_fringe_count(session),
-        zn_pushforward_modules=_session_zn_pushforward_module_count(session),
-        product_dense=length(session.product_dense),
-        product_object=length(session.product_obj),
-        has_hom_system=session.hom_system !== nothing,
-        has_slice_plan=session.slice_plan !== nothing,
-    )
+    return Base.lock(session.lock) do
+        (
+            encoding_buckets=_session_encoding_bucket_count(session),
+            module_buckets=_session_module_bucket_count(session),
+            zn_encoding_artifacts=_session_zn_encoding_artifact_count(session),
+            zn_pushforward_plans=_session_zn_pushforward_plan_count(session),
+            zn_pushforward_fringes=_session_zn_pushforward_fringe_count(session),
+            zn_pushforward_modules=_session_zn_pushforward_module_count(session),
+            product_dense=length(session.product_dense),
+            product_object=length(session.product_obj),
+            has_hom_system=session.hom_system !== nothing,
+            has_slice_plan=session.slice_plan !== nothing,
+        )
+    end
 end
 
 function Base.show(io::IO, session::SessionCache)
@@ -1390,8 +1410,8 @@ function _session_module_values(session::SessionCache)
     return out
 end
 
-@inline _session_encoding_bucket_count(session::SessionCache) = sum(length, session.encoding)
-@inline _session_module_bucket_count(session::SessionCache) = sum(length, session.modules)
+@inline _session_encoding_bucket_count(session::SessionCache) = _locked_store_count(session.encoding, session.encoding_locks)
+@inline _session_module_bucket_count(session::SessionCache) = _locked_store_count(session.modules, session.module_locks)
 
 @inline _session_resolution_cache(session::SessionCache) = session.resolution
 @inline _session_resolution_cache(session::SessionCache, M) = _module_cache!(session, M).resolution
@@ -1408,10 +1428,10 @@ end
     return cache
 end
 
-@inline _session_zn_encoding_artifact_count(session::SessionCache) = sum(length, session.zn_encoding_artifacts)
-@inline _session_zn_pushforward_plan_count(session::SessionCache) = sum(length, session.zn_pushforward_plan)
-@inline _session_zn_pushforward_fringe_count(session::SessionCache) = sum(length, session.zn_pushforward_fringe)
-@inline _session_zn_pushforward_module_count(session::SessionCache) = sum(length, session.zn_pushforward_module)
+@inline _session_zn_encoding_artifact_count(session::SessionCache) = _locked_store_count(session.zn_encoding_artifacts, session.zn_encoding_locks)
+@inline _session_zn_pushforward_plan_count(session::SessionCache) = _locked_store_count(session.zn_pushforward_plan, session.zn_plan_locks)
+@inline _session_zn_pushforward_fringe_count(session::SessionCache) = _locked_store_count(session.zn_pushforward_fringe, session.zn_fringe_locks)
+@inline _session_zn_pushforward_module_count(session::SessionCache) = _locked_store_count(session.zn_pushforward_module, session.zn_module_locks)
 
 @inline function _session_get_zn_pushforward_plan(session::SessionCache,
                                                   encoding_fp::UInt64,
@@ -1661,76 +1681,85 @@ end
                                           ctor)
     cache !== nothing && return cache
     session_cache === nothing && return nothing
-    slot = getter(session_cache)
-    if !(slot isa expected)
-        slot = ctor()
-        setter(session_cache, slot)
+    return Base.lock(session_cache.lock) do
+        slot = getter(session_cache)
+        if !(slot isa expected)
+            slot = ctor()
+            setter(session_cache, slot)
+        end
+        return slot
     end
-    return slot
 end
 
 function _clear_session_cache!(session::SessionCache)
-    for i in eachindex(session.encoding)
-        Base.lock(session.encoding_locks[i])
-        try
-            for c in values(session.encoding[i])
-                _clear_encoding_cache!(c)
+    Base.lock(session.lock)
+    try
+        for i in eachindex(session.encoding)
+            Base.lock(session.encoding_locks[i])
+            try
+                for c in values(session.encoding[i])
+                    _clear_encoding_cache!(c)
+                end
+                empty!(session.encoding[i])
+            finally
+                Base.unlock(session.encoding_locks[i])
             end
-            empty!(session.encoding[i])
-        finally
-            Base.unlock(session.encoding_locks[i])
         end
-    end
-    for i in eachindex(session.modules)
-        Base.lock(session.module_locks[i])
-        try
-            for c in values(session.modules[i])
-                _clear_module_cache!(c)
+        for i in eachindex(session.modules)
+            Base.lock(session.module_locks[i])
+            try
+                for c in values(session.modules[i])
+                    _clear_module_cache!(c)
+                end
+                empty!(session.modules[i])
+                empty!(session.module_field_keys[i])
+            finally
+                Base.unlock(session.module_locks[i])
             end
-            empty!(session.modules[i])
-            empty!(session.module_field_keys[i])
-        finally
-            Base.unlock(session.module_locks[i])
         end
-    end
-    _clear_resolution_cache!(session.resolution)
-    session.hom_system = nothing
-    session.slice_plan = nothing
-    empty!(session.product_dense)
-    empty!(session.product_obj)
-    for i in eachindex(session.zn_encoding_artifacts)
-        Base.lock(session.zn_encoding_locks[i])
-        try
-            empty!(session.zn_encoding_artifacts[i])
-        finally
-            Base.unlock(session.zn_encoding_locks[i])
+        _clear_resolution_cache!(session.resolution)
+        session.hom_system = nothing
+        session.slice_plan = nothing
+        empty!(session.product_dense)
+        empty!(session.product_obj)
+        for i in eachindex(session.zn_encoding_artifacts)
+            Base.lock(session.zn_encoding_locks[i])
+            try
+                empty!(session.zn_encoding_artifacts[i])
+            finally
+                Base.unlock(session.zn_encoding_locks[i])
+            end
         end
-    end
-    for i in eachindex(session.zn_pushforward_plan)
-        Base.lock(session.zn_plan_locks[i])
-        try
-            empty!(session.zn_pushforward_plan[i])
-        finally
-            Base.unlock(session.zn_plan_locks[i])
+        for i in eachindex(session.zn_pushforward_plan)
+            Base.lock(session.zn_plan_locks[i])
+            try
+                empty!(session.zn_pushforward_plan[i])
+            finally
+                Base.unlock(session.zn_plan_locks[i])
+            end
         end
-    end
-    for i in eachindex(session.zn_pushforward_fringe)
-        Base.lock(session.zn_fringe_locks[i])
-        try
-            empty!(session.zn_pushforward_fringe[i])
-        finally
-            Base.unlock(session.zn_fringe_locks[i])
+        for i in eachindex(session.zn_pushforward_fringe)
+            Base.lock(session.zn_fringe_locks[i])
+            try
+                empty!(session.zn_pushforward_fringe[i])
+            finally
+                Base.unlock(session.zn_fringe_locks[i])
+            end
         end
-    end
-    for i in eachindex(session.zn_pushforward_module)
-        Base.lock(session.zn_module_locks[i])
-        try
-            empty!(session.zn_pushforward_module[i])
-        finally
-            Base.unlock(session.zn_module_locks[i])
+        for i in eachindex(session.zn_pushforward_module)
+            Base.lock(session.zn_module_locks[i])
+            try
+                empty!(session.zn_pushforward_module[i])
+            finally
+                Base.unlock(session.zn_module_locks[i])
+            end
         end
+    finally
+        Base.unlock(session.lock)
     end
     return nothing
 end
+
+include("core_modules/cache_lifecycle.jl")
 
 end # module CoreModules

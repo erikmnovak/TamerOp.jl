@@ -144,6 +144,7 @@ _session_request(s::_AbstractInspectionSession) =
     (; family=:snapshot, options=(;), selection=(;), source_identity=nothing)
 
 function _session_request(s::InspectionSession)
+    !s.closed && s.prepared.slice_classes && return (; family=:snapshot, options=(;), selection=(;), source_identity=nothing)
     s.closed && return (; family=:snapshot, options=(;), selection=(;), source_identity=nothing)
     state = s.state
     selector = state.selector === :point ? (; point=only(state.query_points)) :

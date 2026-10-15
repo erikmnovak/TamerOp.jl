@@ -6,6 +6,7 @@
 module OrdinaryPersistence
 
 using SparseArrays
+using LinearAlgebra: I
 using ..CoreModules: F2, PrimeField, FpElem, coeff_type, QQ
 using ..ExactReals: AlgebraicReal
 import ..SliceInvariants: bottleneck_distance, bottleneck_matching, wasserstein_distance,
@@ -13,6 +14,7 @@ import ..SliceInvariants: bottleneck_distance, bottleneck_matching, wasserstein_
 using ..DataTypes: GradedComplex, ImageNd
 import ..DataTypes
 using ..Options: ConstructionOptions
+import ..Options
 import ..DataIngestion
 import ..ChainComplexes: describe
 import ..ChainComplexes: dimensions, basis
@@ -1050,6 +1052,7 @@ include("ordinary_persistence/implicit_rips.jl")
 include("ordinary_persistence/analysis.jl")
 include("ordinary_persistence/source_representatives.jl")
 include("ordinary_persistence/components.jl")
+include("ordinary_persistence/density_clustering.jl")
 include("ordinary_persistence/result_data.jl")
 
 """
@@ -1566,5 +1569,6 @@ include("ordinary_persistence/extended_analysis.jl")
 include("ordinary_persistence/incremental.jl")
 include("ordinary_persistence/incremental_updates.jl")
 include("ordinary_persistence/incremental_witnesses.jl")
+include("ordinary_persistence/reduction_trace.jl")
 
 end # module OrdinaryPersistence

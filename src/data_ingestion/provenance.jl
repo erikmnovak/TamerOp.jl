@@ -33,7 +33,7 @@ function _ingestion_construction_provenance(data, spec, filtration)
     grade_scale = projection === :function_coordinate ? :filtration_values :
                   effective === :alpha ? :squared_radius :
                   effective in (:core, :core_delaunay, :function_delaunay, :rhomboid) ? :radius :
-                  effective in (:rips, :function_rips, :rips_density, :rips_codensity, :degree_rips,
+                  effective in (:rips, :function_rips, :rips_density, :rips_codensity, :degree_rips, :radius_degree_rips,
                                 :landmark_rips) ? :diameter : :filtration_values
     return (; requested, effective, substitution, projection, grade_scale)
 end

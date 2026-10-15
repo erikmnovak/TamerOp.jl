@@ -88,6 +88,7 @@ include("PLBackend.jl")
 # 10) Derived-functor and complexes layer
 include("ChainComplexes.jl")
 include("DerivedFunctors.jl")
+include("RankExact.jl")
 include("ModuleComplexes.jl")
 include("H0Presentations.jl")
 include("ChangeOfPosets.jl")
@@ -99,6 +100,7 @@ include("Serialization.jl")
 
 # 12) Shared invariant plumbing + invariants and summaries
 include("InvariantCore.jl")
+include("JordanInvariants.jl")
 include("SignedMeasures.jl")
 include("SliceInvariants.jl")
 include("Fibered2D.jl")
@@ -144,6 +146,10 @@ include("DataIngestion.jl")
 # 16) Ordinary one-parameter persistence helpers
 include("OrdinaryPersistence.jl")
 include("ZigzagPersistence.jl")
+include("TemporalPersistence.jl")
+include("MorphismMatchings.jl")
+include("Graphcodes.jl")
+include("EndCurves.jl")
 include("CohomologyProducts.jl")
 
 # 17) Synthetic data generators
@@ -283,6 +289,12 @@ import ..DataFileIO
 import ..DataIngestion
 import ..OrdinaryPersistence
 import ..ZigzagPersistence
+import ..TemporalPersistence
+import ..MorphismMatchings
+import ..Graphcodes
+import ..EndCurves
+import ..RankExact
+import ..JordanInvariants
 import ..CohomologyProducts
 import ..Interleavings
 import ..Pruning
@@ -295,7 +307,7 @@ export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
        HomExtEngine, Utils,
        ModuleComplexes, H0Presentations, ChangeOfPosets, Invariants, IntervalDecompositions, IndecomposableDecompositions, Workflow, DataFileIO, DataIngestion,
-       OrdinaryPersistence, ZigzagPersistence, CohomologyProducts, Interleavings, Pruning, Featurizers
+       OrdinaryPersistence, ZigzagPersistence, TemporalPersistence, MorphismMatchings, Graphcodes, EndCurves, RankExact, JordanInvariants, CohomologyProducts, Interleavings, Pruning, Featurizers
 
 # -----------------------------------------------------------------------------
 # Static curated API binding (no dynamic lifting).

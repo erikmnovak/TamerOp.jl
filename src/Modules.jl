@@ -11,6 +11,7 @@ import ..FiniteFringe: AbstractPoset, FinitePoset, cover_edges, leq, nvertices,
        _pred_slots_of_succ, _succ_slots_of_pred,
        _clear_cover_cache!, _pairkey, _chosen_predecessor, _chosen_predecessor_slow,
        _chain_parent_dense, _chain_parent_dict
+import ..IndicatorTypes
 import ..FieldLinAlg
 import ..Results: _result_payload_poset
 import Base.Threads
@@ -3950,6 +3951,74 @@ function map_leq_many(M::PModule{K,F,MatT},
                       opts::ModuleOptions=ModuleOptions()) where {K,F,MatT}
     out = Vector{MatT}(undef, length(batch.pairs))
     return map_leq_many!(out, M, batch; cache=cache, opts=opts)
+end
+
+
+"""
+    pointwise_dual(M; opposite=opposite_poset(M.Q))
+    pointwise_dual(f; opposite=opposite_poset(f.dom.Q))
+
+Finite-dimensional linear dual over the opposite finite poset. Vertex labels
+and the coefficient field are unchanged; structure maps are transposed and
+morphisms reverse direction. This is an exact contravariant equivalence over
+exact coefficient fields. `RealField` uses the existing numerical contracts.
+
+Reuse one `opposite` poset when dualizing related objects separately. A morphism
+or complex creates a shared opposite poset for all its objects automatically.
+Separate calls copy their modules. Dualize a complex or resolution together to
+keep its arrows attached to shared terms; endomorphisms retain shared endpoints.
+Fringe matrices are transposed; upset presentations become downset
+copresentations, and conversely.
+No global graded dual, parameter reflection, degree shift by the ambient
+dimension, or ambient-category derived equivalence is asserted.
+"""
+function pointwise_dual(M::PModule; opposite::AbstractPoset=FiniteFringe.opposite_poset(M.Q))
+    FiniteFringe._check_opposite_poset(M.Q, opposite)
+    return _pointwise_dual(M, opposite)
+end
+
+function _pointwise_dual(M::PModule{K}, Q::AbstractPoset) where {K}
+    # Copy rather than return lazy transposes aliasing mutable source matrices.
+    edges = Dict((v,u) => copy(transpose(M.edge_maps[u,v])) for (u,v) in cover_edges(M.Q))
+    return PModule{K}(Q, copy(M.dims), edges; field=M.field)
+end
+
+function _dual_morphism(f::PMorphism{K}, dom::PModule{K}, cod::PModule{K}) where {K}
+    return PMorphism{K}(dom, cod, [copy(transpose(A)) for A in f.comps])
+end
+
+function pointwise_dual(f::PMorphism; opposite::AbstractPoset=FiniteFringe.opposite_poset(f.dom.Q))
+    FiniteFringe._check_opposite_poset(f.dom.Q, opposite)
+    dom = _pointwise_dual(f.cod, opposite)
+    cod = f.dom === f.cod ? dom : _pointwise_dual(f.dom, opposite)
+    return _dual_morphism(f, dom, cod)
+end
+
+function pointwise_dual(H::FiniteFringe.FringeModule{K};
+                        opposite::AbstractPoset=FiniteFringe.opposite_poset(H.P)) where {K}
+    FiniteFringe._check_opposite_poset(H.P, opposite)
+    U = [FiniteFringe.Upset(opposite, copy(D.mask)) for D in H.D]
+    D = [FiniteFringe.Downset(opposite, copy(U.mask)) for U in H.U]
+    return FiniteFringe.FringeModule{K}(opposite, U, D, copy(transpose(H.phi)); field=H.field)
+end
+
+function pointwise_dual(P::IndicatorTypes.UpsetPresentation{K};
+                        opposite::AbstractPoset=FiniteFringe.opposite_poset(P.P)) where {K}
+    FiniteFringe._check_opposite_poset(P.P, opposite)
+    D0 = [FiniteFringe.Downset(opposite, copy(U.mask)) for U in P.U0]
+    D1 = [FiniteFringe.Downset(opposite, copy(U.mask)) for U in P.U1]
+    H = P.H === nothing ? nothing : pointwise_dual(P.H; opposite=opposite)
+    # UpsetPresentation already stores relation rows and generator columns.
+    return IndicatorTypes.DownsetCopresentation{K}(opposite, D0, D1, copy(P.delta), H)
+end
+
+function pointwise_dual(P::IndicatorTypes.DownsetCopresentation{K};
+                        opposite::AbstractPoset=FiniteFringe.opposite_poset(P.P)) where {K}
+    FiniteFringe._check_opposite_poset(P.P, opposite)
+    U0 = [FiniteFringe.Upset(opposite, copy(D.mask)) for D in P.D0]
+    U1 = [FiniteFringe.Upset(opposite, copy(D.mask)) for D in P.D1]
+    H = P.H === nothing ? nothing : pointwise_dual(P.H; opposite=opposite)
+    return IndicatorTypes.UpsetPresentation{K}(opposite, U0, U1, copy(P.rho), H)
 end
 
 end

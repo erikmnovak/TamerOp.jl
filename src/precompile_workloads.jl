@@ -46,11 +46,6 @@ using PrecompileTools: @setup_workload, @compile_workload
     end
     # Retain compiled methods, not the training fixtures or native factors.
     # In particular, object-identity plan keys are process-local values.
-    DerivedFunctors.Resolutions._clear_resolution_plan_caches!()
-    DerivedFunctors.Functoriality._clear_functoriality_caches!()
-    IndicatorResolutions._clear_indicator_prefix_caches!()
-    FieldLinAlg._clear_fullcolumn_cache!()
-    FieldLinAlg._clear_f2_fullcolumn_cache!()
-    FieldLinAlg._clear_f3_fullcolumn_cache!()
+    CoreModules.clear_runtime_caches!()
     FieldLinAlg._reset_conversion_counters!()
 end

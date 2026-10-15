@@ -67,6 +67,10 @@ import ..Options
 import ..DataTypes
 import ..DataIngestion
 import ..OrdinaryPersistence
+import ..ZigzagPersistence
+import ..TemporalPersistence
+import ..Graphcodes
+import ..EndCurves
 import ..Fibered2D
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, GridEncodingMap,
                       encoding_axes, encoding_map,
@@ -139,6 +143,7 @@ include("visualization/builders_components.jl")
 include("visualization/inspection_slices.jl")
 include("visualization/inspection_requests.jl")
 include("visualization/inspection_session.jl")
+include("visualization/slice_classes.jl")
 include("visualization/inspection_intervals.jl")
 include("visualization/builders_matchings.jl")
 include("visualization/inspection_matchings.jl")
@@ -174,6 +179,11 @@ include("visualization/inspection_collections.jl")
 include("visualization/builders_ensembles.jl")
 include("visualization/inspection_ensembles.jl")
 include("visualization/module_editor.jl")
+include("visualization/clustering.jl")
+include("visualization/graphcodes.jl")
+include("visualization/end_curves.jl")
+include("visualization/reduction.jl")
+include("visualization/temporal.jl")
 include("visualization/source_laboratory.jl")
 include("visualization/builders_source_laboratory.jl")
 include("visualization/session_composition.jl")

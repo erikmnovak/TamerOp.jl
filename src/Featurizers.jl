@@ -2429,6 +2429,11 @@ function spec_from_metadata(meta_or_spec;
             strict=_as_bool_or_nothing(_obj_get(fields, "strict", nothing)),
             threads=_as_bool_or_nothing(_obj_get(fields, "threads", nothing)),
         )
+    elseif Tname == "SignedConvolutionSpec"
+        return SignedConvolutionSpec(axes=_axes_from_json(fields["axes"]),
+            sigma=fields["sigma"], scale=collect(fields["scale"]), kernel=_as_symbol(fields["kernel"]),
+            max_atoms=Int(fields["max_atoms"]), max_queries=Int(fields["max_queries"]),
+            max_evaluations=Int(fields["max_evaluations"]))
     elseif Tname == "PointSignedMeasureSpec"
         return PointSignedMeasureSpec(
             ndims=Int(fields["ndims"]),
@@ -5207,9 +5212,9 @@ function build_cache(obj,
                      threaded::Bool=true,
                      cache=:auto)
     supports(spec, obj) || throw(ArgumentError("build_cache: sample is unsupported for $(typeof(spec))"))
-    if spec isa PointSignedMeasureSpec
+    if spec isa Union{PointSignedMeasureSpec,SignedConvolutionSpec}
         obj isa PointSignedMeasure ||
-            throw(ArgumentError("PointSignedMeasureSpec requires a PointSignedMeasure sample"))
+            throw(ArgumentError("signed-point featurizers require a PointSignedMeasure sample"))
         return PointMeasureInvariantCache{typeof(obj)}(obj, opts, threaded, level)
     elseif spec isa RectangleSignedBarcodeTopKSpec && obj isa RectSignedBarcode
         return SignedBarcodeInvariantCache{typeof(obj)}(obj, opts, threaded, level)
@@ -5219,6 +5224,7 @@ function build_cache(obj,
             level=level,
             threaded=threaded)
     elseif spec isa CompositeSpec
+        obj isa PointSignedMeasure && return PointMeasureInvariantCache{typeof(obj)}(obj, opts, threaded, level)
         fam = _composite_pure_resolution_family(spec)
         if fam == :projective || fam == :injective
             if any(_needs_resolution_pi, spec.specs)
@@ -5247,6 +5253,11 @@ function build_cache(obj,
     _prime_cache!(cache_obj, spec; opts=opts, threaded=threaded)
     return cache_obj
 end
+
+import ..CoreModules: session_cache_summary
+
+"""Inspect session-owned entry counts and the lifetime/mutation contract without computing."""
+cache_stats(session::SessionCache) = session_cache_summary(session)
 
 function cache_stats(cache::ModuleInvariantCache)
     return (kind=:module, threads=cache.threads, level=cache.level)
@@ -7875,61 +7886,31 @@ function batch_transform!(X::Matrix,
     return FeatureSet(X, compiled.feature_names, compiled.ids, meta)
 end
 
-@inline function _resolution_cache_stats(rc::ResolutionCache)
-    Base.lock(rc.lock)
-    try
-        return Dict(
-        "projective" => length(rc.projective) + (rc.projective_primary === nothing ? 0 : length(rc.projective_primary)),
-        "injective" => length(rc.injective) + (rc.injective_primary === nothing ? 0 : length(rc.injective_primary)),
-        "indicator" => length(rc.indicator) + (rc.indicator_primary === nothing ? 0 : length(rc.indicator_primary)),
-    )
-    finally
-        Base.unlock(rc.lock)
-    end
-end
-
 function _session_cache_stats(session::SessionCache)
-    n_encoding = _session_encoding_bucket_count(session)
-    n_modules = _session_module_bucket_count(session)
-    enc_posets = 0
-    enc_cubical = 0
-    enc_region_posets = 0
-    mod_payload = 0
-    mod_resolution_projective = 0
-    mod_resolution_injective = 0
-    mod_resolution_indicator = 0
-    for ec in _session_encoding_values(session)
-        enc_posets += length(ec.posets)
-        enc_cubical += length(ec.cubical)
-        enc_region_posets += length(ec.region_posets)
-    end
-    for mc in _session_module_values(session)
-        mod_payload += length(mc.payload)
-        mod_resolution_projective += length(mc.resolution.projective)
-        mod_resolution_injective += length(mc.resolution.injective)
-        mod_resolution_indicator += length(mc.resolution.indicator)
-    end
-    out = Dict{String,Any}(
-        "encoding_buckets" => n_encoding,
-        "module_buckets" => n_modules,
-        "encoding_posets" => enc_posets,
-        "encoding_cubical" => enc_cubical,
-        "encoding_region_posets" => enc_region_posets,
-        "module_payload_entries" => mod_payload,
-        "module_resolution_projective" => mod_resolution_projective,
-        "module_resolution_injective" => mod_resolution_injective,
-        "module_resolution_indicator" => mod_resolution_indicator,
-        "zn_encoding_artifacts" => _session_zn_encoding_artifact_count(session),
-        "zn_pushforward_plans" => _session_zn_pushforward_plan_count(session),
-        "zn_pushforward_fringes" => _session_zn_pushforward_fringe_count(session),
-        "zn_pushforward_modules" => _session_zn_pushforward_module_count(session),
-        "session_resolution" => _resolution_cache_stats(session.resolution),
-        "has_hom_system_cache" => session.hom_system !== nothing,
-        "has_slice_plan_cache" => session.slice_plan !== nothing,
-        "product_dense_entries" => length(session.product_dense),
-        "product_object_entries" => length(session.product_obj),
+    counts = session_cache_summary(session)
+    b, e, r = counts.buckets, counts.encoding, counts.module_resolutions
+    return Dict{String,Any}(
+        "encoding_buckets" => b.encoding_buckets,
+        "module_buckets" => b.module_buckets,
+        "encoding_posets" => e.posets,
+        "encoding_cubical" => e.cubical,
+        "encoding_region_posets" => e.region_posets,
+        "encoding_geometry" => e.geometry,
+        "module_payload_entries" => counts.module_payloads,
+        "module_resolution_projective" => r.projective,
+        "module_resolution_injective" => r.injective,
+        "module_resolution_indicator" => r.indicator,
+        "module_resolutions" => Dict(string(k) => v for (k,v) in pairs(r)),
+        "zn_encoding_artifacts" => b.zn_encoding_artifacts,
+        "zn_pushforward_plans" => b.zn_pushforward_plans,
+        "zn_pushforward_fringes" => b.zn_pushforward_fringes,
+        "zn_pushforward_modules" => b.zn_pushforward_modules,
+        "session_resolution" => Dict(string(k) => v for (k,v) in pairs(counts.resolutions)),
+        "has_hom_system_cache" => b.has_hom_system,
+        "has_slice_plan_cache" => b.has_slice_plan,
+        "product_dense_entries" => b.product_dense,
+        "product_object_entries" => b.product_object,
     )
-    return out
 end
 
 @inline function _experiment_cache_handle(cache)
@@ -8385,5 +8366,6 @@ function matching_distance(encA::EncodingResult, encB::EncodingResult;
 end
 
 include("featurizers/ensembles.jl")
+include("featurizers/signed_convolution.jl")
 
 end # module Featurizers

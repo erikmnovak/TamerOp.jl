@@ -409,7 +409,11 @@ function _visual_makie_handlers(TO, MakieMod; allow_save::Bool=true)
                     elseif spec.kind === :hasse
                         # Center multiline labels beside schematic vertices.
                         (; align=(:left, :center))
-                    elseif spec.kind in (:certificate_domain, :certificate_diagram)
+                    elseif spec.kind in (:certificate_domain, :certificate_diagram,
+                            :temporal_barcode, :temporal_arrows, :spatiotemporal_landscape,
+                            :temporal_landscape_section)
+                        # Endpoint and grid glyphs are centered on their exact
+                        # anchors, rather than starting above and to the right.
                         (; align=(:center, :center))
                     elseif spec.kind === :certificate_locations
                         # Shift endpoints can touch the top/right of the chart.

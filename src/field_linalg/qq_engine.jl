@@ -120,7 +120,9 @@ function _nullspace_backend(A::AbstractMatrix{QQ})
     @inbounds for (k, jf) in enumerate(free)
         B[jf, k] = 1
         for (i, jp) in enumerate(pivs)
-            B[jp, k] = -R[i, jf]
+            # B is already zero here. Negating a rational zero allocates BigInts.
+            r = R[i, jf]
+            iszero(r) || (B[jp, k] = -r)
         end
     end
     return B

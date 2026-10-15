@@ -697,6 +697,8 @@ function Base.iterate(res::CommonRefinementTranslationResult, state::Int=1)
     return nothing
 end
 
+import ..CoreModules: _session_product_lookup, _session_product_publish!
+
 @inline _product_dense_cache(session_cache::Union{Nothing,SessionCache}) =
     session_cache === nothing ? nothing : session_cache.product_dense
 
@@ -846,7 +848,7 @@ function product_poset(
     # Fast cache path (only for the common "production" settings).
     if cache_enabled
         cache_key = _SessionProductKey(L1, L2)
-        entry = get(dense_cache, cache_key, nothing)
+        entry = _session_product_lookup(session_cache, dense_cache, cache_key)
         if entry !== nothing
             return ProductPosetResult(entry.P, entry.pi1, entry.pi2)
         end
@@ -891,7 +893,8 @@ function product_poset(
 
     if cache_enabled
         cache_key = _SessionProductKey(L1, L2)
-        dense_cache[cache_key] = ProductPosetCacheEntry{Any,Any,Any,Any,Any}(L1, L2, out.P, out.pi1, out.pi2)
+        entry = _session_product_publish!(session_cache, dense_cache, cache_key, ProductPosetCacheEntry{Any,Any,Any,Any,Any}(L1, L2, out.P, out.pi1, out.pi2))
+        return ProductPosetResult(entry.P, entry.pi1, entry.pi2)
     end
 
     return out
@@ -909,7 +912,7 @@ function product_poset(
     cache_enabled = use_cache && obj_cache !== nothing
     if cache_enabled
         cache_key = _SessionProductKey(P1, P2)
-        entry = get(obj_cache, cache_key, nothing)
+        entry = _session_product_lookup(session_cache, obj_cache, cache_key)
         if entry !== nothing
             return ProductPosetResult(entry.P, entry.pi1, entry.pi2)
         end
@@ -935,7 +938,8 @@ function product_poset(
     out = ProductPosetResult(P, pi1, pi2)
     if cache_enabled
         cache_key = _SessionProductKey(P1, P2)
-        obj_cache[cache_key] = ProductPosetCacheEntry{Any,Any,Any,Any,Any}(P1, P2, out.P, out.pi1, out.pi2)
+        entry = _session_product_publish!(session_cache, obj_cache, cache_key, ProductPosetCacheEntry{Any,Any,Any,Any,Any}(P1, P2, out.P, out.pi1, out.pi2))
+        return ProductPosetResult(entry.P, entry.pi1, entry.pi2)
     end
 
     return out
@@ -4537,32 +4541,11 @@ function _induced_maps_on_cohomology_modules_from_data(
     comps::Vector{PMorphism{K}},
     maxdeg::Int,
 ) where {K}
-    field = Cdom.terms[1].field
     out = Vector{PMorphism{K}}(undef, maxdeg + 1)
     @inbounds for i in 0:maxdeg
         t = -i
-        Cd = ModuleComplexes.cohomology_module_data(Cdom, t)
-        Dd = ModuleComplexes.cohomology_module_data(Ccod, t)
         ft = comps[t - Cdom.tmin + 1]
-        Q = Cdom.terms[1].Q
-        compsH = Vector{Matrix{K}}(undef, nvertices(Q))
-        for u in 1:nvertices(Q)
-            rhsZ = ft.comps[u] * Cd.iZ.comps[u]
-            if Dd.Z.dims[u] == 0
-                compsH[u] = zeros(K, Dd.H.dims[u], Cd.H.dims[u])
-            else
-                z_to_z = FieldLinAlg.solve_fullcolumn(field, Dd.iZ.comps[u], rhsZ)
-                rhsH = Dd.q.comps[u] * z_to_z
-                qC = Cd.q.comps[u]
-                if size(qC, 1) == 0
-                    compsH[u] = zeros(K, size(rhsH, 1), 0)
-                else
-                    rinv = _right_inverse_full_row(field, qC)
-                    compsH[u] = rhsH * rinv
-                end
-            end
-        end
-        out[i + 1] = PMorphism{K}(Cd.H, Dd.H, compsH)
+        out[i + 1] = ModuleComplexes._induced_cohomology_map(Cdom, Ccod, ft, t)
     end
     return out
 end

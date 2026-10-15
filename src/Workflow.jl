@@ -229,6 +229,7 @@ import ..InvariantCore: _exact_slice_barcodes, _exact_euler_signed_measure,
                         _exact_restricted_hilbert,
                         _exact_rectangle_signed_barcode, _exact_rank_signed_measure
 using ..SignedMeasures
+import ..JordanInvariants
 using ..SliceInvariants: CompiledSlicePlan, SlicePlanCache
 import ..MultiparameterImages: _mp_landscape_slice_request, _mp_landscape_from_slice_barcodes
 import ..Fibered2D
@@ -1830,7 +1831,15 @@ function hom(A::EncodingResult, B::EncodingResult;
     K = coeff_type(MA.field)
     cache_hom, session_cache = _resolve_workflow_specialized_cache(cache, DerivedFunctors.HomSystemCache)
     cache2 = _hom_cache_from_session(cache_hom, session_cache, K)
-    return DerivedFunctors.Hom(MA, MB; cache=cache2)
+    return _run_workflow_operation(DerivedFunctors.Hom, MA, MB; cache=cache2)
+end
+
+# Dispatch a chosen operation before inferring its numerical implementation.
+# The callee still specializes on its actual modules and coefficient field.
+Base.@constprop :none Base.@noinline Base.@nospecializeinfer function _run_workflow_operation(
+    Base.@nospecialize(operation), args...; kwargs...,
+)
+    return operation(args...; kwargs...)
 end
 
 function hom(A::Modules.PModule{K}, B::Modules.PModule{K};
@@ -1838,7 +1847,7 @@ function hom(A::Modules.PModule{K}, B::Modules.PModule{K};
     (A.Q === B.Q) || error("hom: posets mismatch.")
     cache_hom, session_cache = _resolve_workflow_specialized_cache(cache, DerivedFunctors.HomSystemCache)
     cache2 = _hom_cache_from_session(cache_hom, session_cache, K)
-    return DerivedFunctors.Hom(A, B; cache=cache2)
+    return _run_workflow_operation(DerivedFunctors.Hom, A, B; cache=cache2)
 end
 
 """
@@ -2352,7 +2361,7 @@ hypertor(Rop::EncodingResult, enc::EncodedComplexResult; maxlen::Int=3, kwargs..
 
 
 
-@inline function _try_invariant_call(f, args...; kwargs...)
+Base.@constprop :none Base.@noinline Base.@nospecializeinfer function _try_invariant_call(Base.@nospecialize(f), args...; kwargs...)
     # Inspect the callable's outer signature before invoking it. A MethodError
     # from inside an applicable invariant is a user computation failure, not a
     # request to try another signature and possibly produce a different value.
@@ -2371,6 +2380,12 @@ function _call_invariant(f, enc::EncodingResult, opts::InvariantOptions; kwargs.
     ok, v = _try_invariant_call(f, dims; kwargs...)
     ok && return v
 
+    return _run_workflow_operation(_call_module_invariant, f, enc, opts; kwargs...)
+end
+
+# Dimension-compatible queries finish above. Only requests needing a module
+# reach this materialization stage, including during compiler inference.
+function _call_module_invariant(f, enc::EncodingResult, opts::InvariantOptions; kwargs...)
     M = pmodule(enc)
     ok, v = _try_invariant_call(f, M, enc.pi; opts=opts, kwargs...)
     ok && return v
@@ -2435,8 +2450,10 @@ end
         return getfield(Invariants, which)
     elseif isdefined(SignedMeasures, which)
         return getfield(SignedMeasures, which)
+    elseif which in (:jordan_type, :multirank)
+        return getfield(JordanInvariants, which)
     end
-    error("invariant: unknown invariant symbol $(which). Expected a function in Invariants or SignedMeasures.")
+    error("invariant: unknown invariant symbol $(which). Expected a supported invariant in Invariants, SignedMeasures or JordanInvariants.")
 end
 
 @inline function _workflow_invariant_value(enc::EncodingResult,
@@ -3038,6 +3055,30 @@ is_interval_decomposable(M::Union{PModule,EncodingResult};kwargs...) =
     is_interval_decomposable(interval_decomposition(M;kwargs...))
 
 """
+    jordan_type(M; slices, witness=false, check=true, budget=Advanced.JordanBudget())
+    jordan_type(enc::EncodingResult; slices, cache=:auto, kwargs...)
+
+Compute Jordan multiplicities on selected disjoint subsets of the finite base.
+Encoding input retains the same finite-poset interpretation as module input.
+"""
+jordan_type(M::PModule;kwargs...) = JordanInvariants.jordan_type(M;kwargs...)
+function jordan_type(enc::EncodingResult;cache=:auto,kwargs...)
+    enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    return JordanInvariants.jordan_type(pmodule(enc2);kwargs...)
+end
+"""
+    multirank(M; sources, targets, kwargs...)
+    multirank(enc::EncodingResult; sources, targets, cache=:auto, kwargs...)
+
+Rank of the actual block map between two disjoint collections of stalks.
+"""
+multirank(M::PModule;kwargs...) = JordanInvariants.multirank(M;kwargs...)
+function multirank(enc::EncodingResult;cache=:auto,kwargs...)
+    enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    return JordanInvariants.multirank(pmodule(enc2);kwargs...)
+end
+
+"""
     generalized_rank(M; vertices, witnesses=false, budget=Advanced.GeneralizedRankBudget())
     generalized_rank(enc::EncodingResult; vertices, cache=:auto, kwargs...)
 
@@ -3091,7 +3132,8 @@ function restricted_hilbert(enc::EncodingResult;
     enc2 = _encoding_with_session_cache(enc, session_cache)
     exact = _exact_restricted_hilbert(enc2; opts=opts, kwargs...)
     exact === nothing || return exact
-    return _call_invariant(Invariants.restricted_hilbert, enc2, opts; kwargs...)
+    return _run_workflow_operation(_call_invariant, Invariants.restricted_hilbert,
+                                   enc2, opts; kwargs...)
 end
 
 restricted_hilbert(enc::CohomologyDimsResult; opts::InvariantOptions=InvariantOptions(), kwargs...) =

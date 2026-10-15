@@ -49,4 +49,12 @@ include("field_linalg/sparse_rref.jl")
 include("field_linalg/qq_engine.jl")
 include("field_linalg/public_api.jl")
 
+import ..CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:rational_factors, _FULLCOLUMN_FACTOR_CACHE; retention=:weak_matrix)
+_register_runtime_cache!(:nemo_rational_factors, _NEMO_FULLCOLUMN_FACTOR_CACHE_QQ; retention=:weak_matrix)
+_register_runtime_cache!(:nemo_prime_factors, _NEMO_FULLCOLUMN_FACTOR_CACHE_FP; retention=:weak_matrix)
+_register_runtime_cache!(:f2_factors, _F2_FULLCOLUMN_FACTOR_CACHE; retention=:weak_matrix)
+_register_runtime_cache!(:f3_factors, _F3_FULLCOLUMN_FACTOR_CACHE; retention=:weak_matrix)
+_register_runtime_cache!(:floating_sparse_factors, _FLOAT_SPARSE_FACTOR_CACHE; retention=:bounded)
+
 end # module FieldLinAlg

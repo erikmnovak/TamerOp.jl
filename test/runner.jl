@@ -10,6 +10,7 @@ const _TEST_FILES = (
     "test_finite_fringe.jl",
     "test_encoding.jl",
     "test_poset_interface.jl",
+    "test_cache_lifecycle.jl",
     "test_zn_backend.jl",
     "test_pl_backend.jl",
     "test_geometry.jl",
@@ -19,6 +20,13 @@ const _TEST_FILES = (
     "test_cohomology_products.jl",
     "test_incremental_persistence.jl",
     "test_zigzag_persistence.jl",
+    "test_temporal_persistence.jl",
+    "test_morphism_matchings.jl",
+    "test_graphcodes.jl",
+    "test_end_curves.jl",
+    "test_reduction_trace.jl",
+    "test_rank_exact.jl",
+    "test_jordan_invariants.jl",
     "test_interleavings.jl",
     "test_pruning.jl",
     "test_visualization_a101.jl",
@@ -30,6 +38,7 @@ const _TEST_FILES = (
     "test_chain_complexes_homology.jl",
     "test_functoriality_ext_tor_maps.jl",
     "test_invariants.jl",
+    "test_signed_transport.jl",
     "test_interval_decompositions.jl",
     "test_indecomposable_decompositions.jl",
     "test_visualization.jl",
@@ -67,6 +76,9 @@ const _TEST_FILES = (
     "test_visualization_a128.jl",
     "test_visualization_a96.jl",
     "test_visualization_a124.jl",
+    "test_visualization_a129.jl",
+    "test_visualization_a40_classes.jl",
+    "test_visualization_a55.jl",
     "test_visualization_a41_slices.jl",
     "test_visualization_a41_intervals.jl",
     "test_visualization_a41_sessions.jl",
@@ -237,7 +249,17 @@ function _has_candidate(expr, prefixes)
     return any(argument -> _has_candidate(argument, prefixes), expr.args)
 end
 
-function _select_expression(expr, state::_SelectionState, inherited=false)
+function _log_testset(state::_SelectionState, phase, name, file; elapsed=nothing)
+    lock(state.lock) do
+        print(stdout, phase, " testset ", repr(name), "; file=", repr(file))
+        elapsed === nothing || print(stdout, "; elapsed_seconds=", elapsed)
+        println(stdout)
+        flush(stdout)
+    end
+    return nothing
+end
+
+function _select_expression(expr, state::_SelectionState, inherited=false; file="")
     expr isa Expr || return expr
     expr.head in (:quote, :inert) && return expr
     if _is_testset(expr)
@@ -246,11 +268,11 @@ function _select_expression(expr, state::_SelectionState, inherited=false)
         inherited === false && !_has_candidate(expr, state.prefixes) && return :(nothing)
         index = _name_index(expr)
         name = expr.args[index]
-        runtime_name, selected = gensym(:test_name), gensym(:test_selected)
+        runtime_name, selected, started = gensym(:test_name), gensym(:test_selected), gensym(:test_started)
         transformed = copy(expr)
         transformed.args[index] = Expr(:string, runtime_name)
         child_inherited = inherited === false && !_possible_name(name, state.prefixes) ? false : selected
-        transformed.args[end] = _select_expression(expr.args[end], state, child_inherited)
+        transformed.args[end] = _select_expression(expr.args[end], state, child_inherited; file)
         has_child = _has_candidate(expr.args[end], state.prefixes)
         # Evaluate the description once, in its original lexical field/loop
         # context. Matching a parent executes all its children. Selecting a
@@ -259,19 +281,27 @@ function _select_expression(expr, state::_SelectionState, inherited=false)
             let $runtime_name = $name,
                 $selected = $(GlobalRef(@__MODULE__, :_match!))($state, $runtime_name) | $inherited
                 if $selected || $has_child
-                    $transformed
+                    $(GlobalRef(@__MODULE__, :_log_testset))($state, "RUN", $runtime_name, $file)
+                    local $started = $(GlobalRef(Base, :time_ns))()
+                    try
+                        $transformed
+                    finally
+                        $(GlobalRef(@__MODULE__, :_log_testset))($state, "END", $runtime_name, $file;
+                            elapsed=($(GlobalRef(Base, :time_ns))() - $started) / 1.0e9)
+                    end
                 end
             end
         end
     end
-    return Expr(expr.head, map(argument -> _select_expression(argument, state, inherited), expr.args)...)
+    return Expr(expr.head, map(argument -> _select_expression(argument, state, inherited; file), expr.args)...)
 end
 
 function _include_test_file(target::Module, path, state::_SelectionState)
-    if isempty(state.prefixes)
-        return Base.include(target, path)
-    end
-    return Base.include(expr -> _select_expression(expr, state), target, path)
+    # Without a filter, every named group inherits selection. END marks the end
+    # of execution, including exceptional exits; the Test summary decides pass
+    # or failure. Parent durations include their children and are not additive.
+    return Base.include(expr -> _select_expression(expr, state, isempty(state.prefixes);
+                                                  file=basename(path)), target, path)
 end
 
 end # module

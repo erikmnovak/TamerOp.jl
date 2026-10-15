@@ -2737,4 +2737,7 @@ function cross_validate(fr::Flange; margin=1,
     return ok, report
 end
 
+import ..CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:flange_degree_workspace, _DEGREE_SCRATCH)
+
 end # module

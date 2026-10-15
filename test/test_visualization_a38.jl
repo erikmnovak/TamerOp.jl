@@ -43,6 +43,23 @@
         @test E._visual_update_retained!(M,V,H,tickstate,tickspec(nothing))
         @test only(tickstate.panels).axis.xticks[]===M.automatic
         empty!(tickstate.figure)
+        # A changing annotation suffix must leave the heatmap connected to its
+        # colorbar, including in an explicitly positioned spanning panel.
+        heatpanel(extra,upper)=V.VisualizationSpec(:retained_heatmap;
+            layers=V.AbstractVisualizationLayer[V.HeatmapLayer([0.,2.,5.],[1.,4.,9.],
+                [0. upper;1. 2.],:viridis,1.,"value");extra],metadata=(;colorrange=(0.,upper)))
+        heatfigure(extra,upper)=V.VisualizationSpec(:retained_layout;
+            panels=[heatpanel(extra,upper)],metadata=(;panel_positions=[(1:1,1:2)],panel_row_weights=[1.]))
+        heatstate=E._visual_retained_figure(M,V,H,heatfigure(V.AbstractVisualizationLayer[],4.))
+        heat=only(heatstate.panels).plots[1]
+        bar=only(b for b in heatstate.figure.content if b isa M.Colorbar)
+        decorated=heatfigure([V.TextLayer(["+"],[(1.,2.)],:white,12.)],7.)
+        @test E._visual_update_retained!(M,V,H,heatstate,decorated;replace_plots=true)
+        @test only(heatstate.panels).plots[1]===heat
+        @test Tuple(bar.limits[])==(0.,7.)
+        @test E._visual_update_retained!(M,V,H,heatstate,heatfigure(V.AbstractVisualizationLayer[],3.);replace_plots=true)
+        @test Tuple(bar.limits[])==(0.,3.)
+        empty!(heatstate.figure)
         # Selection decorations appear/disappear without replacing any plot.
         matching=V.inspection_session([(0.,2.),(3.,6.),(9.,Inf)],[(0.,3.),(4.,7.),(10.,Inf)])
         drawing(s)=V.VisualizationSpec(:matching_canvas;panels=filter(p->get(p.metadata,:panel_style,nothing)!==:text_only,V.inspection_snapshot(s).panels),metadata=(;panel_columns=2))

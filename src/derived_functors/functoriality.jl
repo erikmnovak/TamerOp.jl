@@ -2954,4 +2954,12 @@ module Functoriality
               "\n  last_entry: ", repr(d.last_entry))
     end
 
+import ...CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:hom_solve_workspaces, _HOM_SOLVE_WORKSPACE_CACHE; retention=:until_reset, cache_lock=_HOM_SOLVE_WORKSPACE_LOCK)
+_register_runtime_cache!(:hom_basis_solve_plans, _HOM_BASIS_SOLVE_PLAN_CACHE; retention=:until_reset, cache_lock=_HOM_BASIS_SOLVE_PLAN_LOCK)
+_register_runtime_cache!(:support_solve_plans, _SUPPORT_SOLVE_PLAN_CACHE; retention=:until_reset, cache_lock=_SUPPORT_SOLVE_PLAN_LOCK)
+_register_runtime_cache!(:coefficient_map_plans, _COEFF_MAP_PLAN_CACHE; retention=:until_reset, cache_lock=_COEFF_MAP_PLAN_LOCK)
+_register_runtime_cache!(:tensor_coefficient_plans, _TENSOR_COEFF_PLAN_CACHES; retention=:weak_owner, cache_lock=_TENSOR_COEFF_PLAN_CACHE_LOCK)
+_register_runtime_cache!(:tensor_coefficient_results, _TENSOR_COEFF_RESULT_CACHES; retention=:weak_owner, cache_lock=_TENSOR_COEFF_RESULT_CACHE_LOCK)
+
 end

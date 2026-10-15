@@ -10,7 +10,7 @@ using ..Options: FiltrationSpec, ConstructionBudget, ConstructionOptions, DataFi
                  DerivedFunctorOptions, ModuleOptions, _option_describe
 using ..DataTypes: PointCloud, GraphData, EmbeddedPlanarGraph2D, GradedComplex,
                    MultiCriticalGradedComplex, SimplexTreeMulti, _datatype_describe
-using ..FiniteFringe: FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset, RegionsPoset,
+using ..FiniteFringe: OppositePoset, FinitePoset, ProductOfChainsPoset, GridPoset, ProductPoset, RegionsPoset,
                       Upset, Downset, FringeModule, _fringe_describe, _fringe_dimensions
 using ..IndicatorTypes: UpsetPresentation, DownsetCopresentation, _indicator_describe
 using ..FlangeZn: Face, IndFlat, IndInj, Flange, _flange_describe
@@ -40,6 +40,8 @@ function representatives end
 function coordinates end
 function image_basis end
 function describe end
+import ..CoreModules: SessionCache, session_cache_summary
+describe(session::SessionCache) = session_cache_summary(session)
 import ..AbelianCategories
 describe(r::AbelianCategories.VectorPropagation) = AbelianCategories.propagation_summary(r)
 dimensions(r::AbelianCategories.VectorPropagation) = copy(r.image_dimensions)
@@ -125,6 +127,7 @@ ambient size, support, presentation sizes, and cached summary quantities without
 requiring direct field inspection.
 """
 describe(P::FinitePoset) = _fringe_describe(P)
+describe(P::OppositePoset) = _fringe_describe(P)
 describe(P::ProductOfChainsPoset) = _fringe_describe(P)
 describe(P::GridPoset) = _fringe_describe(P)
 describe(P::ProductPoset) = _fringe_describe(P)

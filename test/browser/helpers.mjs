@@ -23,17 +23,21 @@ export async function openInspector(page, url, errors) {
 // actual sequential focus navigation, independently of canvas pointer picking.
 export async function checkKeyboardControls(page) {
   const controls = page.locator('input[id^="tamerop-"]:visible:enabled, select[id^="tamerop-"]:visible:enabled, button[id^="tamerop-"]:visible:enabled');
-  const count = await controls.count();
+  // Read the unchanged control typography in one browser evaluation. Repeating
+  // locator evaluations also repeatedly snapshots large WebGL document trees.
+  const sizing = await controls.evaluateAll(elements => elements.map(el => ({
+    id: el.id,
+    actual: parseFloat(getComputedStyle(el).fontSize),
+    intended: parseFloat(getComputedStyle(el.parentElement.closest('div[id^="tamerop-"]')).fontSize),
+  })));
+  const count = sizing.length;
   expect(count).toBeGreaterThan(0);
   const pending = new Set();
-  for (const element of await controls.all()) {
+  for (const [index, size] of sizing.entries()) {
+    const element = controls.nth(index);
     await expect(element).toHaveAccessibleName(/\S/);
-    const sizing = await element.evaluate(el => ({
-      actual: parseFloat(getComputedStyle(el).fontSize),
-      intended: parseFloat(getComputedStyle(el.parentElement.closest('div[id^="tamerop-"]')).fontSize),
-    }));
-    expect(sizing.actual, 'Controls must retain the inspector typography after embedding').toBeCloseTo(sizing.intended, 3);
-    pending.add(await element.getAttribute('id'));
+    expect(size.actual, 'Controls must retain the inspector typography after embedding').toBeCloseTo(size.intended, 3);
+    pending.add(size.id);
   }
   await controls.first().focus();
   // Named chart/table scroll containers also belong in the tab order.

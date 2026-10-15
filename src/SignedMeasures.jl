@@ -12,6 +12,7 @@ Owner module for signed-measure style multiparameter invariants, including:
 
 - Euler characteristic surfaces and Euler signed measures on finite grids
 - signed point measures and their kernels
+- balanced finite signed transport, projected comparisons and sampled convolution
 - signed rectangle barcodes and their derived summaries
 - MMA-style wrappers that package those signed outputs together
 
@@ -3995,5 +3996,13 @@ function mma_decomposition(obj, pi, opts::InvariantOptions;
     session_cache === nothing || (surf = copy(surf))
     return SignedMeasureDecomposition(; euler_surface = surf, euler_signed_measure = pm)
 end
+
+include("signed_measures/transport.jl")
+include("signed_measures/convolution.jl")
+
+import ..CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:signed_rectangle_queries, _SIGNED_MEASURES_RQ_RECT_CACHES; retention=:weak_owner, cache_lock=_SIGNED_MEASURES_RQ_RECT_CACHE_LOCK)
+_register_runtime_cache!(:signed_tensor_queries, _SIGNED_MEASURES_RQ_TENSOR_CACHES; retention=:weak_owner, cache_lock=_SIGNED_MEASURES_RQ_TENSOR_CACHE_LOCK)
+_register_runtime_cache!(:rectangle_embeddings, _RECT_BARCODE_EMBEDDING_CACHE; retention=:bounded, cache_lock=_RECT_BARCODE_EMBEDDING_CACHE_LOCK)
 
 end # module SignedMeasures

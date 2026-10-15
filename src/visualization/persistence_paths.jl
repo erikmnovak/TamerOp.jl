@@ -332,9 +332,16 @@ function check_persistence_path(p::PersistencePath;throw=false)
         end
         if p.mode===:certified
             p.native===nothing && error("Missing native construction.")
-            q=persistence_path(p.geometry===nothing ? p.native.complex : p.geometry;
-                grades=p.native.grades,parameters=p.native.parameters,degree=p.degree,field=p.field,order=p.order,
-                representatives=p.native.representatives,budget=p.native.budget,p.limits...)
+            q=if haskey(p.native,:slice_scalarization)
+                line=p.native.slice_scalarization
+                slice_path(line.source;basepoints=line.basepoints,direction=line.direction,parameters=line.parameters,
+                    degree=p.degree,field=p.field,representatives=p.native.representatives,budget=p.native.budget,
+                    max_frames=p.limits.max_frames,max_records=p.limits.max_records)
+            else
+                persistence_path(p.geometry===nothing ? p.native.complex : p.geometry;
+                    grades=p.native.grades,parameters=p.native.parameters,degree=p.degree,field=p.field,order=p.order,
+                    representatives=p.native.representatives,budget=p.native.budget,p.limits...)
+            end
             q.frames==p.frames && q.transitions==p.transitions || error("Stored path disagrees with native continuation.")
         else
             p.native===nothing || error("Supplied path claims a native certificate.")

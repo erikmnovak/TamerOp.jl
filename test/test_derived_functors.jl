@@ -1170,6 +1170,33 @@ end
     @test_throws ErrorException MD.check_morphism_data(M, M, [spzeros(K, 1, 1), sparse([1], [1], [one(K)], 2, 1)]; throw=true)
 end
 
+@testset "A131 workflow boundaries preserve maps and representatives" begin
+    # M = S_1^2 + S_2^2 on a two-vertex chain. Its endomorphism space has
+    # dimension 8, and Ext^1(M,M) has dimension 4 over every tested field.
+    for field in FIELDS_FULL
+        K = CM.coeff_type(field)
+        sc = CM.SessionCache()
+        for P in (FF.FinitePoset(Bool[1 1; 0 1]), FF.ProductOfChainsPoset((2,)))
+            M = MD.PModule{K}(P, [2,2], Dict((1,2) => zeros(K,2,2)); field=field)
+            for cache in (nothing, :auto, sc)
+                H = TamerOp.hom(M, M; cache=cache)
+                maps = DF.basis(H)
+                @test DF.dim(H) == length(maps) == 8
+                @test all(f -> MD.check_morphism(f; throw=true).valid, maps)
+                for model in (:projective, :injective, :unified)
+                    E = TamerOp.ext(M, M; maxdeg=1, model=model, cache=cache)
+                    @test [DF.dim(E,t) for t in 0:1] == [8,4]
+                    c = K[CM.coerce(field,x) for x in (1,0,1,1)]
+                    z = DF.representative(E, 1, c)
+                    @test DF.coordinates(E, 1, z) == c
+                    @test_throws ArgumentError DF.dim(E, 2)
+                end
+            end
+        end
+        empty!(sc)
+    end
+end
+
 @testset "Derived functors across fields (A2)" begin
     P = chain_poset(2)
     U1 = FF.principal_upset(P, 1)
@@ -5033,4 +5060,21 @@ end
     @test TamerOp.betti_table === TamerOp.Workflow.betti_table
     @test TamerOp.rank_map === TamerOp.Workflow.rank_map
     @test TOA.rank_map === TamerOp.rank_map
+end
+
+@testset "A49 transported resolutions compute the diamond Ext relation" begin
+    with_fields(FIELDS_FULL) do field
+        P=diamond_poset();Q=FF.opposite_poset(P)
+        simple(v)=IR.pmodule_from_fringe(one_by_one_fringe(P,
+            FF.principal_upset(P,v),FF.principal_downset(P,v);field=field))
+        M=simple(1);N=simple(4)
+        R=DF.projective_resolution(M,OPT.ResolutionOptions(maxlen=3);threads=false)
+        DR=MD.pointwise_dual(R;opposite=Q)
+        DN=MD.pointwise_dual(N;opposite=Q)
+        E=DF.Ext(R,N;maxdeg=2,threads=false)
+        DE=DF.ExtInjective(DN,DR;maxdeg=2,threads=false)
+        @test [DF.dim(E,t) for t=0:2]==[0,0,1]
+        @test [DF.dim(DE,t) for t=0:2]==[0,0,1]
+        @test DF.check_injective_resolution(DR).valid
+    end
 end

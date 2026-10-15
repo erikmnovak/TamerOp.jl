@@ -101,7 +101,7 @@ function _inspection_initial_state(capabilities; view, upset, downset, slice=not
         throw(ArgumentError(capabilities.slice_unavailable_reason))
     return (; vertex=nothing, pair=nothing, query_points=(), parameter_relation=:not_applicable,
         selector=:none, input=:provided, revision=0, view, basis=false, upset=u, downset=d,
-        slice=chosen_slice, slice_scope, interval=nothing)
+        slice=chosen_slice, slice_scope, interval=nothing, member=1, class_parameter=nothing, class_anchor=nothing)
 end
 
 function _inspection_graph(obj, prepared, state)
@@ -173,6 +173,7 @@ function _inspection_build_snapshot(obj, prepared, state, graph, algebra, matrix
         panels=spec.panels, axes=spec.axes, legend=spec.legend,
         interaction=spec.interaction, metadata)
     slice_result === nothing || (result = _inspection_slice_snapshot(result, slice_result, state.interval))
+    result = _inspection_class_snapshot(result,obj,prepared,slice_result,state)
     check_visual_spec(result; throw=true)
     return result
 end
@@ -222,6 +223,18 @@ global request rather than being inferred zero or essential. Unrepresented label
 rejected. Slice work may materialize the module. `slice_limit` bounds event
 strata before the quadratic barcode rank calculation. Reopen with a larger
 limit or a smaller box if that budget is exceeded.
+Opt in with `slice_classes=true` to retain exact interval bases over QQ or a
+prime field. `member` selects a multiplicity member and `class_parameter` selects
+a point where it is alive. `pin_class=true` retains that vector while the line
+changes. `slice_correspondence` reports equal images at the common upper
+parameter, including zero images and nonunique preimages. This is a based
+linear relation, not a canonical identity of entire intervals.
+
+`source_basis=source_homology_basis(source; degree, basis)` additionally checks
+source cycles, completeness and compatibility with requested maps. Missing
+bases are never reconstructed from dimensions. `class_budget` bounds retained
+coordinates and algebra; interval selection reuses the existing decomposition.
+
 Polyhedral encodings currently require rational line and viewport coordinates;
 integer and finite floating inputs are preserved as exact rationals. Irrational
 algebraic coordinates remain supported for box and positively oriented grid
@@ -229,7 +242,16 @@ encodings, whose classifiers retain them exactly.
 """
 function inspection_session(obj::Union{Modules.PModule,EncodingResult}; view=:module,
                             box=nothing, matrix_limit=(12,12), cache_limit=16,
-                            upset=nothing, downset=nothing, slice=nothing, slice_scope=:window, slice_limit=512)
+                            upset=nothing, downset=nothing, slice=nothing, slice_scope=:window, slice_limit=512,
+                            slice_classes=false, source_basis=nothing,
+                            class_budget=ZigzagPersistence.ZigzagBudget())
+    class_budget isa ZigzagPersistence.ZigzagBudget || throw(ArgumentError("class_budget must be a ZigzagBudget."))
+    slice_classes isa Bool || throw(ArgumentError("slice_classes must be Bool."))
+    source_basis===nothing || source_basis isa DataIngestion.SourceHomologyBasis ||
+        throw(ArgumentError("source_basis must come from source_homology_basis."))
+    source_basis===nothing || slice_classes || throw(ArgumentError("source_basis requires slice_classes=true."))
+    source_basis===nothing || (DataTypes.parameter_dim(source_basis.source.complex)==2 && source_basis.source.orientation==(1,1)) ||
+        throw(ArgumentError("Slice source coordinates require a positively oriented planar source filtration."))
     view isa Symbol || throw(ArgumentError("view must name an available inspection view."))
     (matrix_limit isa Tuple || matrix_limit isa AbstractVector) && length(matrix_limit) == 2 ||
         throw(ArgumentError("matrix_limit must contain row and column counts."))
@@ -238,6 +260,8 @@ function inspection_session(obj::Union{Modules.PModule,EncodingResult}; view=:mo
     capacity = _inspection_integer(cache_limit, :cache_limit)
     stratum_limit = _inspection_integer(slice_limit, :slice_limit; lower=1)
     prepared, capabilities = _inspection_prepare(obj, box)
+    prepared=merge(prepared,(;slice_classes,source_basis,class_budget))
+    capabilities=merge(capabilities,(;slice_classes,source_basis_available=source_basis!==nothing))
     state = _inspection_initial_state(capabilities; view, upset, downset, slice, slice_scope)
     if state.slice !== nothing
         state = merge(state, (; slice=_inspection_slice_coordinates(obj, state.slice, prepared.geometry.box)))
@@ -333,7 +357,8 @@ end
 function _inspection_candidate(s; vertex=nothing, pair=nothing, point=nothing,
                                parameter_pair=nothing, view=nothing, basis=nothing,
                                upset=nothing, downset=nothing, input=:provided,
-                               slice=nothing, slice_scope=nothing, interval=nothing)
+                               slice=nothing, slice_scope=nothing, interval=nothing,
+                               member=nothing, class_parameter=nothing, pin_class=false, clear_class=false)
     _inspection_require_open(s)
     input isa Symbol && input in (:provided, :pointer) || throw(ArgumentError("input must be :provided or :pointer."))
     selected_view = view === nothing ? s.state.view : view
@@ -377,11 +402,24 @@ function _inspection_candidate(s; vertex=nothing, pair=nothing, point=nothing,
     chosen_interval === nothing || chosen_slice !== nothing ||
         throw(ArgumentError("An interval selection requires an active slice."))
     !changed_slice && _inspection_slice_validate_interval(s.slice_result, chosen_interval)
+    pin_class isa Bool && clear_class isa Bool || throw(ArgumentError("Class pin controls must be Bool."))
+    s.prepared.slice_classes || (member===nothing && class_parameter===nothing && !pin_class && !clear_class) ||
+        throw(ArgumentError("Class controls require slice_classes=true."))
+    pin_class && clear_class && throw(ArgumentError("Choose pin_class or clear_class."))
+    chosen_member=member===nothing ? (changed_slice || chosen_interval!=s.state.interval ? 1 : s.state.member) : _inspection_integer(member,:member;lower=1)
+    chosen_parameter=class_parameter===nothing ? s.state.class_parameter : _visual_exact_coordinate(class_parameter)
+    anchor=clear_class ? nothing : s.state.class_anchor
+    if pin_class
+        s.prepared.slice_classes || throw(ArgumentError("Open with slice_classes=true before pinning a class."))
+        changed_slice && throw(ArgumentError("Pin the selected class before changing the slice."))
+        anchor=_slice_class_vector(s.slice_result,chosen_interval,chosen_member,chosen_parameter)
+    end
     return (; vertex=chosen.vertex, pair=chosen.pair, query_points=Tuple(chosen.query_points),
         parameter_relation=chosen.parameter_relation, selector,
         input=isempty(supplied) ? s.state.input : input,
         revision=s.state.revision + 1, view=selected_view, basis=chosen_basis,
-        upset=chosen_upset, downset=chosen_downset, slice=chosen_slice, slice_scope=chosen_scope, interval=chosen_interval)
+        upset=chosen_upset, downset=chosen_downset, slice=chosen_slice, slice_scope=chosen_scope, interval=chosen_interval,
+        member=chosen_member,class_parameter=chosen_parameter,class_anchor=anchor)
 end
 
 """
@@ -579,7 +617,7 @@ reusable. The revision increases and listeners are notified.
 function reset_inspection!(s::InspectionSession)
     return _inspection_update!(s, () -> merge(s.state,
         (; vertex=nothing, pair=nothing, query_points=(), parameter_relation=:not_applicable,
-            selector=:none, input=:provided, basis=false, interval=nothing,
+            selector=:none, input=:provided, basis=false, interval=nothing, member=1, class_parameter=nothing, class_anchor=nothing,
             revision=s.state.revision + 1)))
 end
 

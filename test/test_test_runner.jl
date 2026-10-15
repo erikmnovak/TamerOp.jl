@@ -1,6 +1,6 @@
 # Synthetic fixtures verify selection semantics without loading a second copy
 # of TamerOp or duplicating the suite bootstrap.
-function _runner_fixture(source, prefixes)
+function _runner_fixture(source, prefixes; output=stdout)
     target = Module(gensym(:RunnerFixture))
     Core.eval(target, :(using Test))
     Core.eval(target, :(include(path) = Base.include(@__MODULE__, path)))
@@ -10,9 +10,94 @@ function _runner_fixture(source, prefixes)
         write(joinpath(directory, "helper.jl"), "fixture_helper() = 17\n")
         path = joinpath(directory, "fixture.jl")
         write(path, source)
-        TamerOpTestRunner._include_test_file(target, path, state)
+        redirect_stdout(output) do
+            TamerOpTestRunner._include_test_file(target, path, state)
+        end
     end
     return Base.invokelatest(getfield, target, :events), state
+end
+
+@testset "A17 named testset timing" begin
+    source = raw"""
+    const names_evaluated = Ref(0)
+    group_name(field) = (names_evaluated[] += 1; "Parent " * field)
+    for field in ("QQ", "F3")
+        Test.@testset "$(group_name(field))" verbose=true begin
+            started = :fixture
+            selected = :fixture
+            @test started === selected
+            push!(events, "parent:" * field)
+            @testset "Keep $(field)" begin
+                push!(events, "keep:" * field)
+                @test true
+            end
+            @testset "Discard $(field)" begin
+                push!(events, "discard:" * field)
+                @test true
+            end
+        end
+    end
+    push!(events, "names:" * string(names_evaluated[]))
+    quoted = quote
+        @testset "Quoted group" begin error("must remain data") end
+    end
+    """
+    for prefixes in (String[], ["Keep F3"])
+        mktemp() do _, output
+            events, _ = _runner_fixture(source, prefixes; output)
+            @test last(events) == "names:2"
+            expected = isempty(prefixes) ?
+                ["parent:QQ", "keep:QQ", "discard:QQ", "parent:F3", "keep:F3", "discard:F3", "names:2"] :
+                ["parent:QQ", "parent:F3", "keep:F3", "names:2"]
+            @test events == expected
+            seekstart(output)
+            lines = split(read(output, String), '\n'; keepempty=false)
+            pending = String[]
+            started = String[]
+            for line in lines
+                start = match(r"^RUN testset (.*); file=\"fixture.jl\"$", line)
+                finish = match(r"^END testset (.*); file=\"fixture.jl\"; elapsed_seconds=(.*)$", line)
+                @test start !== nothing || finish !== nothing
+                if start !== nothing
+                    push!(pending, start[1]); push!(started, start[1])
+                elseif finish !== nothing
+                    @test !isempty(pending)
+                    @test pop!(pending) == finish[1]
+                    duration = parse(Float64, finish[2])
+                    @test isfinite(duration) && duration >= 0
+                end
+            end
+            @test isempty(pending)
+            names = isempty(prefixes) ?
+                ["Parent QQ", "Keep QQ", "Discard QQ", "Parent F3", "Keep F3", "Discard F3"] :
+                ["Parent QQ", "Parent F3", "Keep F3"]
+            @test started == repr.(names)
+        end
+    end
+
+    # Construction errors escape Test's body handler. Timing must close its
+    # record and preserve that exception rather than report a successful run.
+    mktemp() do _, output
+        source = raw"""
+        @testset "Constructor error" verbose=error("timing sentinel") begin
+            push!(events, "must not run")
+        end
+        """
+        failure = try
+            _runner_fixture(source, String[]; output)
+            nothing
+        catch err
+            err
+        end
+        @test failure isa LoadError
+        @test occursin("timing sentinel", sprint(showerror, failure))
+        seekstart(output)
+        lines = split(read(output, String), '\n'; keepempty=false)
+        @test length(lines) == 2
+        @test startswith(first(lines), "RUN testset \"Constructor error\"")
+        @test startswith(last(lines), "END testset \"Constructor error\"")
+        @test occursin("elapsed_seconds=", last(lines))
+    end
 end
 
 @testset "A17 maintained test runner contracts" begin

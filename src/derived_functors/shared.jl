@@ -156,6 +156,11 @@ function clear_hom_system_cache!(cache::HomSystemCache)
     return nothing
 end
 
+import ..CoreModules: _session_helper_counts
+_session_helper_counts(cache::HomSystemCache) = lock(cache.lock) do
+    (hom=length(cache.hom), precompose=length(cache.precompose), postcompose=length(cache.postcompose))
+end
+
 @inline _cache_key2(a, b) = _HomKey2(UInt(objectid(a)), UInt(objectid(b)))
 @inline _cache_key3(a, b, c) = _HomKey3(UInt(objectid(a)), UInt(objectid(b)), UInt(objectid(c)))
 

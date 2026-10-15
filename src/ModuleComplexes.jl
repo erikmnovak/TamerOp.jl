@@ -36,7 +36,7 @@ using LinearAlgebra
 using SparseArrays
 import Base.Threads
 
-using ..CoreModules: _append_scaled_triplets!, AbstractCoeffField, coeff_type
+using ..CoreModules: _append_scaled_triplets!, AbstractCoeffField, RealField, coeff_type
 import ..CoreModules: change_field
 using ..Options: ResolutionOptions
 using ..FieldLinAlg
@@ -49,6 +49,7 @@ using ..Modules: PModule, PMorphism, id_morphism,
                  _coerce_morphism_on_modules,
                  _coefficient_products_equal, _coefficient_product_zero
 
+import ..Modules: pointwise_dual, _pointwise_dual, _dual_morphism
 import ..IndicatorResolutions
 import ..AbelianCategories
 import ..ChainComplexes
@@ -1477,6 +1478,35 @@ function cohomology_module_data(C::ModuleCochainComplex{K}, t::Int) where {K}
     return (Z=Z, iZ=iZ, B=B, iB=iB, j=j, H=H, q=q)
 end
 
+function _cohomology_stalk(field, A, B, n::Int)
+    K = coeff_type(field)
+    n == 0 && return (Z=zeros(K,0,0), q=zeros(K,0,0), lift=zeros(K,0,0))
+    Z = AbelianCategories._is_partial_permutation(field,B) ?
+        AbelianCategories._kernel_basis_partial_permutation(K,B) : FieldLinAlg.nullspace(field,B)
+    boundaries = FieldLinAlg.colspace(field, A)
+    J = FieldLinAlg.solve_fullcolumn(field, Z, boundaries; check_rhs=field isa RealField)
+    q = AbelianCategories._is_partial_permutation(field,J) ?
+        AbelianCategories._cokernel_q_partial_permutation(K,J) :
+        Matrix{K}(transpose(FieldLinAlg.nullspace(field,transpose(J))))
+    rows = AbelianCategories._selector_rows_from_basis(field,transpose(q))
+    lift = rows === nothing ? FieldLinAlg._matmul(Z,AbelianCategories._right_inverse_full_row(field,q)) : Z[:,rows]
+    return (Z=Z, q=q, lift=lift)
+end
+
+function _cohomology_module_frames(C::ModuleCochainComplex{K}, t::Int) where {K}
+    M = _term(C,t)
+    A, B = _diff(C,t-1), _diff(C,t)
+    frames = [_cohomology_stalk(M.field, A.comps[v], B.comps[v], M.dims[v])
+              for v in 1:nvertices(M.Q)]
+    dims = [size(F.q,1) for F in frames]
+    maps = Dict{Tuple{Int,Int},Matrix{K}}()
+    for (u,v) in cover_edges(M.Q)
+        maps[u,v] = FieldLinAlg._matmul(frames[v].q,FieldLinAlg.solve_fullcolumn(M.field,
+            frames[v].Z, FieldLinAlg._matmul(M.edge_maps[u,v],frames[u].lift); check_rhs=false))
+    end
+    return PModule{K}(M.Q, dims, maps; field=M.field), frames
+end
+
 """
     cohomology_module(C, t) -> PModule
 
@@ -1485,36 +1515,74 @@ Return the cohomology module `H^t(C)` in degree `t`.
 This is the cheap canonical path for module-valued cohomology when you do not
 need cycle, boundary, or quotient witness maps. Use
 [`cohomology_module_data`](@ref) only when the heavier quotient data is
-mathematically necessary.
+mathematically necessary. Coordinates are chosen internally;
+`induced_map_on_cohomology_modules` uses the same choices. Compare separately
+constructed quotient models through their maps, rather than assuming identical
+basis coordinates.
 """
-cohomology_module(C::ModuleCochainComplex{K}, t::Int) where {K} = cohomology_module_data(C,t).H
+cohomology_module(C::ModuleCochainComplex, t::Int) = first(_cohomology_module_frames(C,t))
 
-# induced map on cohomology modules
+# Use the same stalk frames as cohomology_module, including for the endpoints.
 function induced_map_on_cohomology_modules(f::ModuleCochainMap{K}, t::Int) where {K}
-    field = _field_of_complex(f.C)
-    Cd = cohomology_module_data(f.C,t)
-    Dd = cohomology_module_data(f.D,t)
+    return _induced_cohomology_map(f.C, f.D, _map(f,t), t)
+end
 
-    ft = _map(f,t)
-    Q = poset(f.C)
-    compsH = Vector{Matrix{K}}(undef, nvertices(Q))
-    @inbounds for u in 1:nvertices(Q)
-        rhsZ = ft.comps[u] * Cd.iZ.comps[u]
-        if Dd.Z.dims[u] == 0
-            compsH[u] = zeros(K, Dd.H.dims[u], Cd.H.dims[u])
-        else
-            z_to_z = FieldLinAlg.solve_fullcolumn(field, Dd.iZ.comps[u], rhsZ)
-            rhsH = Dd.q.comps[u] * z_to_z
-            qC = Cd.q.comps[u]
-            if size(qC, 1) == 0
-                compsH[u] = zeros(K, size(rhsH, 1), 0)
-            else
-                rinv = AbelianCategories._right_inverse_full_row(field, qC)
-                compsH[u] = rhsH * rinv
-            end
-        end
-    end
-    return PMorphism{K}(Cd.H, Dd.H, compsH)
+# Derived pushforwards can supply validated term maps without constructing a
+# second cochain-map wrapper. Keep their quotient coordinates identical.
+function _induced_cohomology_map(C::ModuleCochainComplex{K}, D::ModuleCochainComplex{K},
+                                 ft::PMorphism{K}, t::Int) where {K}
+    H, Cframes = _cohomology_module_frames(C,t)
+    J, Dframes = _cohomology_module_frames(D,t)
+    comps = [FieldLinAlg._matmul(Dframes[v].q,FieldLinAlg.solve_fullcolumn(H.field,
+             Dframes[v].Z,FieldLinAlg._matmul(ft.comps[v],Cframes[v].lift); check_rhs=false))
+             for v in 1:nvertices(H.Q)]
+    return PMorphism{K}(H, J, comps)
+end
+
+"""
+    pointwise_dual(C::ModuleCochainComplex; opposite=opposite_poset(poset(C)))
+
+Return the cochain complex with `(D C)^t = D(C^(-t))` and
+`d_(DC)^t = transpose(d_C^(-t-1))`. This unsigned degree-reversal convention
+squares to the original complex. Its cohomology is naturally dual to
+`H^(-t)(C)` over the opposite finite poset; no ambient grading shift is used.
+"""
+function pointwise_dual(C::ModuleCochainComplex{K};
+                        opposite::AbstractPoset=FiniteFringe.opposite_poset(poset(C))) where {K}
+    FiniteFringe._check_opposite_poset(poset(C), opposite)
+    terms = [_pointwise_dual(M, opposite) for M in reverse(C.terms)]
+    diffs = [_dual_morphism(C.diffs[end-i+1], terms[i], terms[i+1])
+             for i in eachindex(C.diffs)]
+    return ModuleCochainComplex(terms, PMorphism{K}[diffs...]; tmin=-C.tmax, check=false)
+end
+
+function pointwise_dual(f::ModuleCochainMap{K};
+                        opposite::AbstractPoset=FiniteFringe.opposite_poset(poset(f.C))) where {K}
+    C = pointwise_dual(f.D; opposite=opposite)
+    D = f.C === f.D ? C : pointwise_dual(f.C; opposite=opposite)
+    comps = PMorphism{K}[_dual_morphism(_map(f,-t), _term(C,t), _term(D,t))
+                         for t in -f.tmax:-f.tmin]
+    return ModuleCochainMap(C, D, comps; tmin=-f.tmax, tmax=-f.tmin, check=false)
+end
+
+"""
+    cohomology_duality(C::ModuleCochainComplex, t; opposite=opposite_poset(poset(C)))
+
+Return the natural evaluation isomorphism
+`H^(-t)(pointwise_dual(C)) -> pointwise_dual(H^t(C))` as a `PMorphism`.
+It pairs cocycles with cycles, so its matrix accounts for the independently
+chosen cohomology bases. The hypothesis is finite-dimensional stalks over a
+field; for `RealField` invertibility is subject to the configured tolerances.
+This statement concerns the finite poset and uses no global graded duality.
+"""
+function cohomology_duality(C::ModuleCochainComplex{K}, t::Int;
+                            opposite::AbstractPoset=FiniteFringe.opposite_poset(poset(C))) where {K}
+    D = pointwise_dual(C; opposite=opposite)
+    H, frames = _cohomology_module_frames(C,t)
+    J, dualframes = _cohomology_module_frames(D,-t)
+    DH = _pointwise_dual(H,opposite)
+    return PMorphism{K}(J,DH,[FieldLinAlg._matmul(transpose(frames[v].lift),dualframes[v].lift)
+                             for v in 1:nvertices(opposite)])
 end
 
 # quasi-isomorphism check
@@ -3853,5 +3921,20 @@ function hyperTor_map_second(
     return induced_map_on_cohomology(Ht_src, Ht_tgt, _map_at(Tmap, -n))
 end
 
+
+import ..CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:complex_fringe_pmodule_caches, _FRINGE_PMODULE_CACHES; retention=:weak_owner, cache_lock=_FRINGE_PMODULE_CACHE_LOCK)
+_register_runtime_cache!(:complex_injective_resolution_caches, _INJECTIVE_RESOLUTION_CACHES; retention=:weak_owner, cache_lock=_INJECTIVE_RESOLUTION_CACHE_LOCK)
+_register_runtime_cache!(:complex_rhom_complex_caches, _RHOM_COMPLEX_CACHES; retention=:weak_owner, cache_lock=_RHOM_COMPLEX_CACHE_LOCK)
+_register_runtime_cache!(:complex_hyperext_space_caches, _HYPEREXT_SPACE_CACHES; retention=:weak_owner, cache_lock=_HYPEREXT_SPACE_CACHE_LOCK)
+_register_runtime_cache!(:complex_injective_lift_caches, _INJECTIVE_LIFT_CACHES; retention=:weak_owner, cache_lock=_INJECTIVE_LIFT_CACHE_LOCK)
+_register_runtime_cache!(:complex_rebased_pmorphism_caches, _REBASED_PMORPHISM_CACHES; retention=:weak_owner, cache_lock=_REBASED_PMORPHISM_CACHE_LOCK)
+_register_runtime_cache!(:complex_projective_lift_caches, _PROJECTIVE_LIFT_CACHES; retention=:weak_owner, cache_lock=_PROJECTIVE_LIFT_CACHE_LOCK)
+_register_runtime_cache!(:complex_rhom_map_first_plan_caches, _RHOM_MAP_FIRST_PLAN_CACHES; retention=:weak_owner, cache_lock=_RHOM_MAP_FIRST_PLAN_LOCK)
+_register_runtime_cache!(:complex_rhom_map_second_plan_caches, _RHOM_MAP_SECOND_PLAN_CACHES; retention=:weak_owner, cache_lock=_RHOM_MAP_SECOND_PLAN_LOCK)
+_register_runtime_cache!(:complex_dtensor_map_first_plan_caches, _DTENSOR_MAP_FIRST_PLAN_CACHES; retention=:weak_owner, cache_lock=_DTENSOR_MAP_FIRST_PLAN_LOCK)
+_register_runtime_cache!(:complex_dtensor_map_first_result_caches, _DTENSOR_MAP_FIRST_RESULT_CACHES; retention=:weak_owner, cache_lock=_DTENSOR_MAP_FIRST_RESULT_LOCK)
+_register_runtime_cache!(:complex_dtensor_map_second_plan_caches, _DTENSOR_MAP_SECOND_PLAN_CACHES; retention=:weak_owner, cache_lock=_DTENSOR_MAP_SECOND_PLAN_LOCK)
+_register_runtime_cache!(:complex_dtensor_map_second_result_caches, _DTENSOR_MAP_SECOND_RESULT_CACHES; retention=:weak_owner, cache_lock=_DTENSOR_MAP_SECOND_RESULT_LOCK)
 
 end # module

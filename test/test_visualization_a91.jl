@@ -5,9 +5,9 @@ function _a91_graph(births=[0,0,1,4],edges=[(1,2),(2,3)],grades=[2,3];orientatio
     G=DT.GradedComplex([collect(11:10+n),collect(101:100+m)],[B],[(g,) for g in vcat(births,grades)])
     if n==0
         # An empty retained source has no coordinate from which the convenience
-        # constructor could infer ambient dimension. Supply that contract.
-        template=DI.filtered_complex(zeros(Int,1,1))
-        return DI.FilteredComplex(G,Vector{NTuple{2,Float64}}[],Tuple{Int,Int}[],(orientation,),template.provenance)
+        # constructor could infer ambient dimension. Its face list is empty too.
+        return DI.filtered_complex(G;geometry=Vector{NTuple{2,Float64}}[],
+            faces=Vector{Int}[],orientation=(orientation,),provenance=(;ambient_dim=2))
     end
     points=[(Float64(i),Float64(isodd(i))) for i in 1:n]
     DI.filtered_complex(G;geometry=vcat([[p] for p in points],[[points[a],points[b]] for (a,b) in edges]),orientation=(orientation,))

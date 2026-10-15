@@ -4097,3 +4097,23 @@ end
         FL._clear_fullcolumn_cache!()
     end
 end
+
+@testset "A49 rational nullspace basis has prescribed free coordinates" begin
+    field=CM.QQField();K=CM.coeff_type(field);m=8;nfree=12
+    for dense in (false,true)
+        R=[dense || mod(i+2j,7)==0 ? CM.coerce(field,(i+1)//(j+1)) : zero(K)
+           for i=1:m,j=1:nfree]
+        A=hcat(CM.eye(field,m),R)
+        expected=vcat(-R,CM.eye(field,nfree))
+        for input in (A,transpose(permutedims(A)),sparse(A))
+            N=FL._nullspace_backend(input)
+            @test N==expected
+            @test input*N==zeros(K,m,nfree)
+            # The identity block in the free coordinates proves independence.
+            @test N[m+1:end,:]==CM.eye(field,nfree)
+        end
+        @test A*FL.nullspace(field,A)==zeros(K,m,nfree)
+    end
+    @test FL._nullspace_backend(CM.eye(field,m))==zeros(K,m,0)
+    @test FL._nullspace_backend(zeros(K,0,nfree))==CM.eye(field,nfree)
+end

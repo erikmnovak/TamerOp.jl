@@ -8233,4 +8233,8 @@ region_adjacency(pi::CompiledEncoding{<:PLEncodingMap}; box=nothing, cache=nothi
                              cache_level=:full, cache_intent=:adjacency, kwargs...)
 
 
+import ..CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:polyhedral_group_workspaces, _LOCATE_GROUP_SCRATCH)
+_register_runtime_cache!(:polyhedral_rational_workspaces, _LOCATE_QQCOL_SCRATCH)
+
 end # module

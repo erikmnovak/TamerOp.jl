@@ -6067,4 +6067,14 @@ function verify_downset_resolution(E::AbstractVector{<:DownsetCopresentation{K}}
     return true
 end
 
+import ..CoreModules: _register_runtime_cache!
+
+_register_runtime_cache!(:indicator_prefixes; retention=:until_reset,
+    count=() -> lock(_INDICATOR_PREFIX_FAMILY_LOCK) do
+        sum(sum(length, family.upset_shards) for family in values(_INDICATOR_PREFIX_FAMILIES); init=0) +
+        sum(length, _INDICATOR_BIRTH_PLAN_SHARDS)
+    end,
+    clear=_clear_indicator_prefix_caches!,
+    roots=() -> (_INDICATOR_PREFIX_FAMILIES, _INDICATOR_BIRTH_PLAN_SHARDS))
+
 end # module

@@ -1463,3 +1463,50 @@ function cover_edges(P::ProductPoset;
         _cover_edges_from_edges(n, edges)
     end
 end
+
+struct OppositePoset{P<:AbstractPoset} <: AbstractPoset
+    parent::P
+    cache::PosetCache
+end
+
+"""
+    opposite_poset(P)
+
+Reverse every order relation, preserving vertex labels. The returned finite
+poset view shares the order oracle of `P`; it does not materialize an order
+matrix. Applying this operation twice returns `P` itself.
+"""
+
+opposite_poset(P::AbstractPoset) = OppositePoset(P, PosetCache())
+opposite_poset(P::OppositePoset) = P.parent
+nvertices(P::OppositePoset) = nvertices(P.parent)
+leq(P::OppositePoset, i::Int, j::Int) = leq(P.parent, j, i)
+upset_indices(P::OppositePoset, i::Int) = downset_indices(P.parent, i)
+downset_indices(P::OppositePoset, i::Int) = upset_indices(P.parent, i)
+_updown_cache_skip_auto(::OppositePoset) = true
+# Keep the parent cover builder outside callers of this small view method.
+# Inlining the nested builders can explode first-use inference in validators.
+Base.@noinline function cover_edges(P::OppositePoset; cached::Bool=true)
+    return _cover_edges_cached_or_build!(P, cached) do
+        C = cover_edges(P.parent; cached=cached)
+        CoverEdges(permutedims(C.mat), [(v,u) for (u,v) in C])
+    end
+end
+_fringe_describe(P::OppositePoset) =
+    (kind=:opposite_poset, nvertices=nvertices(P), parent_kind=Symbol(nameof(typeof(P.parent))))
+Base.show(io::IO, P::OppositePoset) = print(io, "OppositePoset(", nvertices(P), " vertices)")
+
+# The witness form avoids comparing every pair when a dual construction shares
+# an opposite view. Other supplied posets must preserve labels and reverse order.
+function _check_opposite_poset(P::AbstractPoset, Q::AbstractPoset)
+    ((Q isa OppositePoset && Q.parent === P) ||
+     (P isa OppositePoset && P.parent === Q)) && return Q
+    poset_equal_opposite(P, Q) || throw(ArgumentError(
+        "pointwise_dual: opposite must reverse the order with unchanged vertex labels"))
+    return Q
+end
+
+function check_poset(P::OppositePoset; throw::Bool=false)
+    base = check_poset(P.parent; throw=throw)
+    return (kind=:opposite_poset, valid=base.valid, nvertices=nvertices(P), issues=copy(base.issues))
+end

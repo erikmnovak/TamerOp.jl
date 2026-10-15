@@ -806,16 +806,23 @@ module ExtTorSpaces
 
         if model === :projective
             _validate_native_derived_options(df, "Ext", :projective)
-            return _Ext_projective(M, N; maxdeg=maxdeg, cache=cache)
+            return _call_ext_model(_Ext_projective, M, N; maxdeg=maxdeg, cache=cache)
         elseif model === :injective
             df_inj = DerivedFunctorOptions(maxdeg=maxdeg, model=:injective, canon=canon)
-            return ExtInjective(M, N, df_inj; cache=cache)
+            return _call_ext_model(ExtInjective, M, N, df_inj; cache=cache)
         elseif model === :unified
             df_uni = DerivedFunctorOptions(maxdeg=maxdeg, model=:unified, canon=canon)
-            return ExtSpace(M, N, df_uni; cache=cache)
+            return _call_ext_model(ExtSpace, M, N, df_uni; cache=cache)
         else
             throw(ArgumentError("Ext: unknown df.model=$(df.model). Supported for Ext: :projective, :injective, :unified, :auto."))
         end
+    end
+
+    # Resolution model choice happens before inference of its numerical work.
+    Base.@constprop :none Base.@noinline Base.@nospecializeinfer function _call_ext_model(
+        Base.@nospecialize(model), args...; kwargs...,
+    )
+        return model(args...; kwargs...)
     end
 
     function Ext(M::FringeModule{K}, N::FringeModule{K}, df::DerivedFunctorOptions;

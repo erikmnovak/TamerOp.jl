@@ -24,6 +24,16 @@ function _inspection_keyboard_navigation!(client, dom)
                     event.stopPropagation();
                 }
             }, true);
+            // Explicitly marked wide charts keep native horizontal scrolling.
+            // Stop the canvas wheel handler without cancelling browser scroll;
+            // vertical zoom and trackpad pinch still reach Makie.
+            element.addEventListener("wheel", function(event) {
+                const panel = event.target.closest('[data-tamerop-horizontal-scroll]');
+                if (panel && panel.scrollWidth > panel.clientWidth && !event.ctrlKey &&
+                        Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+                    event.stopPropagation();
+                }
+            }, {capture: true, passive: true});
         }
     """)
     return nothing

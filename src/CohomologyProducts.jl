@@ -5,6 +5,10 @@ an Alexander--Whitney product; arbitrary cellular boundaries do not specify one.
 """
 module CohomologyProducts
 
+# Share the finite-complex capability on the curated cohomology entrypoint.
+import ..ModuleComplexes: cohomology_module
+
+
 using ..CoreModules: QQField, PrimeField, FpElem, F2, coeff_type, coerce, eye
 using ..FiniteFringe: FinitePoset, nvertices, leq
 using ..Modules: PModule, check_module

@@ -3,6 +3,37 @@ using Random
 using JSON3
 import Base.Threads
 
+_a131_dims_total(dims::AbstractVector; scale=1) = scale * sum(dims)
+_a131_module_rank(M::MD.PModule; source, target) =
+    FL.rank(M.field, MD.structure_map(M; source=source, target=target))
+const _a131_failed_query_calls = Ref(0)
+function _a131_failed_query(dims::AbstractVector)
+    _a131_failed_query_calls[] += 1
+    return sin("deliberately invalid argument")
+end
+
+@testset "A131 invariant dispatch preserves laziness and failures" begin
+    for field in FIELDS_FULL
+        data = TamerOp.PointCloud([[0.0], [1.0], [3.0]])
+        spec = TamerOp.FiltrationSpec(kind=:rips, max_dim=1,
+                                    axes=([0.0,1.0,2.0,3.0],))
+        enc = TamerOp.encode(data, spec; degree=0, field=field, cache=nothing)
+        @test enc.M.cached_module === nothing
+        @test TamerOp.invariant(enc; which=_a131_dims_total, scale=2, cache=nothing).value == 14
+        @test enc.M.cached_module === nothing
+        _a131_failed_query_calls[] = 0
+        @test_throws MethodError TamerOp.invariant(enc; which=_a131_failed_query, cache=nothing)
+        @test _a131_failed_query_calls[] == 1
+        @test enc.M.cached_module === nothing
+        @test TamerOp.invariant(enc; which=_a131_module_rank,
+                               source=2, target=3, cache=nothing).value == 1
+        @test enc.M.cached_module !== nothing
+        dims = TamerOp.encode(data, spec; degree=0, field=field,
+                             stage=:cohomology_dims, cache=nothing)
+        @test TamerOp.invariant(dims; which=_a131_dims_total, scale=2, cache=nothing).value == 14
+    end
+end
+
 @testset "A79 rank invariant dictionary key contract" begin
     P = chain_poset(2)
     M = MD.PModule{QQ}(P, [1, 1],

@@ -222,15 +222,15 @@ function _inspection_slice_result(obj, prepared, line, limit; scope=:window)
             left_closed || (birth = events[div(first_index, 2)])
             death = events[div(last_index, 2) + 1]
         end
-        push!(records, (; birth, death, left_closed, right_closed, multiplicity,
+        push!(records, (; strata=(first_index,last_index), birth, death, left_closed, right_closed, multiplicity,
             left_clipped=!global_scope && birth == window[1],
             right_clipped=!global_scope && death == window[2],
             singleton=birth == death))
     end
     sort!(records; by=r -> (r.birth, r.death, !r.left_closed, !r.right_closed))
     intervals = Tuple(merge((; id), record) for (id, record) in enumerate(records))
-    return merge(common, (; intervals, events=Tuple(events), chain=Tuple(chain),
-        sample_parameters=Tuple(parameters)))
+    return _inspection_slice_classes(obj,merge(common, (; intervals, events=Tuple(events), chain=Tuple(chain),
+        sample_parameters=Tuple(parameters))),prepared)
 end
 
 function _inspection_slice_validate_interval(result, interval)

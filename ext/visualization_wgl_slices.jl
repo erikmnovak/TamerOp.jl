@@ -63,6 +63,14 @@ function _inspection_slice_ui(session, region_axis, prepared;
     xlimits, ylimits = prepared.region.axes.xlimits, prepared.region.axes.ylimits
     center = (xlimits[1]/2+xlimits[2]/2, ylimits[1]/2+ylimits[2]/2)
     radius = hypot(xlimits[2]/2-xlimits[1]/2, ylimits[2]/2-ylimits[1]/2)
+    class_member=B.TextField("1";attrs("class-member")...)
+    class_parameter=B.TextField("0";attrs("class-parameter")...)
+    class_apply=B.Button("Inspect class";attrs("class-apply")...)
+    class_pin=B.Button("Pin class for comparison";attrs("class-pin")...)
+    class_clear=B.Button("Clear pinned class";attrs("class-clear")...)
+    class_content=M.Observable{Any}(B.DOM.div())
+    class_figure=Ref{Any}(nothing)
+    class_retained=Ref{Any}(nothing)
     text_fields = (base_x, base_y, dir_x, dir_y)
     function request_status(stage,error)
         closed[] && return nothing
@@ -120,6 +128,17 @@ function _inspection_slice_ui(session, region_axis, prepared;
     listen(_ -> commit(() -> _inspection_control_selection!(session,request_owner,browser_client[],request_status;
         slice=false)), disable_button.value)
     listen(id -> select_interval(id), interval.value)
+    function select_class(;pin=false)
+        commit() do
+            member=tryparse(Int,strip(class_member.value[]))
+            member===nothing && throw(ArgumentError("Member must be an integer."))
+            VIZ._request_inspection!(session,request_owner;status=request_status,member,
+                class_parameter=VIZ._parse_inspection_coordinate(class_parameter.value[]),pin_class=pin)
+        end
+    end
+    listen(_->select_class(),class_apply.value)
+    listen(_->select_class(pin=true),class_pin.value)
+    listen(_->commit(()->VIZ.select_inspection!(session;clear_class=true)),class_clear.value)
 
     drag_origin=Ref{Any}(nothing)
     function move_handle(id,point,final)
@@ -274,6 +293,8 @@ function _inspection_slice_ui(session, region_axis, prepared;
                 interval_labels[] = Dict(0 => "No selected interval")
                 interval.options[] = Any[0]
                 clear_charts()
+                class_figure[]===nothing || empty!(class_figure[])
+                class_figure[]=nothing;class_retained[]=nothing;class_content[]=B.DOM.div()
                 last_line[] = nothing
                 status_text[] = "No slice computed. Existing stalk and map selections are independent."
                 return nothing
@@ -331,6 +352,27 @@ function _inspection_slice_ui(session, region_axis, prepared;
                     first(region_segment) == last(region_segment) && (selected_region_point[] = [first(selected_region[])])
                 end
             end
+            if summary.slice_classes
+                class_member.value[]=string(selection.member)
+                selected=get(snapshot.metadata,:selected_slice_class,nothing)
+                selection.class_parameter===nothing || (class_parameter.value[]=string(selection.class_parameter))
+                selected===nothing || (class_parameter.value[]=string(selected.parameter))
+                source_panels=filter(p->p.kind===:source_chain_geometry,snapshot.panels)
+                if isempty(source_panels)
+                    class_figure[]===nothing || empty!(class_figure[])
+                    class_figure[]=nothing;class_retained[]=nothing;class_content[]=B.DOM.div()
+                else
+                    drawing=VIZ.VisualizationSpec(:slice_source_charts;panels=source_panels,
+                        metadata=(;panel_columns=min(2,length(source_panels)),figure_size=(1100,550*cld(length(source_panels),2))))
+                    reused=class_retained[]!==nothing && _visual_update_retained!(M,VIZ,_HANDLERS,class_retained[],drawing;style,replace_plots=true)
+                    if !reused
+                        old=class_figure[]
+                        class_retained[]=_visual_retained_figure(M,VIZ,_HANDLERS,drawing;style)
+                        class_figure[]=class_retained[].figure;class_content[]=class_figure[]
+                        old===nothing || empty!(old)
+                    end
+                end
+            end
             n = length(result.intervals)
             total = sum(record.multiplicity for record in result.intervals; init=0)
             chosen = findfirst(record -> record.id == id,result.intervals)
@@ -354,6 +396,8 @@ function _inspection_slice_ui(session, region_axis, prepared;
         handle_points[]=M.Point2d[]
         interval_disabled[] = true
         clear_charts()
+        class_figure[]===nothing || empty!(class_figure[])
+        class_figure[]=nothing;class_retained[]=nothing;class_content[]=B.DOM.div()
         line_points[] = M.Point2d[]
         selected_region[] = M.Point2d[]
         selected_region_point[] = M.Point2d[]
@@ -376,10 +420,15 @@ function _inspection_slice_ui(session, region_axis, prepared;
         B.DOM.p(draft_text; id="$dom_id-slice-draft",role="status"),
         row(label("Selected interval group",interval)),
         B.DOM.p("Click a bar or diagram point to select the same interval group in both charts. Repeated clicks cycle coincident diagram points; the selector provides every group. Selection IDs belong only to the current slice."),
+        summary.slice_classes ? B.DOM.div(
+            row(label("Interval member",class_member),label("Class parameter t",class_parameter),class_apply,class_pin,class_clear),
+            B.DOM.p("Pin a class at a chosen parameter, then move the slice. The readout gives its image at a common upper parameter, including zero images and ambiguous preimages."),
+            B.DOM.div(class_content;style="max-width:100%;overflow:auto",tabindex="0",var"aria-label"="Slice source cycles",
+                var"data-tamerop-horizontal-scroll"="true")) : B.DOM.div(),
         B.DOM.p(status_text; id="$dom_id-slice-status",role="status",style="white-space:pre-line"),
         B.DOM.div(content; style="max-width:100%;overflow:auto",tabindex="0",var"aria-label"="Linked slice barcode and persistence diagram");
         style="margin:$(style.gap)px 0;padding:$(style.padding)px;border:$(style.linewidth_scale)px solid $(_inspection_css_color(style,VIZ._VisualRole(:border)));min-width:0")
-    controls = (; base_x,base_y,dir_x,dir_y,angle,offset,live,scope,apply=apply_button,disable=disable_button,interval)
+    controls = (; base_x,base_y,dir_x,dir_y,angle,offset,live,scope,apply=apply_button,disable=disable_button,interval,class_member,class_parameter,class_apply,class_pin,class_clear)
     callbacks = (; draft,apply_slice,select_interval,pick_interval,move_handle,queue_slice)
     return (; dom,controls,refresh,dispose,callbacks,figure=slice_figure,axes,content,
         chart_observers,line_points,handle_points,drag,selected_region,selected_region_point,selected_bar,selected_bar_point,selected_point,

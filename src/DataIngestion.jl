@@ -596,6 +596,7 @@ const _BUILTIN_FILTRATION_KINDS = (
     :core,
     :graph_core,
     :degree_rips,
+    :radius_degree_rips,
     :rhomboid,
 )
 
@@ -766,7 +767,7 @@ function filtration_arity(filtration::AbstractFiltration, data=nothing)
         return 1
     elseif kind === :rips_density || kind === :rips_codensity || kind === :rips_lowerstar ||
            kind === :function_rips ||
-           kind === :degree_rips || kind === :rhomboid || kind === :graph_core || kind === :core ||
+           kind === :degree_rips || kind === :radius_degree_rips || kind === :rhomboid || kind === :graph_core || kind === :core ||
            kind === :function_delaunay || kind === :core_delaunay ||
            kind === :graph_function_geodesic_bifiltration ||
            kind === :image_distance_bifiltration || kind === :wing_vein_bifiltration
@@ -912,7 +913,7 @@ function filtration_signature(kind::Symbol)
             return 1
         elseif k === :rips_density || k === :rips_codensity || k === :rips_lowerstar ||
                k === :function_rips ||
-               k === :degree_rips || k === :rhomboid || k === :graph_core || k === :core ||
+               k === :degree_rips || k === :radius_degree_rips || k === :rhomboid || k === :graph_core || k === :core ||
                k === :function_delaunay || k === :core_delaunay ||
                k === :graph_function_geodesic_bifiltration ||
                k === :image_distance_bifiltration || k === :wing_vein_bifiltration
@@ -1555,6 +1556,11 @@ end
 
 function _validate_geometric_filtration_request(data, spec::FiltrationSpec)
     kind = spec.kind
+    if kind === :radius_degree_rips
+        data isa PointCloud || throw(ArgumentError("RadiusDegreeRipsFiltration requires a PointCloud."))
+        _validate_radius_degree_params(spec.params)
+        return nothing
+    end
     if kind in (:alpha, :delaunay_lower_star)
         _validate_geometric_filtration_params(kind, spec.params)
         data isa PointCloud || throw(ArgumentError("Filtration kind=:$kind requires a PointCloud."))
@@ -1646,6 +1652,28 @@ DegreeRipsFiltration(; max_dim::Int=1,
         nn_approx_candidates,
         construction,
     ))
+
+"""
+    RadiusDegreeRipsFiltration(; max_dim=1, radius=nothing, construction=ConstructionOptions())
+
+Degree\u2013Rips on a finite Euclidean cloud. At diameter r keep vertices with at
+least k *other* neighbors at distance <= r, and every Rips simplex on them.
+Parameter order is (increasing diameter, decreasing degree). Degrees are
+measured in the full radius graph before vertex selection, not its k-core.
+All integer degree thresholds are retained as minimal incomparable births.
+Distances use Float64; radius is an inclusive construction cap. This differs
+from DegreeRipsFiltration, whose graph degree scores are fixed at construction.
+"""
+struct RadiusDegreeRipsFiltration{P<:NamedTuple} <: AbstractFiltration
+    params::P
+end
+function RadiusDegreeRipsFiltration(;max_dim=1,radius=nothing,construction=ConstructionOptions())
+    p=(;max_dim,radius,construction)
+    _validate_radius_degree_params(p)
+    RadiusDegreeRipsFiltration(p)
+end
+filtration_kind(::Type{<:RadiusDegreeRipsFiltration})=:radius_degree_rips
+_filtration_spec(f::RadiusDegreeRipsFiltration)=FiltrationSpec(;kind=:radius_degree_rips,f.params...,orientation=(1,-1))
 
 struct CubicalFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
@@ -1815,6 +1843,7 @@ function _validate_collapse_spec(spec::FiltrationSpec)
 end
 
 function _validate_construction_request(data, spec::FiltrationSpec)
+    spec.kind === :radius_degree_rips && return _validate_geometric_filtration_request(data, spec)
     spec.kind === :rips && _validate_rips_params(spec.params)
     construction = _construction_from_params(spec.params)
     if construction.sparsify !== :none && spec.kind in _BUILTIN_FILTRATION_KINDS
@@ -2568,6 +2597,9 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
             vertex_function = get(p, :vertex_function, nothing),
             construction = construction,
         )
+    elseif k === :radius_degree_rips
+        _validate_radius_degree_params(p)
+        return RadiusDegreeRipsFiltration(;max_dim=get(p,:max_dim,1),radius=get(p,:radius,nothing),construction)
     elseif k === :degree_rips
         return DegreeRipsFiltration(;
             max_dim = get(p, :max_dim, 1),
@@ -3074,7 +3106,7 @@ function _estimate_pointcloud_cell_counts(data::PointCloud,
         return BigInt[big(n), edges]
     elseif kind == :rips || kind == :rips_density ||
            kind == :rips_codensity || kind == :rips_lowerstar ||
-           kind == :function_rips || kind == :degree_rips
+           kind == :function_rips || kind == :degree_rips || kind == :radius_degree_rips
         ps = merge(spec.params, (_points_ref = data.points,))
         return _estimate_rips_like_cell_counts(n, FiltrationSpec(; kind=:rips, ps...);
                                                exact_pairwise_limit=exact_pairwise_limit,
@@ -10577,6 +10609,7 @@ end
 
 include("data_ingestion/enclosing_geometry.jl")
 include("data_ingestion/core_bifiltrations.jl")
+include("data_ingestion/radius_degree_rips.jl")
 include("data_ingestion/cech_core.jl")
 include("data_ingestion/function_delaunay.jl")
 
@@ -11140,10 +11173,20 @@ function _graded_complex_from_point_cloud_dim2_packed(data::PointCloud,
     error("Unsupported dim2 packed point-cloud filtration kind: $(kind).")
 end
 
+# Filtration selection is runtime configuration. Infer only the selected
+# builder when it is dispatched, keeping unrelated geometric families out of
+# a Rips caller's inference graph. Numerical builders remain specialized.
+Base.@constprop :none Base.@noinline Base.@nospecializeinfer function _call_point_cloud_builder(
+    Base.@nospecialize(builder), data::PointCloud, spec::FiltrationSpec; kwargs...,
+)
+    return builder(data, spec; kwargs...)
+end
+
 function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec;
                                           return_simplex_tree::Bool=false,
                                           cache::Union{Nothing,EncodingCache}=nothing)
     _validate_geometric_filtration_request(data, spec)
+    spec.kind === :radius_degree_rips && return _call_point_cloud_builder(_radius_degree_complex, data,spec;return_simplex_tree,cache)
     _validate_construction_request(data, spec)
     data2, spec2, _ = _maybe_greedy_perm_reduce(data, spec)
     data = data2
@@ -11163,17 +11206,17 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
     end
 
     if kind == :delaunay_lower_star
-        return _graded_complex_from_point_cloud_delaunay(data, spec; return_simplex_tree=return_simplex_tree)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_delaunay, data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :alpha
-        return _graded_complex_from_point_cloud_alpha(data, spec; return_simplex_tree=return_simplex_tree)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_alpha, data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :function_delaunay
-        return _graded_complex_from_point_cloud_function_delaunay(data, spec; return_simplex_tree=return_simplex_tree)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_function_delaunay, data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :core
-        return _graded_complex_from_point_cloud_core(data, spec; return_simplex_tree=return_simplex_tree)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_core, data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :core_delaunay
-        return _graded_complex_from_point_cloud_core_delaunay(data, spec; return_simplex_tree=return_simplex_tree)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_core_delaunay, data, spec; return_simplex_tree=return_simplex_tree)
     elseif kind == :rhomboid
-        return _graded_complex_from_point_cloud_rhomboid(data, spec; return_simplex_tree, cache)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_rhomboid, data, spec; return_simplex_tree, cache)
     end
 
     if kind == :landmark_rips
@@ -11233,7 +11276,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         pts = [points[i] for i in landmarks]
         params2 = _filter_params(spec.params, [:landmarks])
         params2 = merge(params2, (max_dim = max_dim, construction = construction_lm))
-        return _graded_complex_from_point_cloud(
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud,
             PointCloud(pts),
             FiltrationSpec(; kind=:rips, params2...);
             return_simplex_tree=return_simplex_tree,
@@ -11259,7 +11302,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
         # graph, with the same grade contract as the dense Rips construction.
         Symbol(get(spec.params, :simplex_agg, :max)) == :max ||
             throw(ArgumentError("sparse flag expansion requires simplex_agg=:max."))
-        return _graded_complex_from_point_cloud_flag(data, spec;
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_flag, data, spec;
                                                      return_simplex_tree=return_simplex_tree, cache)
     end
     if construction.sparsify != :none && max_dim > 1
@@ -11269,7 +11312,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
     if max_dim <= 1 &&
        (kind == :rips || kind == :rips_density || kind == :rips_codensity ||
         kind == :rips_lowerstar || kind == :function_rips || kind == :degree_rips)
-        return _graded_complex_from_point_cloud_lowdim(data, spec; return_simplex_tree=return_simplex_tree, cache)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_lowdim, data, spec; return_simplex_tree=return_simplex_tree, cache)
     end
 
     if _POINTCLOUD_DIM2_PACKED_KERNEL[] &&
@@ -11278,7 +11321,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
        construction.collapse == :none &&
        (kind == :rips || kind == :rips_density || kind == :rips_codensity ||
         kind == :rips_lowerstar || kind == :function_rips || kind == :degree_rips)
-        return _graded_complex_from_point_cloud_dim2_packed(
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_dim2_packed,
             data,
             spec;
             return_simplex_tree=return_simplex_tree,
@@ -11286,7 +11329,7 @@ function _graded_complex_from_point_cloud(data::PointCloud, spec::FiltrationSpec
     end
 
     if kind == :graph_core
-        return _graded_complex_from_point_cloud_graph_core(data, spec; return_simplex_tree=return_simplex_tree)
+        return _call_point_cloud_builder(_graded_complex_from_point_cloud_graph_core, data, spec; return_simplex_tree=return_simplex_tree)
     end
 
     # Dense non-sparse Rips-like path: avoid n x n dense distance matrices.
@@ -12434,7 +12477,7 @@ end
 end
 
 @inline function _ingestion_route_hint(data, spec)::Symbol
-    spec !== nothing && spec.kind === :rhomboid && return :graded_complex_only
+    spec !== nothing && spec.kind in (:rhomboid,:radius_degree_rips) && return :graded_complex_only
     if data isa SimplexTreeMulti
         return :simplex_tree_input
     elseif data isa PointCloud || data isa GraphData || data isa EmbeddedPlanarGraph2D
@@ -13354,6 +13397,14 @@ function _run_ingestion_plan(plan::IngestionPlan; degree::Int=0, stage::Symbol=:
     end
 end
 
+# A requested stage determines which expensive algebraic consumer runs.
+# Keep inference of unrequested materializations out of lazy encoding callers.
+Base.@constprop :none Base.@noinline Base.@nospecializeinfer function _call_ingestion_stage(
+    Base.@nospecialize(consumer), args...; kwargs...,
+)
+    return consumer(args...; kwargs...)
+end
+
 function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecutionTrace;
                              degree::Int=0,
                              stage::Symbol=:auto)
@@ -13413,7 +13464,7 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
             nothing
         end
         if spec_try isa FiltrationSpec
-            tree_route_ok = spec_try.kind in _BUILTIN_FILTRATION_KINDS && spec_try.kind !== :rhomboid
+            tree_route_ok = spec_try.kind in _BUILTIN_FILTRATION_KINDS && !(spec_try.kind in (:rhomboid,:radius_degree_rips))
         else
             tree_route_ok = false
         end
@@ -13565,11 +13616,11 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
     pi2 = compile_encoding(P, pi; meta=(encoding_cache=EncodingCache(),))
 
     build_lazy = () -> direct_payload === nothing ?
-        _build_ingestion_lazy_cochain(
+        _call_ingestion_stage(_build_ingestion_lazy_cochain,
             ST, G, P, axes_final, orientation_final, field,
             multicritical, onecritical_selector, onecritical_enforce_boundary,
         ) :
-        _build_ingestion_lazy_cochain(
+        _call_ingestion_stage(_build_ingestion_lazy_cochain,
             direct_payload, P, axes_final, orientation_final, field,
             multicritical, onecritical_selector, onecritical_enforce_boundary,
         )
@@ -13580,7 +13631,7 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
     end
     if stage == :cochain
         lazyC === nothing && (lazyC = build_lazy())
-        return _materialize_cochain(lazyC; check=true)
+        return _call_ingestion_stage(_materialize_cochain, lazyC; check=true)
     end
     result_provenance = _ingestion_provenance(
         plan, P, axes_final, orientation_final, degree, stage, trace;
@@ -13603,7 +13654,7 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
     end
     if stage == :cohomology_dims
         lazyC === nothing && (lazyC = build_lazy())
-        dims = _cohomology_dims_from_lazy(lazyC, degree)
+        dims = _call_ingestion_stage(_cohomology_dims_from_lazy, lazyC, degree)
         return CohomologyDimsResult(P, dims, pi2; degree=degree, field=field, meta=(provenance=result_provenance,))
     end
     use_lazy_encoding_module = stage == :encoding_result &&
@@ -13611,7 +13662,7 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
                                !cached_module_hit
     M = if use_lazy_encoding_module
         lazyC === nothing && (lazyC = build_lazy())
-        _lazy_encoded_module_from_lazy(lazyC, degree)
+        _call_ingestion_stage(_lazy_encoded_module_from_lazy, lazyC, degree)
     elseif cached_module_hit
         getproperty(cached_module, :M)
     else
@@ -13621,7 +13672,7 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
            ST isa SimplexTreeMulti{1} &&
            max_simplex_dim(ST) <= 1 &&
            multicritical == :union
-            M_fast = _cohomology_module_h0_chain_sweep_from_simplex_tree(
+            M_fast = _call_ingestion_stage(_cohomology_module_h0_chain_sweep_from_simplex_tree,
                 ST, P, axes_final;
                 orientation=orientation_final,
                 field=field,
@@ -13629,7 +13680,7 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
         end
         Mc = if M_fast === nothing
             lazyC === nothing && (lazyC = build_lazy())
-            _cohomology_module_from_lazy(lazyC, degree)
+            _call_ingestion_stage(_cohomology_module_from_lazy, lazyC, degree)
         else
             M_fast
         end
@@ -13645,14 +13696,14 @@ function _execute_ingestion_plan(plan::IngestionPlan, trace::_IngestionExecution
         return M
     end
     if stage == :fringe
-        H = H_cached === nothing ? fringe_presentation(M) : H_cached
+        H = H_cached === nothing ? _call_ingestion_stage(fringe_presentation, M) : H_cached
         if H_cached === nothing && module_fast_key !== nothing
             _set_geometry_cached!(enc_cache, module_fast_key, (M=M, H=H))
         end
         return H
     end
     if stage == :flange
-        return flange_presentation(M, pi)
+        return _call_ingestion_stage(flange_presentation, M, pi)
     end
     res = EncodingResult(P, M, pi2; H=H_cached, presentation=(data=data, filtration=filtration),
                          opts=EncodingOptions(; backend=:data, poset_kind=pipeline.poset_kind, field=field), backend=:data, meta=(provenance=result_provenance,))
@@ -13873,5 +13924,12 @@ include("data_ingestion/local_queries.jl")
 include("data_ingestion/filtered_geometry.jl")
 include("data_ingestion/geometric_inspection.jl")
 include("data_ingestion/source_chains.jl")
+include("data_ingestion/slice_bases.jl")
+
+import ..CoreModules: _register_runtime_cache!
+
+_register_runtime_cache!(:pointcloud_delaunay; retention=:bounded,
+    count=() -> lock(() -> length(_POINTCLOUD_DELAUNAY_CACHE), _POINTCLOUD_DELAUNAY_CACHE_LOCK),
+    clear=_clear_pointcloud_delaunay_cache!, roots=() -> (_POINTCLOUD_DELAUNAY_CACHE, _POINTCLOUD_DELAUNAY_CACHE_ORDER))
 
 end # module DataIngestion

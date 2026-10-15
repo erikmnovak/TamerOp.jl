@@ -3127,4 +3127,14 @@ function Base.show(io::IO, ::MIME"text/plain", summary::RegionPrincipalDirection
         ", eccentricity=", report.anisotropy.eccentricity)
 end
 
+import ..CoreModules: _register_runtime_cache!
+
+_register_runtime_cache!(:region_workspaces, _REGION_WORKSPACES)
+for (name, cache) in ((:region_principal_summaries, _REGION_PRINCIPAL_SUMMARY_CACHE),
+                      (:region_mean_widths, _REGION_MEAN_WIDTH_CACHE))
+    _register_runtime_cache!(name; retention=:bounded, count=() -> length(cache),
+        clear=() -> foreach(i -> lock(() -> empty!(cache.shards[i]), cache.locks[i]), eachindex(cache.shards)),
+        roots=() -> (cache,))
+end
+
 end # module

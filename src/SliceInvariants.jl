@@ -8635,4 +8635,11 @@ slice_features(H::FringeModule{K}, args...; kwargs...) where {K} =
 slice_kernel(H::FringeModule{K}, H2::FringeModule{K}, args...; kwargs...) where {K} =
     slice_kernel(pmodule_from_fringe(H), pmodule_from_fringe(H2), args...; kwargs...)
 
+import ..CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:slice_plans, _GLOBAL_SLICE_PLAN_CACHE.plans; retention=:until_reset, cache_lock=_GLOBAL_SLICE_PLAN_CACHE.lock)
+_register_runtime_cache!(:slice_modules, _GLOBAL_SLICE_MODULE_CACHE; retention=:until_reset, cache_lock=_GLOBAL_SLICE_MODULE_CACHE_LOCK)
+
+import ..CoreModules: _session_helper_counts
+_session_helper_counts(cache::SlicePlanCache) = lock(() -> (plans=length(cache.plans),), cache.lock)
+
 end # module SliceInvariants

@@ -24,7 +24,7 @@ function _visual_retained_plan(H,V,spec,style)
     # layout contract; their existing renderer remains the structural fallback.
     any(p->!isempty(p.panels)||get(p.metadata,:panel_style,nothing) in (:matrix,:text_only)||
         any(l->l isa V.MatrixLayer,p.layers),panels) && return nothing
-    (spec.kind===:composition || haskey(spec.metadata,:panel_positions) || haskey(spec.metadata,:panel_row_weights) || get(spec.legend,:visible,false)) && return nothing
+    (spec.kind===:composition || get(spec.legend,:visible,false)) && return nothing
     return [H.plan(p;style) for p in panels]
 end
 
@@ -35,7 +35,9 @@ function _visual_retained_figure(M,V,H,spec;size=nothing,style=V.VisualStyle())
     fig=M.Figure(;size=actualsize,figure_padding=style.padding,
         backgroundcolor=V._visual_color(style,V._VisualRole(:background)))
     panels=isempty(spec.panels) ? [spec] : spec.panels
-    columns=isempty(spec.panels) ? 1 : get(spec.metadata,:panel_columns,min(3,length(panels)))
+    positions=get(spec.metadata,:panel_positions,nothing)
+    columns=isempty(spec.panels) ? 1 : positions===nothing ?
+        get(spec.metadata,:panel_columns,min(3,length(panels))) : maximum(p->last(p[2]),positions)
     handles=Any[]; headings=Any[]; row=1
     if !isempty(spec.panels)
         for (text,fontsize,role) in ((spec.title,22,:foreground),(spec.subtitle,14,:muted))
@@ -46,7 +48,10 @@ function _visual_retained_figure(M,V,H,spec;size=nothing,style=V.VisualStyle())
         end
     end
     for (i,(p,plan)) in enumerate(zip(panels,plans))
-        grid=if spec.kind===:complex_inspector
+        grid=if positions!==nothing
+            rows,cols=positions[i]
+            fig[(row+first(rows)-1):(row+last(rows)-1),cols]=M.GridLayout()
+        elseif spec.kind===:complex_inspector
             length(panels)==1 ? (fig[1,1]=M.GridLayout()) :
                 i==1 ? (fig[1:length(panels)-1,1]=M.GridLayout()) : (fig[i-1,2]=M.GridLayout())
         else
@@ -70,6 +75,12 @@ function _visual_retained_figure(M,V,H,spec;size=nothing,style=V.VisualStyle())
         H.style_grid(grid,style)
         push!(handles,(;axis=ax,plots,plan,labels))
     end
+    weights=get(spec.metadata,:panel_row_weights,nothing)
+    if weights!==nothing
+        for (i,weight) in enumerate(weights)
+            M.rowsize!(fig.layout,row+i-1,M.Auto(false,weight))
+        end
+    end
     H.style_figure(fig,style)
     return _VisualRetainedFigure(fig,spec,handles,headings)
 end
@@ -90,6 +101,12 @@ function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle(),replace
     for (handle,plan) in zip(state.panels,plans)
         replace_plots || map(_visual_command_shape,handle.plan.commands)==map(_visual_command_shape,plan.commands) || return false
         handle.plan.colorbars==plan.colorbars || return false
+        # A colorbar observes its original plot. Keep that plot in the stable
+        # prefix, or fall back before changing any displayed panel.
+        for cb in plan.colorbars
+            all(_visual_command_shape(handle.plan.commands[i])==_visual_command_shape(plan.commands[i])
+                for i in 1:cb.plot) || return false
+        end
     end
     # Validate all shapes first. Each plot's arguments and attributes then move
     # together through Makie's public coordinated update API.
@@ -97,7 +114,12 @@ function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle(),replace
         if replace_plots && map(_visual_command_shape,h.plan.commands)!=map(_visual_command_shape,plan.commands)
             # Cells enter and leave, but their source coordinate frame remains.
             # Replacing plots on the same Axis preserves 2D and 3D navigation.
-            for (plot,command) in zip(h.plots,h.plan.commands)
+            common=0
+            for (a,b) in zip(h.plan.commands,plan.commands)
+                _visual_command_shape(a)==_visual_command_shape(b) || break
+                common+=1
+            end
+            for (plot,command) in zip(h.plots[common+1:end],h.plan.commands[common+1:end])
                 if command.kind===:interval_annotations
                     delete!(h.axis,plot.label)
                     delete!(h.axis.scene,plot.line)
@@ -105,8 +127,13 @@ function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle(),replace
                     delete!(h.axis,plot)
                 end
             end
-            empty!(h.plots)
-            for c in plan.commands
+            resize!(h.plots,common)
+            for (plot,c,prev) in zip(h.plots,plan.commands,h.plan.commands)
+                isequal(c,prev) && continue
+                c.kind===:interval_annotations ? plot.update(c.args...;c.kwargs...) :
+                    M.update!(plot;(Symbol(:arg,i)=>a for (i,a) in enumerate(c.args))...,c.kwargs...)
+            end
+            for c in plan.commands[common+1:end]
                 plot=c.kind===:interval_annotations ? _visual_interval_annotations!(M,h.axis,c.args...;c.kwargs...) :
                     getproperty(M,Symbol(c.kind,:!))(h.axis,c.args...;c.kwargs...)
                 push!(h.plots,plot)

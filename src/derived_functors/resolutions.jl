@@ -26,7 +26,8 @@ module Resolutions
                            leq, nvertices, poset_equal, upset_indices, downset_indices
     using ...AbelianCategories: kernel_with_inclusion, _KernelIncrementalEntry, _CokernelIncrementalEntry,
                                  _zero_composition
-    using ...IndicatorResolutions: projective_cover, pmodule_from_fringe
+    using ...IndicatorResolutions: projective_cover, pmodule_from_fringe,
+                                  _incoming_image_basis, _choose_projective_generators, _socle_basis
     using  ...IndicatorResolutions: _injective_hull, _cokernel_module, _nonzero_dim_vertices,
                                     _indicator_new_array_memo, _new_resolution_workspace
     import ...IndicatorResolutions: resolution_length
@@ -34,6 +35,9 @@ module Resolutions
     import ...FieldLinAlg
     using ...FieldLinAlg: _SparseRREFAugmented, SparseRow, _sparse_rref_push_augmented!, rref
 
+
+    import ...Modules: pointwise_dual, _pointwise_dual, _dual_morphism
+    import ...FiniteFringe: opposite_poset, _check_opposite_poset
 
     import ..Utils
     import ..Utils
@@ -1087,7 +1091,7 @@ module Resolutions
 
     1. (Optional) `check_cover`:
     Verify that P0 -> M is a projective cover by comparing multiplicities of
-    principal upsets against a freshly computed `projective_cover(M)`.
+    principal upsets against the local generator multiplicities of `M`.
 
     2. Verify the "no units on diagonal" condition:
     For every differential d_a : P_a -> P_{a-1}, there is no nonzero coefficient
@@ -1102,8 +1106,11 @@ module Resolutions
         cover_ok = true
 
         if check_cover
-            _, _, gens_at = projective_cover(res.M)
-            cover_expected = _vertex_counts(_flatten_gens_at(gens_at), n)
+            # The checker needs top multiplicities, not a newly assembled cover.
+            # Reuse the cover's local choice, including its RealField convention.
+            cc = _get_cover_cache(Q)
+            cover_expected = [length(_choose_projective_generators(res.M.field,
+                _incoming_image_basis(res.M,v;cache=cc),res.M.dims[v])) for v in 1:n]
             cover_ok = (cover_expected == cover_actual)
         end
 
@@ -1192,6 +1199,35 @@ module Resolutions
         gens::Vector{Vector{Int}}         # base vertices per injective summand in each E^b
         d_mor::Vector{<:PMorphism{K}}     # E^b -> E^{b+1}
         iota0::PMorphism{K}               # N -> E^0
+    end
+
+    """
+        pointwise_dual(res::Union{ProjectiveResolution,InjectiveResolution}; opposite=...)
+
+    Transport an existing finite-poset resolution through linear duality,
+    exchanging projective and injective terms. Summand labels, truncation length
+    and minimality are preserved. No new elimination or resolution construction
+    is required; an injective-to-projective conversion also reads the coefficient
+    matrices in the transported summand bases.
+    """
+    function pointwise_dual(R::ProjectiveResolution{K};
+                            opposite::AbstractPoset=opposite_poset(R.M.Q)) where {K}
+        _check_opposite_poset(R.M.Q, opposite)
+        N = _pointwise_dual(R.M, opposite)
+        E = [_pointwise_dual(M, opposite) for M in R.Pmods]
+        ds = PMorphism{K}[_dual_morphism(f, E[i], E[i+1]) for (i,f) in enumerate(R.d_mor)]
+        return InjectiveResolution{K}(N, E, deepcopy(R.gens), ds, _dual_morphism(R.aug,N,E[1]))
+    end
+
+    function pointwise_dual(R::InjectiveResolution{K};
+                            opposite::AbstractPoset=opposite_poset(R.N.Q)) where {K}
+        _check_opposite_poset(R.N.Q, opposite)
+        M = _pointwise_dual(R.N, opposite)
+        P = [_pointwise_dual(N, opposite) for N in R.Emods]
+        ds = PMorphism{K}[_dual_morphism(f, P[i+1], P[i]) for (i,f) in enumerate(R.d_mor)]
+        gs = deepcopy(R.gens)
+        mats = SparseMatrixCSC{K,Int}[_coeff_matrix_upsets(opposite, gs[i+1], gs[i], d) for (i,d) in enumerate(ds)]
+        return ProjectiveResolution{K}(M, P, gs, ds, mats, _dual_morphism(R.iota0,P[1],M))
     end
 
     @inline resolution_terms(res::InjectiveResolution) = copy(res.Emods)
@@ -1501,7 +1537,7 @@ module Resolutions
 
     Fields mirror `ProjectiveMinimalityReport`, but for injective resolutions:
 
-    - `hull_ok` compares multiplicities in E^0 against a freshly computed injective hull.
+    - `hull_ok` compares multiplicities in E^0 against the local socle multiplicities.
     - `diagonal_violations` records nonzero coefficients k[Dn(v)] -> k[Dn(v)] in the
     differentials E^{b-1} -> E^b. Such coefficients split off contractible summands
     and are forbidden in a minimal injective resolution.
@@ -1525,7 +1561,7 @@ module Resolutions
 
     1. (Optional) `check_hull`:
     Verify that N -> E^0 is an injective hull by comparing multiplicities of principal
-    downsets against a freshly computed `_injective_hull(N)`.
+    downsets against the local socle multiplicities of `N`.
 
     2. Verify the "no units on diagonal" condition:
     For every differential d^b : E^{b-1} -> E^b, there is no nonzero coefficient
@@ -1540,8 +1576,8 @@ module Resolutions
         hull_ok = true
 
         if check_hull
-            _, _, gens_at = _injective_hull(res.N)
-            hull_expected = _vertex_counts(_flatten_gens_at(gens_at), n)
+            cc = _get_cover_cache(Q)
+            hull_expected = [size(_socle_basis(res.N,v;cache=cc),2) for v in 1:n]
             hull_ok = (hull_expected == hull_actual)
         end
 
@@ -2194,5 +2230,12 @@ module Resolutions
         @assert length(res.d_mat) == length(res.Pmods) - 1
         return
     end
+
+import ...CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:resolution_active_indices, _ACTIVE_INDEX_PLAN_CACHE; retention=:until_reset, cache_lock=_ACTIVE_INDEX_PLAN_LOCK)
+_register_runtime_cache!(:resolution_base_groups, _BASE_VERTEX_GROUPS_CACHE; retention=:until_reset, cache_lock=_BASE_VERTEX_GROUPS_LOCK)
+_register_runtime_cache!(:resolution_active_upsets, _ACTIVE_UPSET_VECTOR_CACHE; retention=:until_reset, cache_lock=_ACTIVE_UPSET_VECTOR_LOCK)
+_register_runtime_cache!(:resolution_downset_homs, _DOWNSET_HOM_STRUCTURE_CACHE; retention=:until_reset, cache_lock=_DOWNSET_HOM_STRUCTURE_LOCK)
+_register_runtime_cache!(:resolution_downset_systems, _DOWNSET_POSTCOMPOSE_SYSTEM_CACHE; retention=:until_reset, cache_lock=_DOWNSET_POSTCOMPOSE_SYSTEM_LOCK)
 
 end

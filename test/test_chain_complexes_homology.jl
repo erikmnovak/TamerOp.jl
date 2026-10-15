@@ -5215,3 +5215,277 @@ end
         FL._clear_fullcolumn_cache!()
     end
 end
+
+# Finite-poset duality tests use an independent interval plus two contractible
+# summands, written in stalk-dependent bases. Neither the module object nor its
+# arrows are inferred from a rank-only comparison.
+function _a49_test_complex(field, P; tmin=3, seed=49)
+    K=CM.coeff_type(field); n=FF.nvertices(P); rng=MersenneTwister(seed)
+    active=[v!=n for v=1:n]
+    # n is maximal in these test posets, so its complement is a downset.
+    S=Matrix{K}[]; Si=Matrix{K}[]
+    for v=1:n
+        d=2+active[v]; T=CM.eye(field,d); U=copy(T)
+        for k=1:2d
+            i=rand(rng,1:d); j=rand(rng,1:d-1); j>=i && (j+=1)
+            a=CM.coerce(field,rand(rng,(-1,1)))
+            T[i,:] .+= a .* T[j,:]; U[:,j] .-= a .* U[:,i]
+        end
+        push!(S,T); push!(Si,U)
+    end
+    E=FF.cover_edges(P)
+    oneM=MD.PModule{K}(P,ones(Int,n),Dict(e=>CM.eye(field,1) for e in E);field=field)
+    maps=Dict{Tuple{Int,Int},Matrix{K}}()
+    for (u,v) in E
+        B=zeros(K,2+active[v],2+active[u]); B[1,1]=one(K); B[end,end]=one(K)
+        active[u] && active[v] && (B[2,2]=one(K))
+        maps[u,v]=S[v]*B*Si[u]
+    end
+    M=MD.PModule{K}(P,2 .+ Int.(active),maps;field=field)
+    a=MD.PMorphism(oneM,M,[T[:,1:1] for T in S])
+    b=MD.PMorphism(M,oneM,[U[end:end,:] for U in Si])
+    C=MCM.ModuleCochainComplex([oneM,M,oneM],[a,b];tmin=tmin)
+    H=MD.PModule{K}(P,Int.(active),Dict((u,v)=>ones(K,Int(active[v]),Int(active[u])) for (u,v) in E);field=field)
+    reps=[active[v] ? S[v][:,2:2] : zeros(K,2,0) for v=1:n]
+    return C,H,reps,S,Si
+end
+
+@testset "A49 finite-poset duality and cohomology routes" begin
+    @test TOA.pointwise_dual === MD.pointwise_dual
+    @test TOA.opposite_poset === FF.opposite_poset
+    with_fields(FIELDS_FULL) do field
+        K=CM.coeff_type(field)
+        same49(A,B)=field isa CM.RealField ? isapprox(A,B;atol=1e-7,rtol=1e-7) : A==B
+        for P in (chain_poset(4), FF.ProductOfChainsPoset((2,2))), seed=49:51
+            n=FF.nvertices(P); Q=FF.opposite_poset(P)
+            @test FF.opposite_poset(Q) === P
+            @test FF.fringe_summary(Q).nvertices==n
+            @test occursin("OppositePoset",sprint(show,Q))
+            @test Set(FF.cover_edges(Q))==Set((v,u) for (u,v) in FF.cover_edges(P))
+            for u=1:n,v=1:n
+                @test FF.leq(Q,u,v)==FF.leq(P,v,u)
+            end
+            @test collect(FF.upset_indices(Q,1))==collect(FF.downset_indices(P,1))
+            C,H,oracle_reps=_a49_test_complex(field,P;seed=seed)
+            M=C.terms[2]; DM=MD.pointwise_dual(M;opposite=Q); DDM=MD.pointwise_dual(DM)
+            @test DDM.Q===P && DDM.dims==M.dims
+            @test MD.check_module(DM).valid
+            @test MD.check_module_functoriality(DM).valid
+            for (u,v) in FF.cover_edges(P)
+                @test DDM.edge_maps[u,v]==M.edge_maps[u,v]
+                @test DM.edge_maps[v,u]==transpose(M.edge_maps[u,v])
+            end
+            for u=1:n,v=1:n
+                FF.leq(P,u,v) || continue
+                @test same49(MD.map_leq(DM,v,u),transpose(MD.map_leq(M,u,v)))
+            end
+            @test_throws ArgumentError MD.pointwise_dual(M;opposite=P)
+            D=MD.pointwise_dual(C;opposite=Q)
+            DD=MD.pointwise_dual(D)
+            @test (D.tmin,D.tmax)==(-5,-3)
+            @test (DD.tmin,DD.tmax)==(3,5)
+            @test MCM.check_module_complex(D).valid
+            @test all(i->DD.diffs[i].comps==C.diffs[i].comps,eachindex(C.diffs))
+            # Canonical stalk computation, heavy witness computation and a known
+            # interval model are compared by actual change-of-coordinate maps.
+            got,frames=MCM._cohomology_module_frames(C,4)
+            data=MCM.cohomology_module_data(C,4)
+            @test got.dims==H.dims==data.H.dims
+            iso=MD.PMorphism(H,got,[frames[v].q * FL.solve_fullcolumn(field,frames[v].Z,oracle_reps[v]) for v=1:n])
+            @test MD.check_morphism(iso).valid
+            @test MCM.is_isomorphism(iso)
+            heavy=MD.PMorphism(got,data.H,[data.q.comps[v]*FL.solve_fullcolumn(field,data.iZ.comps[v],frames[v].lift) for v=1:n])
+            @test MD.check_morphism(heavy).valid
+            @test MCM.is_isomorphism(heavy)
+            for t in (2,3,5,6)
+                @test all(iszero,MCM.cohomology_module(C,t).dims)
+            end
+            # The evaluation pairing gives H^(-4)(DC) -> D H^4(C).
+            dualH,dualframes=MCM._cohomology_module_frames(D,-4)
+            targetH=MD.pointwise_dual(got;opposite=Q)
+            pairing=MD.PMorphism(dualH,targetH,[transpose(frames[v].lift)*dualframes[v].lift for v=1:n])
+            @test MD.check_morphism(pairing).valid
+            @test MCM.is_isomorphism(pairing)
+            scale=CM.coerce(field,2)
+            f=MD.PMorphism(M,M,[scale*CM.eye(field,d) for d in M.dims])
+            df=MD.pointwise_dual(f;opposite=Q)
+            @test MD.check_morphism(df).valid
+            @test all(v->same49(df.comps[v],transpose(f.comps[v])),1:n)
+            maps=MD.PMorphism{K}[MD.PMorphism(T,T,[scale*CM.eye(field,d) for d in T.dims]) for T in C.terms]
+            cf=MCM.ModuleCochainMap(C,C,maps)
+            dcf=MD.pointwise_dual(cf;opposite=Q)
+            @test MCM.check_module_complex_map(dcf).valid
+            hf=MCM.induced_map_on_cohomology_modules(cf,4)
+            dhf=MCM.induced_map_on_cohomology_modules(dcf,-4)
+            @test MD.check_morphism(hf).valid
+            for v=1:n
+                @test same49(hf.comps[v],scale*CM.eye(field,got.dims[v]))
+                @test same49(transpose(hf.comps[v])*pairing.comps[v],pairing.comps[v]*dhf.comps[v])
+            end
+            # A two-step resolution is nontrivial for the downset interval.
+            R=DF.projective_resolution(H,TO.ResolutionOptions(maxlen=3);threads=false)
+            DR=MD.pointwise_dual(R;opposite=Q)
+            RR=MD.pointwise_dual(DR)
+            @test DF.check_projective_resolution(R;check_cover=true).valid
+            @test DF.check_injective_resolution(DR;check_hull=true).valid
+            @test DF.check_projective_resolution(RR;check_cover=true).valid
+            @test R.gens==RR.gens==DR.gens
+            @test all(i->same49(R.d_mat[i],RR.d_mat[i]),eachindex(R.d_mat))
+            @test DF.Resolutions._resolution_is_complete(DR)
+            @test all(i->R.d_mor[i].comps==RR.d_mor[i].comps,eachindex(R.d_mor))
+            F=IR.fringe_presentation(H)
+            DFri=MD.pointwise_dual(F;opposite=Q)
+            @test FF.check_fringe_module(DFri).valid
+            @test [FF.fiber_dimension(DFri,v) for v=1:n]==H.dims
+            @test MD.pointwise_dual(DFri).phi==F.phi
+            U=IR.upset_presentation_one_step(F)
+            DU=MD.pointwise_dual(U;opposite=Q)
+            @test DU.rho==U.delta
+            @test MD.pointwise_dual(DU).delta==U.delta
+            @test all(i->DU.D0[i].mask==U.U0[i].mask,eachindex(U.U0))
+        end
+    end
+end
+
+@testset "A49 duality storage and public contracts" begin
+    @test TOA.cohomology_module === MCM.cohomology_module
+    @test TOA.cohomology_duality === MCM.cohomology_duality
+    field=CM.QQField(); K=CM.coeff_type(field); P=chain_poset(2)
+    for d in (0,4,256)
+        A=CM.eye(field,d); d>0 && (A[1,end]=CM.coerce(field,2))
+        for B in (A,sparse(A))
+            M=MD.PModule{K}(P,[d,d],Dict((1,2)=>B);field=field)
+            D=MD.pointwise_dual(M)
+            @test Matrix(D.edge_maps[2,1])==transpose(A)
+            @test Matrix(MD.map_leq(D,2,1;opts=TO.ModuleOptions()))==transpose(A)
+            @test FF.check_poset(D.Q).valid
+            @test TO.describe(D.Q)==FF.fringe_summary(D.Q)
+            @test_throws ArgumentError MD.pointwise_dual(M;opposite=chain_poset(3))
+            @test_throws Exception MD.map_leq(D,1,2)
+            @test_throws Exception MD.map_leq(D,0,2)
+            if d==256 && B isa Matrix && FL._have_nemo()
+                @test M.edge_maps[1,2] isa CM.BackendMatrix{K}
+            end
+            if Threads.nthreads()>1
+                ds=fetch.([Threads.@spawn MD.pointwise_dual(M) for _=1:8])
+                @test all(X->Matrix(X.edge_maps[2,1])==transpose(A),ds)
+            end
+        end
+    end
+    P0=FF.FinitePoset(falses(0,0)); M0=MD.zero_pmodule(P0;field=field)
+    @test isempty(MD.pointwise_dual(M0).dims)
+    C,H,_=_a49_test_complex(field,FF.ProductOfChainsPoset((2,2)))
+    iso=MCM.cohomology_duality(C,4)
+    @test MD.check_morphism(iso).valid
+    @test MCM.is_isomorphism(iso)
+    @test TOA.cohomology_module(C,4).dims==H.dims
+    # A supplied structurally opposite poset is permitted; unrelated labels/order are not.
+    Q=FF.FinitePoset(permutedims(FF.leq_matrix(C.terms[1].Q)))
+    @test MD.pointwise_dual(H;opposite=Q).Q===Q
+    C0=MCM.ModuleCochainComplex([H],MD.PMorphism{K}[];tmin=7)
+    D0=MD.pointwise_dual(C0)
+    @test D0.tmin==D0.tmax==-7
+    @test isempty(D0.diffs)
+end
+
+@testset "A49 naturality under changes of stalk bases" begin
+    with_fields(FIELDS_FULL) do field
+        K=CM.coeff_type(field); P=FF.ProductOfChainsPoset((2,2)); Q=FF.opposite_poset(P)
+        same49(A,B)=field isa CM.RealField ? isapprox(A,B;atol=1e-7,rtol=1e-7) : A==B
+        C,_,_,S,Si=_a49_test_complex(field,P;seed=81)
+        D,_,_,T,Ti=_a49_test_complex(field,P;seed=82)
+        E,_,_,U,Ui=_a49_test_complex(field,P;seed=83)
+        function change(C,D,S,Ti)
+            comps=MD.PMorphism{K}[
+                MD.PMorphism(C.terms[1],D.terms[1],[CM.eye(field,1) for _=1:4]),
+                MD.PMorphism(C.terms[2],D.terms[2],[S[v]*Ti[v] for v=1:4]),
+                MD.PMorphism(C.terms[3],D.terms[3],[CM.eye(field,1) for _=1:4])]
+            MCM.ModuleCochainMap(C,D,comps)
+        end
+        f=change(C,D,T,Si);g=change(D,E,U,Ti);gf=change(C,E,U,Si)
+        hf=MCM.induced_map_on_cohomology_modules(f,4)
+        hg=MCM.induced_map_on_cohomology_modules(g,4)
+        hgf=MCM.induced_map_on_cohomology_modules(gf,4)
+        @test MD.check_morphism(hf).valid
+        @test MCM.is_isomorphism(hf)
+        df=MD.pointwise_dual(f;opposite=Q); dg=MD.pointwise_dual(g;opposite=Q)
+        dgf=MD.pointwise_dual(gf;opposite=Q)
+        for i=1:3,v=1:4
+            @test same49(dgf.comps[i].comps[v],df.comps[i].comps[v]*dg.comps[i].comps[v])
+        end
+        dhf=MCM.induced_map_on_cohomology_modules(df,-4)
+        pC=MCM.cohomology_duality(C,4;opposite=Q)
+        pD=MCM.cohomology_duality(D,4;opposite=Q)
+        for v=1:4
+            @test same49(hgf.comps[v],hg.comps[v]*hf.comps[v])
+            @test same49(pC.comps[v]*dhf.comps[v],transpose(hf.comps[v])*pD.comps[v])
+        end
+        # Kernel inclusion dualizes to a cokernel projection, including maps.
+        b=C.diffs[2]; Z,iZ=TO.kernel_with_inclusion(b)
+        db=MD.pointwise_dual(b;opposite=Q)
+        cok,q=TO.cokernel_with_projection(db)
+        diZ=MD.pointwise_dual(iZ;opposite=Q)
+        @test diZ.cod.dims==cok.dims
+        @test MD.check_morphism(diZ).valid
+        for v=1:4
+            @test same49(diZ.comps[v]*db.comps[v],zeros(K,Z.dims[v],b.cod.dims[v]))
+            @test FL.rank(field,diZ.comps[v])==cok.dims[v]
+        end
+    end
+end
+
+@testset "A49 truncated and empty dual resolutions" begin
+    field=CM.QQField();P=chain_poset(2)
+    H=IR.pmodule_from_fringe(one_by_one_fringe(P,FF.principal_upset(P,1),FF.principal_downset(P,1);field=field))
+    for M in (H,MD.zero_pmodule(P;field=field)), maxlen=0:1
+        R=DF.projective_resolution(M,TO.ResolutionOptions(maxlen=maxlen);threads=false)
+        D=MD.pointwise_dual(R);RR=MD.pointwise_dual(D)
+        @test length(RR.Pmods)==length(R.Pmods)==maxlen+1
+        @test DF.check_injective_resolution(D).valid
+        @test DF.check_projective_resolution(RR).valid
+        @test DF.Resolutions._resolution_is_complete(D)==DF.Resolutions._resolution_is_complete(R)
+        @test RR.d_mat==R.d_mat
+    end
+end
+
+@testset "A49 derived pushforward cohomology coordinates" begin
+    with_fields(FIELDS_FULL) do field
+        K=CM.coeff_type(field); P=FF.ProductOfChainsPoset((2,2))
+        same49(A,B)=field isa CM.RealField ? isapprox(A,B;atol=1e-7,rtol=1e-7) : A==B
+        C,_,repsC,S,Si=_a49_test_complex(field,P;tmin=-1,seed=81)
+        D,_,repsD,T,Ti=_a49_test_complex(field,P;tmin=-1,seed=82)
+        dual_id=MD.pointwise_dual(MD.id_morphism(C.terms[2]))
+        @test dual_id.dom === dual_id.cod
+        @test MD.check_morphism(dual_id).valid
+        idC=MCM.ModuleCochainMap(C,C,MD.PMorphism{K}[MD.id_morphism(M) for M in C.terms])
+        dual_idC=MD.pointwise_dual(idC)
+        @test dual_idC.C === dual_idC.D
+        @test MCM.check_module_complex_map(dual_idC).valid
+        comps=MD.PMorphism{K}[
+            MD.PMorphism(C.terms[1],D.terms[1],[CM.eye(field,1) for _=1:4]),
+            MD.PMorphism(C.terms[2],D.terms[2],[T[v]*Si[v] for v=1:4]),
+            MD.PMorphism(C.terms[3],D.terms[3],[CM.eye(field,1) for _=1:4])]
+        F=MCM.ModuleCochainMap(C,D,comps)
+        fast=TO.ChangeOfPosets._induced_maps_on_cohomology_modules_from_data(C,D,comps,1)
+        for i=0:1
+            expected=MCM.induced_map_on_cohomology_modules(F,-i)
+            HC=MCM.cohomology_module(C,-i);HD=MCM.cohomology_module(D,-i)
+            @test MD.check_morphism(fast[i+1]).valid
+            @test fast[i+1].dom.dims==HC.dims
+            @test fast[i+1].cod.dims==HD.dims
+            @test all(v->same49(fast[i+1].comps[v],expected.comps[v]),1:4)
+            for (u,v) in FF.cover_edges(P)
+                @test same49(fast[i+1].dom.edge_maps[u,v],HC.edge_maps[u,v])
+                @test same49(fast[i+1].cod.edge_maps[u,v],HD.edge_maps[u,v])
+            end
+        end
+        # The known interval classes are carried identically through the map.
+        _,fc=MCM._cohomology_module_frames(C,0)
+        _,fd=MCM._cohomology_module_frames(D,0)
+        for v=1:4
+            x=fc[v].q*FL.solve_fullcolumn(field,fc[v].Z,repsC[v])
+            y=fd[v].q*FL.solve_fullcolumn(field,fd[v].Z,repsD[v])
+            @test same49(fast[1].comps[v]*x,y)
+        end
+    end
+end

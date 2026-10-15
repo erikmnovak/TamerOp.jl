@@ -58,6 +58,11 @@ const _TEST_SURFACE_MODULES = (
     TamerOp.DataIngestion,
     TamerOp.OrdinaryPersistence,
     TamerOp.ZigzagPersistence,
+    TamerOp.MorphismMatchings,
+    TamerOp.Graphcodes,
+    TamerOp.EndCurves,
+    TamerOp.RankExact,
+    TamerOp.JordanInvariants,
     TamerOp.Interleavings,
     TamerOp.Pruning,
     TamerOp.Featurizers,
@@ -89,6 +94,10 @@ const PLB = TamerOp.PLBackend
 const CC  = TamerOp.ChainComplexes
 const OP  = TamerOp.OrdinaryPersistence
 const ZZ  = TamerOp.ZigzagPersistence
+const GC  = TamerOp.Graphcodes
+const MM  = TamerOp.MorphismMatchings
+const RX  = TamerOp.RankExact
+const JI  = TamerOp.JordanInvariants
 const IL  = TamerOp.Interleavings
 const PR  = TamerOp.Pruning
 const OPT = TamerOp.Options
@@ -257,3 +266,5 @@ with_fields(f::Function, fields) = foreach(f, fields)
 
 
 include("helpers/visualization.jl")
+
+const ENDC = TamerOp.EndCurves

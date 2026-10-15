@@ -955,4 +955,7 @@ function Base.show(io::IO, ::MIME"text/plain", summary::EncodingValidationSummar
     end
 end
 
+import ..CoreModules: _register_runtime_cache!
+_register_runtime_cache!(:encoding_dispatch, _LOCATE_STYLE_CACHE; retention=:type_dispatch, cache_lock=_LOCATE_STYLE_LOCK)
+
 end # module EncodingCore

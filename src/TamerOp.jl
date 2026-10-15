@@ -107,7 +107,10 @@ include("Fibered2D.jl")
 include("MultiparameterImages.jl")
 include("Invariants.jl")
 include("IntervalDecompositions.jl")
+include("IntervalApproximations.jl")
 include("IndecomposableDecompositions.jl")
+include("Stability.jl")
+include("PersistenceContours.jl")
 
 # 13) High-level workflow orchestration wrappers
 include("Workflow.jl")
@@ -142,6 +145,7 @@ include("DataFileIO.jl")
 
 # 15) Data ingestion subsystem
 include("DataIngestion.jl")
+include("SparseMulticovers.jl")
 
 # 16) Ordinary one-parameter persistence helpers
 include("OrdinaryPersistence.jl")
@@ -151,6 +155,7 @@ include("MorphismMatchings.jl")
 include("Graphcodes.jl")
 include("EndCurves.jl")
 include("CohomologyProducts.jl")
+include("CohomologicalCoordinates.jl")
 
 # 17) Synthetic data generators
 include("SyntheticData.jl")
@@ -283,31 +288,36 @@ import ..H0Presentations
 import ..ChangeOfPosets
 import ..Invariants
 import ..IntervalDecompositions
+import ..IntervalApproximations
+import ..SparseMulticovers
 import ..IndecomposableDecompositions
 import ..Workflow
 import ..DataFileIO
 import ..DataIngestion
 import ..OrdinaryPersistence
 import ..ZigzagPersistence
+import ..CohomologicalCoordinates
 import ..TemporalPersistence
 import ..MorphismMatchings
 import ..Graphcodes
 import ..EndCurves
 import ..RankExact
 import ..JordanInvariants
+import ..Stability
+import ..PersistenceContours
 import ..CohomologyProducts
 import ..Interleavings
 import ..Pruning
 import ..Featurizers
 
-export CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
+export IntervalApproximations, SparseMulticovers, Stability, PersistenceContours, CoreModules, Stats, Options, DataTypes, EncodingCore, Results,
        RegionGeometry, FiniteFringe, IndicatorTypes, Encoding,
        Modules, AbelianCategories, IndicatorResolutions, FlangeZn, Serialization, Visualization,
        PLPolyhedra, PLBackend, ChainComplexes, ZnEncoding, DerivedFunctors,
        Resolutions, ExtTorSpaces, Functoriality, Algebras, SpectralSequences, Backends,
        HomExtEngine, Utils,
        ModuleComplexes, H0Presentations, ChangeOfPosets, Invariants, IntervalDecompositions, IndecomposableDecompositions, Workflow, DataFileIO, DataIngestion,
-       OrdinaryPersistence, ZigzagPersistence, TemporalPersistence, MorphismMatchings, Graphcodes, EndCurves, RankExact, JordanInvariants, CohomologyProducts, Interleavings, Pruning, Featurizers
+       OrdinaryPersistence, ZigzagPersistence, TemporalPersistence, CohomologicalCoordinates, MorphismMatchings, Graphcodes, EndCurves, RankExact, JordanInvariants, CohomologyProducts, Interleavings, Pruning, Featurizers
 
 # -----------------------------------------------------------------------------
 # Static curated API binding (no dynamic lifting).

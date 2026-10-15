@@ -2531,7 +2531,7 @@ end
     end
 end
 
-@testset "Data pipeline: degree-local t>=2 fast path parity" begin
+@testset "Data pipeline: homology zero-boundary shortcut" begin
     verts = 1:5
     edges = [(1, 2), (1, 3), (1, 4), (1, 5), (2, 3), (3, 4), (4, 5)]
     triangles = [(1, 2, 3), (1, 3, 4), (1, 4, 5)]
@@ -2555,27 +2555,17 @@ end
     axes = (collect(range(0.0, stop=1.0, length=20)),)
     P = DI.poset_from_axes(axes)
 
-    old_local = DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[]
-    try
-        DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] = true
-        L_fast = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
-        M_fast = DI._cohomology_module_from_lazy(L_fast, 2)
+    L_fast = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
+    M_fast = DI._cohomology_module_from_lazy(L_fast, 2)
+    L_base = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
+    M_base = DI._cohomology_module_from_lazy_generic(L_base, 2)
+    @test M_fast === L_fast.terms[3]
+    @test M_fast.dims == M_base.dims
+    @test all(Matrix(M_fast.edge_maps[e...]) == M_base.edge_maps[e...] for e in FF.cover_edges(P))
 
-        DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] = false
-        L_base = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
-        M_base = DI._cohomology_module_from_lazy(L_base, 2)
-
-        @test M_fast.dims == M_base.dims
-        for (u, v) in FF.cover_edges(M_fast.Q)
-            @test FL.rank(CM.F2(), M_fast.edge_maps[u, v]) ==
-                  FL.rank(CM.F2(), M_base.edge_maps[u, v])
-        end
-    finally
-        DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] = old_local
-    end
 end
 
-@testset "Data pipeline: degree-local t=1 fast path parity" begin
+@testset "Data pipeline: homology kernel shortcut in degree one" begin
     verts = 1:5
     edges = [(1, 2), (1, 3), (1, 4), (1, 5), (2, 3), (3, 4), (4, 5)]
     triangles = [(1, 2, 3), (1, 3, 4), (1, 4, 5)]
@@ -2599,39 +2589,13 @@ end
     axes = (collect(range(0.0, stop=1.0, length=28)),)
     P = DI.poset_from_axes(axes)
 
-    old_local = DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[]
-    old_all_t = DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[]
-    old_t1_min_pos = DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES[]
-    old_t1_min_dim1 = DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1[]
-    old_t1_min_dim2 = DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2[]
-    old_h1 = DI._H1_KERNEL_FASTPATH[]
-    try
-        DI._H1_KERNEL_FASTPATH[] = false
-        DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] = true
-        DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[] = true
-        DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES[] = 1
-        DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1[] = 0
-        DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2[] = 0
-        L_fast = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
-        M_fast = DI._cohomology_module_from_lazy(L_fast, 1)
+    L_fast = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
+    M_fast = DI._cohomology_module_from_lazy(L_fast, 1)
+    L_base = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
+    M_base = DI._cohomology_module_from_lazy_generic(L_base, 1)
+    @test M_fast.dims == M_base.dims
+    @test all(Matrix(M_fast.edge_maps[e...]) == M_base.edge_maps[e...] for e in FF.cover_edges(P))
 
-        DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[] = false
-        L_base = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
-        M_base = DI._cohomology_module_from_lazy(L_base, 1)
-
-        @test M_fast.dims == M_base.dims
-        for (u, v) in FF.cover_edges(M_fast.Q)
-            @test FL.rank(CM.F2(), M_fast.edge_maps[u, v]) ==
-                  FL.rank(CM.F2(), M_base.edge_maps[u, v])
-        end
-    finally
-        DI._H1_KERNEL_FASTPATH[] = old_h1
-        DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] = old_local
-        DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[] = old_all_t
-        DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES[] = old_t1_min_pos
-        DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1[] = old_t1_min_dim1
-        DI._COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2[] = old_t1_min_dim2
-    end
 end
 
 @testset "Data pipeline: monotone rank-update dims parity" begin
@@ -3623,7 +3587,7 @@ end
 end
 end # with_fields
 
-@testset "Data pipeline: degree-local all-t keeps local term materialization" begin
+@testset "Data pipeline: homology construction keeps local term materialization" begin
     data = TamerOp.PointCloud([[0.0], [0.3], [0.8], [1.4], [1.9], [2.2]])
     spec = TamerOp.FiltrationSpec(
         kind=:rips,
@@ -3634,25 +3598,17 @@ end # with_fields
     axes = get(spec.params, :axes, (collect(range(0.0, stop=2.2, length=18)),))
     P = DI.poset_from_axes(axes)
 
-    old_fast = DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[]
-    old_allt = DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[]
-    try
-        DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] = true
-        DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[] = true
-        L = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
-        M = DI._cohomology_module_from_lazy(L, 2)
-        @test M isa MD.PModule
-        @test L.terms[1] === nothing
-        @test L.terms[2] !== nothing
-        @test L.terms[3] !== nothing
-        @test L.terms[4] !== nothing
-        @test L.diffs[1] === nothing
-        @test L.diffs[2] !== nothing
-        @test L.diffs[3] !== nothing
-    finally
-        DI._COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] = old_fast
-        DI._COHOMOLOGY_DEGREE_LOCAL_ALL_T[] = old_allt
-    end
+    L = DI._lazy_cochain_complex_from_graded_complex(G, P, axes; field=CM.F2())
+    M = DI._cohomology_module_from_lazy(L, 2)
+    @test M isa MD.PModule
+    @test L.terms[1] === nothing
+    @test L.terms[2] !== nothing
+    @test L.terms[3] !== nothing
+    @test L.terms[4] !== nothing
+    @test L.diffs[1] === nothing
+    @test L.diffs[2] !== nothing
+    @test L.diffs[3] !== nothing
+
 end
 
 @testset "Data pipeline: low-dim H0 union-find forced parity" begin
@@ -4474,7 +4430,9 @@ end
     @test length(EC.axes_from_encoding(enc_alpha.pi)) == 1
 
     spec_alpha_err = TamerOp.FiltrationSpec(kind=:alpha, max_dim=2, highdim_policy=:error)
-    @test_throws ArgumentError TamerOp.encode(pts3d, spec_alpha_err; degree=0)
+    @test TamerOp.encode(pts3d, spec_alpha_err; degree=0) isa RES.EncodingResult
+    pts4d = TamerOp.PointCloud([[0.,0.,0.,0.], [1.,0.,0.,0.], [0.,1.,0.,0.], [0.,0.,1.,1.]])
+    @test_throws ArgumentError TamerOp.encode(pts4d, spec_alpha_err; degree=0)
 
     spec_core_del = TamerOp.FiltrationSpec(kind=:core_delaunay, max_dim=2)
     @test_throws ArgumentError TamerOp.encode(pts3d, spec_core_del; degree=0)
@@ -7348,10 +7306,12 @@ end
 end
 
 @testset "A13 explicit Delaunay substitution at every stage" begin
-    points = DT.PointCloud([[0.,0.,0.], [1.,0.,0.], [0.,1.,0.], [0.,0.,1.]])
     stages = (:simplex_tree, :graded_complex, :cochain, :encoded_complex,
               :cohomology_dims, :module, :fringe, :encoding_result)
     for kind in (:alpha, :delaunay_lower_star)
+        points = kind === :alpha ?
+            DT.PointCloud([[0.,0.,0.,0.], [1.,0.,0.,0.], [0.,1.,0.,0.], [0.,0.,1.,1.]]) :
+            DT.PointCloud([[0.,0.,0.], [1.,0.,0.], [0.,1.,0.], [0.,0.,1.]])
         parameters = kind === :alpha ? NamedTuple() : (vertex_values=[0.,1.,2.,3.],)
         default_spec = OPT.FiltrationSpec(; kind, max_dim=1, parameters...)
         explicit_spec = OPT.FiltrationSpec(; kind, max_dim=1, highdim_policy=:rips, parameters...)
@@ -9855,5 +9815,170 @@ end
         @test all(isnothing,enc.M.lazy.active_by_dim)
         @test TamerOp.betti_table(enc;pad_to=2)==expected
         @test TamerOp.betti_table(TamerOp.resolve(enc);pad_to=2)==expected
+    end
+end
+
+
+@testset "Data pipeline: homology frames have natural coordinate witnesses" begin
+    if !isdefined(@__MODULE__, :_a72_rref)
+        include(joinpath(@__DIR__, "helpers", "geometric_persistence_oracles.jl"))
+    end
+    # A two-loop cellular complex with the relation e1 + 2e2. Suspending it
+    # gives the same signed quotient in degree two, including empty terms.
+    relations = DT.GradedComplex([Int[1], Int[1,2], Int[1]],
+        [spzeros(Int,1,2), sparse([1,2],[1,1],[1,2],2,1)],
+        [(0,0), (0,0), (1,0), (1,1)])
+    redundant = DT.GradedComplex([Int[1], Int[1,2], Int[1,2,3]],
+        [spzeros(Int,1,2), sparse([1,2,1,2],[1,1,2,2],[1,2,2,4],2,3)],
+        [(0,0), (0,0), (1,0), (1,1), (1,1), (1,1)])
+    suspended = DT.GradedComplex([Int[], Int[1], Int[1,2], Int[1]],
+        [spzeros(Int,0,1), spzeros(Int,1,2), sparse([1,2],[1,1],[1,2],2,1)],
+        [(0,0), (0,0), (1,0), (1,1)])
+    # The tetrahedron boundary acquires H2 before its filling enters. Edge
+    # entry depends on the other parameter, so this tests a branching poset.
+    simplices = [Tuple[(i,) for i in 1:4], Tuple[(i,j) for i in 1:4 for j in i+1:4],
+        Tuple[(i,j,k) for i in 1:4 for j in i+1:4 for k in j+1:4], Tuple[(1,2,3,4)]]
+    grades = [length(s)==1 ? (0,0) : length(s)==2 ? (1,0) :
+              length(s)==3 ? (1,1) : (2,2) for group in simplices for s in group]
+    filled = DT.GradedComplex([collect(eachindex(g)) for g in simplices],
+        _a72_boundaries(simplices), grades)
+    for field in (FIELDS_FULL..., CM.RealField(Float64; atol=1e-11,rtol=1e-10)),
+        (G,degree,axes) in ((relations,1,([0,1],[0,1])),
+                           (redundant,1,([0,1],[0,1])),
+                           (suspended,2,([0,1],[0,1])),
+                           (filled,1,([0,1,2],[0,1,2])),
+                           (filled,2,([0,1,2],[0,1,2])),
+                           (filled,3,([0,1,2],[0,1,2])))
+        K = CM.coeff_type(field)
+        P = DI.poset_from_axes(axes)
+        lazy = DI._lazy_cochain_complex_from_graded_complex(G,P,axes;field)
+        C = RES._materialize_complex(lazy)
+        H,frames = MC._cohomology_module_frames(C,-degree)
+        heavy = MC.cohomology_module_data(C,-degree)
+        actual = DI._cohomology_module_from_lazy(lazy,degree)
+        @test H.dims == heavy.H.dims == actual.dims
+        n = FF.nvertices(P)
+        # Vanishing incoming boundaries use kernel shortcuts. Their bases
+        # need not agree with the frame bases, especially over RealField.
+        incoming, outgoing = MC._diff(C,-degree-1), MC._diff(C,-degree)
+        actual_lifts = if AC.is_zero_morphism(incoming)
+            AC.is_zero_morphism(outgoing) ?
+                [Matrix{K}(I,d,d) for d in actual.dims] :
+                AC.kernel_with_inclusion(outgoing)[2].comps
+        else
+            [f.lift for f in frames]
+        end
+        actual_changes = [heavy.q.comps[v] * _a72_solve(Matrix(heavy.iZ.comps[v]),actual_lifts[v]) for v in 1:n]
+        # The explicit maps identify each frame class with its class in the
+        # kernel/image quotient. Check both inverse identities and naturality.
+        changes = [heavy.q.comps[v] * _a72_solve(Matrix(heavy.iZ.comps[v]),frames[v].lift) for v in 1:n]
+        inverse = [_a72_solve(S,Matrix{K}(I,size(S,1),size(S,1))) for S in changes]
+        for v in 1:n
+            @test _a72_equal(changes[v]*inverse[v],Matrix{K}(I,H.dims[v],H.dims[v]))
+            @test _a72_equal(inverse[v]*changes[v],Matrix{K}(I,H.dims[v],H.dims[v]))
+            actual_inverse = _a72_solve(actual_changes[v],Matrix{K}(I,H.dims[v],H.dims[v]))
+            @test _a72_equal(actual_changes[v]*actual_inverse,Matrix{K}(I,H.dims[v],H.dims[v]))
+            @test _a72_equal(actual_inverse*actual_changes[v],Matrix{K}(I,H.dims[v],H.dims[v]))
+        end
+        for (u,v) in FF.cover_edges(P)
+            @test _a72_equal(changes[v]*H.edge_maps[u,v],heavy.H.edge_maps[u,v]*changes[u])
+            @test _a72_equal(actual_changes[v]*actual.edge_maps[u,v],heavy.H.edge_maps[u,v]*actual_changes[u])
+        end
+        counts = DT.cell_counts(G)
+        boundaries = copy(G.boundaries)
+        while length(boundaries) < degree+1
+            push!(boundaries,spzeros(Int,last(counts),0))
+            counts = [counts;0]
+        end
+        active = [i <= length(lazy.active_by_dim) ? first(DI._lazy_ensure_active!(lazy,i)) :
+                  [Int[] for _ in 1:n] for i in 1:degree+2]
+        references = [_a72_reference_homology((;boundaries),[a[v] for a in active],degree,field) for v in 1:n]
+        independent = [_a72_coordinates(references[v],frames[v].lift) for v in 1:n]
+        for v in 1:n
+            @test length(last(_a72_rref(independent[v]))) == H.dims[v]
+        end
+        for (u,v) in FF.cover_edges(P)
+            rows,cols = active[degree+1][v],active[degree+1][u]
+            inclusion = zeros(K,length(rows),length(cols))
+            for (j,cell) in enumerate(cols)
+                inclusion[findfirst(==(cell),rows),j] = one(K)
+            end
+            expected = _a72_coordinates(references[v],inclusion*references[u].basis)
+            @test _a72_equal(independent[v]*H.edge_maps[u,v],expected*independent[u])
+        end
+    end
+end
+
+@testset "Data pipeline: homology frame cache and threaded local assembly" begin
+    if !isdefined(@__MODULE__, :_a72_rref)
+        include(joinpath(@__DIR__, "helpers", "geometric_persistence_oracles.jl"))
+    end
+    G = DT.GradedComplex([Int[1],Int[1,2],Int[1]],
+        [spzeros(Int,1,2),sparse([1,2],[1,1],[1,2],2,1)],
+        [(0,0),(0,0),(1,0),(1,1)])
+    spec = OPT.FiltrationSpec(kind=:graded,axes=(collect(0:12),collect(0:10)))
+    old_thread_min = DI._LAZY_DIFF_THREADS_MIN_VERTICES[]
+    old_lazy = DI._ENCODING_RESULT_LAZY_MODULE[]
+    try
+        for field in FIELDS_FULL
+            DI._LAZY_DIFF_THREADS_MIN_VERTICES[] = typemax(Int)
+            expected = DI.encode(G,spec;field,degree=1,stage=:module,cache=nothing)
+            for thread_min in (1,typemax(Int)), lazy in (false,true), cache in (nothing,CM.SessionCache())
+                DI._LAZY_DIFF_THREADS_MIN_VERTICES[] = thread_min
+                DI._ENCODING_RESULT_LAZY_MODULE[] = lazy
+                enc = DI.encode(G,spec;field,degree=1,cache)
+                u = EC.locate(enc.pi,(0,0));v = EC.locate(enc.pi,(1,1))
+                @test TamerOp.rank_map(enc;source=u,target=v) == (field==CM.F2() ? 0 : 1)
+                if lazy
+                    @test enc.M.cached_module === nothing
+                end
+                actual = RES.encoding_module(enc)
+                @test actual.dims == expected.dims
+                @test all(_a72_equal(actual.edge_maps[e...],expected.edge_maps[e...]) for e in FF.cover_edges(actual.Q))
+                @test RES.encoding_module(enc) === actual
+                again = DI.encode(G,spec;field,degree=1,cache,stage=:module)
+                @test all(_a72_equal(again.edge_maps[e...],actual.edge_maps[e...]) for e in FF.cover_edges(actual.Q))
+                if cache !== nothing
+                    CM._clear_session_cache!(cache)
+                    cleared = DI.encode(G,spec;field,degree=1,cache,stage=:module)
+                    @test cleared.dims == expected.dims
+                    @test all(_a72_equal(cleared.edge_maps[e...],expected.edge_maps[e...]) for e in FF.cover_edges(actual.Q))
+                end
+            end
+        end
+    finally
+        DI._LAZY_DIFF_THREADS_MIN_VERTICES[] = old_thread_min
+        DI._ENCODING_RESULT_LAZY_MODULE[] = old_lazy
+    end
+end
+
+@testset "Data pipeline: rational structural products preserve scatter semantics" begin
+    A=DI._StructuralInclusionMap{QQ}(3,4,[2,0,2,1])
+    X=QQ[1//2 2 3; 9 8 7; -2//3 4 6; 5 1//7 -1]
+    expected=QQ[5 1//7 -1; -1//6 6 9; 0 0 0]
+    @test FL._matmul(A,X)==expected
+    @test FL._matmul(A,X[:,1])==expected[:,1]
+    @test FL._matmul(A,view(X,:,1:2))==expected[:,1:2]
+    @test FL._matmul(A,spzeros(QQ,4,2))==zeros(QQ,3,2)
+    @test FL._matmul(A,zeros(QQ,4,0))==zeros(QQ,3,0)
+    @test_throws DimensionMismatch FL._matmul(A,zeros(QQ,3,1))
+    @test_throws DimensionMismatch FL._matmul(A,zeros(QQ,3))
+    invalid=copy(X);invalid[1,1]=QQ(1,0)
+    @test_throws ArgumentError FL._matmul(A,invalid)
+    @test_throws ArgumentError FL._matmul(A,invalid[:,1])
+end
+
+@testset "Data pipeline: structural products copy single rows and add repeated rows" begin
+    for field in FIELDS_FULL
+        K=CM.coeff_type(field)
+        matrix(A)=K[CM.coerce(field,x) for x in A]
+        A=DI._StructuralInclusionMap{K}(3,4,[2,0,2,1])
+        X=matrix([1 2;7 8;3 4;5 6])
+        expected=matrix([5 6;4 6;0 0])
+        @test A*X==expected
+        @test A*X[:,1]==expected[:,1]
+        @test A*sparse(X)==expected
+        @test A*zeros(K,4,0)==zeros(K,3,0)
+        @test DI._StructuralInclusionMap{K}(3,0,Int[])*zeros(K,0,2)==zeros(K,3,2)
     end
 end

@@ -36,6 +36,8 @@
 # Dense factor construction and products have different conversion costs from
 # rank/solve. Keep their conservative crossovers separate from autotuned solves.
 const _QQ_NEMO_FACTOR_MIN_COLS = Ref(16)
+# Uncached dense solves have a separate crossover from reusable inverses.
+const _QQ_NEMO_DIRECT_MIN_COLS = Ref(16)
 const _QQ_NEMO_PRODUCT_MIN_INNER = Ref(16)
 const _QQ_NEMO_PRODUCT_MIN_WORK = Ref(1024)
 
@@ -378,6 +380,7 @@ function _current_linalg_thresholds()
     return Dict(
         "nemo_threshold" => Int(NEMO_THRESHOLD[]),
         "qq_nemo_factor_min_cols" => Int(_QQ_NEMO_FACTOR_MIN_COLS[]),
+        "qq_nemo_direct_min_cols" => Int(_QQ_NEMO_DIRECT_MIN_COLS[]),
         "qq_nemo_product_min_inner" => Int(_QQ_NEMO_PRODUCT_MIN_INNER[]),
         "qq_nemo_product_min_work" => Int(_QQ_NEMO_PRODUCT_MIN_WORK[]),
         "qq_nemo_rank_threshold_square" => Int(QQ_NEMO_RANK_THRESHOLD_SQUARE[]),
@@ -430,6 +433,7 @@ end
 function _apply_linalg_thresholds!(vals)::Bool
     try
         _QQ_NEMO_FACTOR_MIN_COLS[] = max(1, Int(get(vals, "qq_nemo_factor_min_cols", _QQ_NEMO_FACTOR_MIN_COLS[])))
+        _QQ_NEMO_DIRECT_MIN_COLS[] = max(1, Int(get(vals, "qq_nemo_direct_min_cols", _QQ_NEMO_DIRECT_MIN_COLS[])))
         _QQ_NEMO_PRODUCT_MIN_INNER[] = max(1, Int(get(vals, "qq_nemo_product_min_inner", _QQ_NEMO_PRODUCT_MIN_INNER[])))
         _QQ_NEMO_PRODUCT_MIN_WORK[] = max(1, Int(get(vals, "qq_nemo_product_min_work", _QQ_NEMO_PRODUCT_MIN_WORK[])))
         qq_nemo_fallback = Int(get(vals, "nemo_threshold", NEMO_THRESHOLD[]))

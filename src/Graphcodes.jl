@@ -1,4 +1,4 @@
-"""Exact barcode-row representations of finite two-parameter modules over F2.
+"""Exact barcode-row representations of finite two-parameter modules over QQ and prime fields.
 
 The construction retains barcode bases and the full connecting linear maps.
 It follows the graphcode viewpoint of Kerber--Russold, arXiv:2503.07368,
@@ -8,7 +8,7 @@ give summands, not necessarily indecomposable summands.
 module Graphcodes
 
 using LinearAlgebra: I
-using ..CoreModules: F2, coeff_type, coerce
+using ..CoreModules: F2, QQField, PrimeField, FpElem, coeff_type, coerce
 using ..FiniteFringe: ProductOfChainsPoset, GridPoset, nvertices, leq, cover_edges
 using ..Modules: PModule, PMorphism, map_leq, check_module_functoriality
 import ..FieldLinAlg

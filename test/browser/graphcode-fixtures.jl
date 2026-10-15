@@ -1,9 +1,9 @@
 include("../fixtures/graphcodes.jl")
-function _graphcode_browser_app(sessions,tick)
+function _graphcode_browser_app(sessions,tick;make_session=_a126_session)
     instance=Ref{Any}(nothing)
     B.App(;title="Graphcode") do client
         if instance[]===nothing || V.inspection_summary(instance[]).closed
-            s=_a126_session()
+            s=make_session()
             instance[]=_observe_fixture!(sessions,s,tick)
         end
         s=instance[];viewer=V.visualize(s;backend=:wglmakie)
@@ -22,7 +22,8 @@ function _graphcode_browser_app(sessions,tick)
                         segment=(project(t.segment[1:2]),project(t.segment[3:4]))))
                 end
             end
-            JSON3.write(_json_value((;fixture=:graphcode,summary,selection=summary.selection,coefficient=snap.metadata.coefficient===nothing ? nothing : (iszero(snap.metadata.coefficient) ? 0 : 1),
+            JSON3.write(_json_value((;fixture=:graphcode,summary,selection=summary.selection,coefficient=snap.metadata.coefficient===nothing ? nothing : snap.metadata.coefficient isa TamerOp.CoreModules.FpElem ? Int(snap.metadata.coefficient.val) : string(snap.metadata.coefficient),
+                field=snap.metadata.field,coefficient_text=snap.metadata.coefficient===nothing ? nothing : V._matrix_coefficient_text(snap.metadata.coefficient),
                 coefficients=string.(snap.metadata.coefficients),active_source=snap.metadata.active_source,active_target=snap.metadata.active_target,
                 ui=(;closed=ui.closed[],error=ui.error_text[],pick_targets=targets,rebuild_count=ui.rebuild_count[],update_count=ui.update_count[],
                     observer_count=length(ui.observers)+length(ui.pointer_observers)),

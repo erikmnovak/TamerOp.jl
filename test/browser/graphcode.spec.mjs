@@ -38,3 +38,28 @@ test('A126 compression, terminal rows and rapid keyboard selection retain the ca
  expect((await state(page)).active_source).toEqual([1]);expect(await canvas.evaluate(el=>el.isConnected)).toBe(true);expect((await state(page)).ui.rebuild_count).toBe(1);expect((await state(page)).ui.update_count).toBeGreaterThan(0);
  await keyboardActivate(control(page,'close'));await expect.poll(async()=>(await state(page)).summary.closed).toBe(true);expect(errors).toEqual([]);
 });
+
+for(const [suffix,field,firstCoefficient,secondCoefficient] of [['qq','QQ','-2/3','-1'],['f5','F5','2','4']]) {
+ test(`A126 ${field} coefficients survive selection, compression and linked clients`,async({page,context},info)=>{
+  const errors=[];await openInspector(page,`${base}/graphcode-${suffix}`,errors);
+  expect((await state(page)).field).toBe(field);expect((await state(page)).coefficient_text).toBe(firstCoefficient);
+  const canvas=page.locator('canvas').first();const retained=await canvas.elementHandle();await canvas.scrollIntoViewIfNeeded();
+  const box=await canvas.boundingBox(),initial=await state(page),edge=initial.ui.pick_targets.find(t=>t.label.startsWith('Map 2'));
+  expect(edge.label).toContain(`coefficient ${secondCoefficient} in ${field}`);
+  await page.mouse.move(box.x+edge.x*box.width,box.y+edge.y*box.height);
+  await expect(control(page,'hover')).toContainText(`coefficient ${secondCoefficient}`);
+  expect((await state(page)).selection.revision).toBe(initial.selection.revision);
+  await page.mouse.click(box.x+edge.x*box.width,box.y+edge.y*box.height);
+  await expect.poll(async()=>(await state(page)).coefficient_text).toBe(secondCoefficient);await settled(page);
+  const linked=await context.newPage();await openInspector(linked,`${base}/graphcode-${suffix}`,errors);
+  await control(page,'compressed').check();await expect.poll(async()=>(await state(linked)).selection.compressed).toBe(true);await settled(page);
+  await expect(control(page,'readout')).toContainText(`Selected coefficient: ${secondCoefficient}`);
+  await keyboardActivate(control(page,'reset'));await expect.poll(async()=>(await state(linked)).coefficient_text).toBe(firstCoefficient);await settled(page);
+  expect(await retained.evaluate(el=>el.isConnected)).toBe(true);expect((await state(page)).ui.rebuild_count).toBe(1);
+  await capture(page,info,`graphcode-${suffix}-wide`);await linked.close();
+  await page.setViewportSize({width:520,height:1000});await scrollChart(page,page.locator('[aria-label="Graphcode charts"]'),'right');
+  await capture(page,info,`graphcode-${suffix}-narrow`);
+  await keyboardActivate(control(page,'close'));await expect.poll(async()=>(await state(page)).summary.closed).toBe(true);
+  expect(errors).toEqual([]);
+ });
+}

@@ -10,8 +10,8 @@ import ..ModuleComplexes: cohomology_module
 
 
 using ..CoreModules: QQField, PrimeField, FpElem, F2, coeff_type, coerce, eye
-using ..FiniteFringe: FinitePoset, nvertices, leq
-using ..Modules: PModule, check_module
+using ..FiniteFringe: AbstractPoset, FinitePoset, ProductOfChainsPoset, nvertices, leq, cover_edges
+using ..Modules: PModule, check_module, check_module_functoriality
 import ..Modules: structure_map
 import ..FieldLinAlg
 import ..DataTypes
@@ -22,6 +22,8 @@ import ..ZigzagPersistence
 
 include("cohomology_products/algebras.jl")
 include("cohomology_products/simplicial.jl")
+include("cohomology_products/diagrams.jl")
+include("cohomology_products/sources.jl")
 include("cohomology_products/persistence.jl")
 
 end

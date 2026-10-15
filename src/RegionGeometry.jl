@@ -29,6 +29,13 @@ Note:
 """
 module RegionGeometry
 
+"""Return rational Lebesgue volumes of all encoding regions clipped to `box`.
+Lower-dimensional strata have zero mass. The box must be finite; resource
+limits reject unfinished geometry instead of returning estimated volumes.
+"""
+function region_weights_exact end
+
+
 using LinearAlgebra
 using Random
 

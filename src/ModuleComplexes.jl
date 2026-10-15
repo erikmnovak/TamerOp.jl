@@ -1478,19 +1478,54 @@ function cohomology_module_data(C::ModuleCochainComplex{K}, t::Int) where {K}
     return (Z=Z, iZ=iZ, B=B, iB=iB, j=j, H=H, q=q)
 end
 
+# An exact cycle basis often contains an identity minor at its free rows.
+# Those rows read off coordinates without elimination or an inverse. Numerical
+# bases retain the general solver and its field-specific tolerance semantics.
+function _cohomology_cycle_rows(field, Z)
+    field isa RealField && return nothing
+    m, n = size(Z)
+    row_columns = zeros(Int, m)
+    @inbounds for j in 1:n, i in 1:m
+        value = Z[i,j]
+        iszero(value) && continue
+        row_columns[i] = row_columns[i] == 0 && isone(value) ? j : -1
+    end
+    rows = zeros(Int, n)
+    @inbounds for i in 1:m
+        j = row_columns[i]
+        j > 0 && rows[j] == 0 && (rows[j] = i)
+    end
+    return all(!iszero, rows) ? rows : nothing
+end
+
+function _cohomology_cycle_coordinates(field, Z, rows, Y; check_rhs::Bool=false)
+    (rows === nothing || check_rhs) && return FieldLinAlg.solve_fullcolumn(field, Z, Y; check_rhs)
+    return Matrix(Y[rows,:])
+end
+
 function _cohomology_stalk(field, A, B, n::Int)
     K = coeff_type(field)
-    n == 0 && return (Z=zeros(K,0,0), q=zeros(K,0,0), lift=zeros(K,0,0))
+    n == 0 && return (Z=zeros(K,0,0), q=zeros(K,0,0), lift=zeros(K,0,0), rows=Int[])
     Z = AbelianCategories._is_partial_permutation(field,B) ?
         AbelianCategories._kernel_basis_partial_permutation(K,B) : FieldLinAlg.nullspace(field,B)
-    boundaries = FieldLinAlg.colspace(field, A)
-    J = FieldLinAlg.solve_fullcolumn(field, Z, boundaries; check_rhs=field isa RealField)
+    cycle_rows = _cohomology_cycle_rows(field, Z)
+    J = if cycle_rows === nothing
+        boundaries = FieldLinAlg.colspace(field, A)
+        _cohomology_cycle_coordinates(field, Z, cycle_rows, boundaries; check_rhs=field isa RealField)
+    else
+        # The quotient only needs generators for the boundary image. Reading
+        # their exact coordinates preserves sparse incidences and avoids a
+        # separate column-space elimination; dependent generators are valid.
+        A[cycle_rows,:]
+    end
     q = AbelianCategories._is_partial_permutation(field,J) ?
         AbelianCategories._cokernel_q_partial_permutation(K,J) :
-        Matrix{K}(transpose(FieldLinAlg.nullspace(field,transpose(J))))
-    rows = AbelianCategories._selector_rows_from_basis(field,transpose(q))
+        Matrix{K}(transpose(FieldLinAlg.nullspace(field,
+            J isa SparseMatrixCSC ? copy(transpose(J)) : transpose(J))))
+    rows = field isa RealField ? AbelianCategories._selector_rows_from_basis(field,transpose(q)) :
+           _cohomology_cycle_rows(field,transpose(q))
     lift = rows === nothing ? FieldLinAlg._matmul(Z,AbelianCategories._right_inverse_full_row(field,q)) : Z[:,rows]
-    return (Z=Z, q=q, lift=lift)
+    return (Z=Z, q=q, lift=lift, rows=cycle_rows)
 end
 
 function _cohomology_module_frames(C::ModuleCochainComplex{K}, t::Int) where {K}
@@ -1501,8 +1536,13 @@ function _cohomology_module_frames(C::ModuleCochainComplex{K}, t::Int) where {K}
     dims = [size(F.q,1) for F in frames]
     maps = Dict{Tuple{Int,Int},Matrix{K}}()
     for (u,v) in cover_edges(M.Q)
-        maps[u,v] = FieldLinAlg._matmul(frames[v].q,FieldLinAlg.solve_fullcolumn(M.field,
-            frames[v].Z, FieldLinAlg._matmul(M.edge_maps[u,v],frames[u].lift); check_rhs=false))
+        maps[u,v] = if dims[u] == 0 || dims[v] == 0
+            zeros(K,dims[v],dims[u])
+        else
+            coordinates = _cohomology_cycle_coordinates(M.field, frames[v].Z, frames[v].rows,
+                FieldLinAlg._matmul(M.edge_maps[u,v],frames[u].lift))
+            FieldLinAlg._matmul(frames[v].q, coordinates)
+        end
     end
     return PModule{K}(M.Q, dims, maps; field=M.field), frames
 end
@@ -1533,8 +1573,8 @@ function _induced_cohomology_map(C::ModuleCochainComplex{K}, D::ModuleCochainCom
                                  ft::PMorphism{K}, t::Int) where {K}
     H, Cframes = _cohomology_module_frames(C,t)
     J, Dframes = _cohomology_module_frames(D,t)
-    comps = [FieldLinAlg._matmul(Dframes[v].q,FieldLinAlg.solve_fullcolumn(H.field,
-             Dframes[v].Z,FieldLinAlg._matmul(ft.comps[v],Cframes[v].lift); check_rhs=false))
+    comps = [FieldLinAlg._matmul(Dframes[v].q,_cohomology_cycle_coordinates(H.field,
+             Dframes[v].Z,Dframes[v].rows,FieldLinAlg._matmul(ft.comps[v],Cframes[v].lift)))
              for v in 1:nvertices(H.Q)]
     return PMorphism{K}(H, J, comps)
 end

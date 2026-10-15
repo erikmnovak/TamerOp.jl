@@ -1308,6 +1308,7 @@ function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
     if method === :implicit && !implicit
         throw(ArgumentError("implicit flag persistence supports barcodes and cocycles through H2; use method=:explicit for higher degrees, homology representatives or retained source geometry."))
     end
+    build = nothing
     if implicit
         (cache === nothing || cache isa DataIngestion.EncodingCache) ||
             throw(ArgumentError("cache must be nothing or an EncodingCache."))
@@ -1320,12 +1321,16 @@ function persistence_diagram(data, filtration::DataIngestion.AbstractFiltration;
         diag = persistence_diagram(DataIngestion.graded_complex(build); order, field, representatives, cocycles)
     end
     kind = DataIngestion.filtration_kind(source_filtration)
-    # The public build result records grades and orientation, but not the
-    # executed construction/backend. Do not infer an identity construction:
-    # some supported requests deliberately substitute a different model.
+    # Only builders with recorded provenance can identify the executed model.
     meta = merge(diag.meta, (construction=implicit ? merge(diag.meta.construction,(requested=kind,)) :
                                 (requested=kind, effective=:not_recorded, substitution=:not_recorded),
                             source=typeof(source_data), geometry=source ? :retained_source_cells : :ingestion_contract))
+    if build !== nothing && provenance(build) !== nothing
+        p = provenance(build)
+        meta = merge(meta, (construction=p.construction, geometry_backend=p.backend))
+    elseif source && hasproperty(diag.meta, :source_construction)
+        meta = merge(meta, (construction=diag.meta.source_construction,))
+    end
     if landmark_info !== nothing
         meta = merge(meta,(landmarks=landmark_info, approximation=:landmark_restriction,
             landmark_bound_scope=:full_metric_rips_before_neighbor_selection_or_cutoff))

@@ -37,7 +37,7 @@ using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, compile_encodi
                       _compile_encoding_cached
 using ..Results: EncodingResult, EncodedComplexResult, CohomologyDimsResult, ResolutionResult, InvariantResult,
                  _encoding_with_session_cache
-import ..Results: materialize_module, module_dims, _materialize_complex, _provenance_field,
+import ..Results: provenance, materialize_module, module_dims, _materialize_complex, _provenance_field,
                   _module_materialized, _complex_materialized, _show_stored_dimensions, _result_payload_poset
 import ..EncodingCore: locate, dimension, representatives, axes_from_encoding, _grid_strides, GridEncodingMap
 
@@ -80,7 +80,7 @@ import ..ModuleComplexes
 import ..FieldLinAlg
 using ..ModuleComplexes: ModuleCochainComplex, cohomology_module
 import ..AbelianCategories
-using ..AbelianCategories: kernel_with_inclusion, image_with_inclusion, _cokernel_module, is_zero_morphism
+using ..AbelianCategories: kernel_with_inclusion, _cokernel_module, is_zero_morphism
 
 using ..FlangeZn: Face, IndFlat, IndInj, Flange
 import ..Workflow: encode, fringe_presentation, flange_presentation, _specialized_betti_table
@@ -112,8 +112,6 @@ const _H0_ACTIVE_CHAIN_INCREMENTAL = Ref{Bool}(true)
 const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_POS_VERTICES = Ref{Int}(32)
 const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_VERTICES = Ref{Int}(3_000)
 const _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_EDGES = Ref{Int}(8_000)
-const _COHOMOLOGY_DEGREE_LOCAL_FASTPATH = Ref{Bool}(true)
-const _COHOMOLOGY_DEGREE_LOCAL_ALL_T = Ref{Bool}(true)
 const _COHOMOLOGY_DIMS_MONOTONE_RANK_FASTPATH = Ref{Bool}(true)
 const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_RANK = Ref{Bool}(true)
 const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_MODE = Ref{Symbol}(:auto) # :auto | :on | :off
@@ -123,9 +121,6 @@ const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_MAX = Ref{Int}(96)
 const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE = Dict{NTuple{5,Int},Bool}()
 const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_ORDER = NTuple{5,Int}[]
 const _COHOMOLOGY_DIMS_MONOTONE_INCREMENTAL_CACHE_LOCK = ReentrantLock()
-const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES = Ref{Int}(32)
-const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1 = Ref{Int}(2_500)
-const _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2 = Ref{Int}(1_200)
 const _COHOMOLOGY_DIMS_USE_DIRECT_RESTRICTED_RANK = Ref{Bool}(true)
 const _EXACT_RECTANGLE_QCACHE_MAX = Ref{Int}(128)
 const _STRUCTURAL_MAP_FAST_KERNELS = Ref{Bool}(true)
@@ -230,10 +225,17 @@ function Base.:*(A::_StructuralInclusionMap{K}, X::AbstractMatrix{T}) where {K,T
     ncols == size(X, 1) || throw(DimensionMismatch("size mismatch in inclusion-map multiplication"))
     U = promote_type(K, T)
     Y = zeros(U, nrows, size(X, 2))
+    isempty(Y) && return Y
+    written = falses(nrows)
     @inbounds for j in 1:ncols
         i = A.row_for_col[j]
         i == 0 && continue
-        @views Y[i, :] .+= X[j, :]
+        if written[i]
+            @views Y[i, :] .+= X[j, :]
+        else
+            @views Y[i, :] .= X[j, :]
+            written[i] = true
+        end
     end
     return Y
 end
@@ -243,12 +245,31 @@ function Base.:*(A::_StructuralInclusionMap{K}, x::AbstractVector{T}) where {K,T
     ncols == length(x) || throw(DimensionMismatch("size mismatch in inclusion-map multiplication"))
     U = promote_type(K, T)
     y = zeros(U, nrows)
+    written = falses(nrows)
     @inbounds for j in 1:ncols
         i = A.row_for_col[j]
         i == 0 && continue
-        y[i] += x[j]
+        if written[i]
+            y[i] += x[j]
+        else
+            y[i] = x[j]
+            written[i] = true
+        end
     end
     return y
+end
+
+# Exact algebra must preserve the row-scatter multiplication of these maps.
+# The generic QQ product would visit and allocate every implicit zero.
+function FieldLinAlg._matmul(A::_StructuralInclusionMap{QQ}, X::AbstractMatrix{QQ})
+    Base.require_one_based_indexing(X)
+    all(isfinite, X) || throw(ArgumentError("inclusion-map product requires finite coefficients"))
+    return A * X
+end
+function FieldLinAlg._matmul(A::_StructuralInclusionMap{QQ}, x::AbstractVector{QQ})
+    Base.require_one_based_indexing(x)
+    all(isfinite, x) || throw(ArgumentError("inclusion-map product requires finite coefficients"))
+    return A * x
 end
 
 function Base.:*(A::_StructuralInclusionMap{K}, B::_StructuralInclusionMap{K}) where {K}
@@ -1272,17 +1293,21 @@ DelaunayLowerStarFiltration(; max_dim::Int=2,
     end
 
 """
-    AlphaFiltration(; max_dim=2, delaunay_backend=:auto, highdim_policy=:error, ...)
+    AlphaFiltration(; max_dim=3, delaunay_backend=:auto, highdim_policy=:error, ...)
 
-One-dimensional or planar alpha filtration with squared-radius grades.
-Higher-dimensional inputs throw by default. `highdim_policy=:rips` explicitly
+Alpha filtration in ambient dimensions one through three, with squared-radius
+grades. Spatial inputs use exact rational predicates and squared radii on the
+stored coordinates. MiniQhull optionally proposes a tetrahedralization, checked
+with exact predicates; the bounded native route resolves cospheres by a coherent
+lexicographic triangulation. Duplicate spatial sites are rejected; lower affine
+dimensions retain their ambient metric. Higher-dimensional inputs throw by default. `highdim_policy=:rips` explicitly
 substitutes a Rips filtration with diameter grades, not squared alpha radii.
 Inspect `provenance(encode(...)).construction` before comparing these scales.
 """
 struct AlphaFiltration{P<:NamedTuple} <: AbstractFiltration
     params::P
 end
-AlphaFiltration(; max_dim::Int=2,
+AlphaFiltration(; max_dim::Int=3,
                 delaunay_backend::Symbol=:auto,
                 highdim_policy::Symbol=:error,
                 construction::ConstructionOptions=ConstructionOptions()) =
@@ -1453,6 +1478,8 @@ end
 
 function _validate_geometric_filtration_params(kind::Symbol, p::NamedTuple)
     if kind in (:alpha, :delaunay_lower_star)
+        md = get(p, :max_dim, kind === :alpha ? 3 : 2)
+        md isa Integer && !(md isa Bool) && md >= 0 || throw(ArgumentError("max_dim must be a nonnegative integer."))
         policy = get(p, :highdim_policy, :error)
         policy in (:error, :rips) || throw(ArgumentError("highdim_policy must be :error or :rips."))
         backend = get(p, :delaunay_backend, :auto)
@@ -1565,8 +1592,8 @@ function _validate_geometric_filtration_request(data, spec::FiltrationSpec)
         _validate_geometric_filtration_params(kind, spec.params)
         data isa PointCloud || throw(ArgumentError("Filtration kind=:$kind requires a PointCloud."))
         isempty(data.points) && throw(ArgumentError("PointCloud has no points."))
-        if length(first(data.points)) > 2 && _delaunay_highdim_policy(spec) === :error
-            throw(ArgumentError("Filtration kind=:$kind supports only 1D/2D point clouds. Set highdim_policy=:rips to explicitly substitute a different Rips construction."))
+        if length(first(data.points)) > (kind === :alpha ? 3 : 2) && _delaunay_highdim_policy(spec) === :error
+            throw(ArgumentError("Filtration kind=:$kind exceeds its supported ambient dimension. Set highdim_policy=:rips to explicitly substitute a different Rips construction."))
         end
         return nothing
     end
@@ -1921,11 +1948,14 @@ Use [`describe(...)`](@ref) or [`graded_complex_build_summary`](@ref) for the
 cheap structural picture, then [`graded_complex`](@ref), [`grade_axes`](@ref),
 and [`grade_orientation`](@ref) when you need the full payload.
 """
-struct GradedComplexBuildResult{G,A,O}
+struct GradedComplexBuildResult{G,A,O,P}
     complex::G
     axes::A
     orientation::O
+    provenance::P
 end
+GradedComplexBuildResult(G,axes,orientation)=GradedComplexBuildResult(G,axes,orientation,nothing)
+provenance(r::GradedComplexBuildResult)=r.provenance
 
 """
     PointCodensityResult
@@ -2559,7 +2589,7 @@ function to_filtration(spec::FiltrationSpec)::AbstractFiltration
         )
     elseif k === :alpha
         return AlphaFiltration(;
-            max_dim = get(p, :max_dim, 2),
+            max_dim = get(p, :max_dim, 3),
             delaunay_backend = Symbol(get(p, :delaunay_backend, :auto)),
             highdim_policy = get(p, :highdim_policy, :error),
             construction = construction,
@@ -3047,6 +3077,12 @@ function _estimate_pointcloud_cell_counts(data::PointCloud,
                                                strict=strict)
     elseif kind == :delaunay_lower_star || kind == :alpha
         d = length(data.points[1])
+        if kind === :alpha && d == 3
+            X = _spatial_alpha_points(data)
+            affine_dim = length(_alpha_affine_basis(X))-1
+            md = min(Int(get(spec.params, :max_dim, 3)), affine_dim)
+            return BigInt[binomial(big(n), k+1) for k in 0:md]
+        end
         max_dim = min(max(Int(get(spec.params, :max_dim, 2)), 0), 2)
         if d <= 2
             counts = BigInt[big(n)]
@@ -5054,32 +5090,6 @@ end
            (total_active_edges >= _H0_ACTIVE_CHAIN_INCREMENTAL_MIN_TOTAL_ACTIVE_EDGES[])
 end
 
-@inline function _use_degree_local_t1_fastpath(L::LazyModuleCochainComplex)
-    _COHOMOLOGY_DEGREE_LOCAL_ALL_T[] || return false
-    nP = nvertices(L.P)
-    nP >= _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_POS_VERTICES[] || return false
-
-    idx1 = 2
-    (1 <= idx1 <= length(L.active_by_dim)) || return false
-    active1, _ = _lazy_ensure_active!(L, idx1)
-    total_active1 = _sum_nested_lengths(active1)
-    total_active1 >= _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM1[] || return false
-
-    idx2 = idx1 + 1
-    idx2 > length(L.active_by_dim) && return true
-    active2, _ = _lazy_ensure_active!(L, idx2)
-    total_active2 = _sum_nested_lengths(active2)
-    return total_active2 >= _COHOMOLOGY_DEGREE_LOCAL_T1_MIN_TOTAL_ACTIVE_DIM2[]
-end
-
-@inline function _use_degree_local_module_fastpath(L::LazyModuleCochainComplex, t::Int)
-    _COHOMOLOGY_DEGREE_LOCAL_FASTPATH[] || return false
-    t >= 2 && return true
-    t == 1 || return false
-    _COHOMOLOGY_DEGREE_LOCAL_ALL_T[] && return true
-    return _use_degree_local_t1_fastpath(L)
-end
-
 function _births_from_prefix_active_sets(active::Vector{Vector{Int}}, nitems::Int)
     nitems >= 0 || return nothing
     births = zeros(Int, nitems)
@@ -5811,17 +5821,6 @@ function _cohomology_module_h1_kernel_from_lazy(L::LazyModuleCochainComplex)
     return kernel_with_inclusion(_lazy_diff(L, -1))[1]
 end
 
-function _identity_structural_morphism(M::PModule{K}) where {K}
-    n = nvertices(M.Q)
-    comps = Vector{_StructuralInclusionMap{K}}(undef, n)
-    @inbounds for i in 1:n
-        d = M.dims[i]
-        row_for_col = collect(1:d)
-        comps[i] = _StructuralInclusionMap{K}(d, d, row_for_col)
-    end
-    return PMorphism{K}(M, M, comps)
-end
-
 @inline function _solve_through_structural_inclusion(A::_StructuralInclusionMap{K},
                                                      Y::AbstractMatrix{K}) where {K}
     nr, nc = size(A)
@@ -5833,52 +5832,6 @@ end
         @views X[j, :] .= Y[i, :]
     end
     return X
-end
-
-function _cohomology_module_degree_local_from_lazy(L::LazyModuleCochainComplex, t::Int)
-    K = coeff_type(L.field)
-    M = _lazy_term(L, -t)
-    d0 = _lazy_diff(L, -t - 1)
-    d1 = _lazy_diff(L, -t)
-
-    Z, iZ = if is_zero_morphism(d1)
-        M, _identity_structural_morphism(M)
-    else
-        kernel_with_inclusion(d1)
-    end
-
-    if is_zero_morphism(d0)
-        return Z
-    end
-
-    B, iB = image_with_inclusion(d0)
-    if all(==(0), B.dims)
-        return Z
-    end
-
-    n = nvertices(M.Q)
-    jcomps = Vector{Matrix{K}}(undef, n)
-    field = M.field
-    @inbounds for u in 1:n
-        bd = B.dims[u]
-        zd = Z.dims[u]
-        if bd == 0
-            jcomps[u] = zeros(K, zd, 0)
-        elseif zd == 0
-            jcomps[u] = zeros(K, 0, bd)
-        else
-            A = iZ.comps[u]
-            Y = iB.comps[u]
-            jcomps[u] = if A isa _StructuralInclusionMap{K}
-                _solve_through_structural_inclusion(A, Y)
-            else
-                FieldLinAlg.solve_fullcolumn(field, A, Y; check_rhs=false)
-            end
-        end
-    end
-    j = PMorphism{K}(B, Z, jcomps)
-    H, _ = _cokernel_module(j)
-    return H
 end
 
 function _cohomology_module_from_lazy_generic(L::LazyModuleCochainComplex, t::Int)
@@ -6334,8 +6287,13 @@ function _cohomology_module_from_lazy(L::LazyModuleCochainComplex, t::Int)
     if t == 1 && _H1_KERNEL_FASTPATH[] && length(L.terms) <= 2
         return _cohomology_module_h1_kernel_from_lazy(L)
     end
-    if _use_degree_local_module_fastpath(L, t)
-        return _cohomology_module_degree_local_from_lazy(L, t)
+    # Without incoming boundaries, homology is the kernel or the chain module
+    # itself. Otherwise form stalk quotients before their final maps.
+    incoming = _lazy_diff(L, -t - 1)
+    outgoing = _lazy_diff(L, -t)
+    if is_zero_morphism(incoming)
+        return is_zero_morphism(outgoing) ? _lazy_term(L, -t) :
+               kernel_with_inclusion(outgoing)[1]
     end
     return _cohomology_module_from_lazy_generic(L, t)
 end
@@ -10538,10 +10496,12 @@ function _graded_complex_from_point_cloud_alpha(data::PointCloud,
                                                 return_simplex_tree::Bool=false)
     points = data.points
     d = length(points[1])
-    if d > 2
+    if d == 3
+        return _graded_complex_from_spatial_alpha(data, spec; return_simplex_tree)
+    elseif d > 3
         policy = _delaunay_highdim_policy(spec)
         if policy === :error
-            throw(ArgumentError("Alpha filtrations support only 1D/2D point clouds (got dimension $d). Set highdim_policy=:rips to explicitly substitute Rips."))
+            throw(ArgumentError("Alpha filtrations support ambient dimensions 1 through 3 (got dimension $d). Set highdim_policy=:rips to explicitly substitute Rips."))
         end
         fallback_params = _filter_params(spec.params, [:highdim_policy, :delaunay_backend])
         fallback_spec = FiltrationSpec(; kind=:rips, fallback_params...)
@@ -10607,6 +10567,7 @@ end
     return deg
 end
 
+include("data_ingestion/spatial_alpha.jl")
 include("data_ingestion/enclosing_geometry.jl")
 include("data_ingestion/core_bifiltrations.jl")
 include("data_ingestion/radius_degree_rips.jl")
@@ -12290,6 +12251,18 @@ function build_graded_complex(data, filtration::AbstractFiltration;
     return GradedComplexBuildResult(_build_graded_complex_tuple(data, filtration; cache=cache))
 end
 
+function build_graded_complex(data::PointCloud, filtration::AlphaFiltration;
+                              cache::Union{Nothing,EncodingCache}=nothing)
+    spec=_filtration_spec(filtration)
+    trace=_IngestionExecutionTrace()
+    out=with(_INGESTION_EXECUTION_TRACE=>trace) do
+        _build_graded_complex_tuple(data,filtration;cache)
+    end
+    p=(;construction=_ingestion_construction_provenance(data,spec,filtration),
+        backend=Tuple(trace.backends))
+    GradedComplexBuildResult(out...,p)
+end
+
 function _graded_complex_from_data(data, filtration::AbstractFiltration;
                                    cache::Union{Nothing,EncodingCache}=nothing)
     return _build_graded_complex_tuple(data, filtration; cache=cache)
@@ -12305,6 +12278,7 @@ end
         cell_counts = get(d, :cell_counts, nothing),
         axis_sizes = ntuple(i -> length(grade_axes(res)[i]), length(grade_axes(res))),
         orientation = grade_orientation(res),
+        provenance = res.provenance,
     )
 end
 

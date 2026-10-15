@@ -148,7 +148,7 @@ function _render_graphcode_inspector(spec;display=:inline,figure=nothing,size=no
         row(label("Barcode row",row_slider.node),label("Grid column",column_slider.node)),
         row(label("Row",row_input),label("Source interval (0 clears)",source),label("Target interval (0 clears)",target),
             label("Column",column),label("Component (0 shows all)",component),apply),
-        row(label("Compress identity continuations",compression),reset,close_button),
+        row(label("Compress continuation spans",compression),reset,close_button),
         B.DOM.p(error_text;id="$dom_id-error",role="alert"),B.DOM.p(status_text;id="$dom_id-status",role="status"),
         B.DOM.p(hover_text;id="$dom_id-hover",role="status",style="min-height:1.5em"),
         B.DOM.div(content;style="max-width:100%;overflow:auto",tabindex="0",var"aria-label"="Graphcode charts"),

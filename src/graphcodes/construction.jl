@@ -9,13 +9,21 @@ function _coordinates(values,label)
         throw(ArgumentError("$label must be strictly monotone in module order"))
     xs
 end
-function _coefficient(x)
-    K=coeff_type(F2())
-    x isa K && return x
-    x isa Union{Integer,Rational} || throw(ArgumentError("graphcode coefficients must be exact F2 elements or integers/rationals"))
-    coerce(F2(),x)
+function _field(F)
+    F isa Union{QQField,PrimeField} || throw(ArgumentError("graphcodes require QQField() or a prime field"))
+    F
 end
-function _rows(rows,maps,x,y,budget)
+function _coefficient(F,x)
+    K=coeff_type(F)
+    if x isa FpElem
+        typeof(x)===K || throw(ArgumentError("graphcode coefficient belongs to a different field"))
+        return x
+    end
+    x isa Union{Integer,Rational} || throw(ArgumentError("graphcode coefficients must be exact elements of the specified field"))
+    isfinite(x) || throw(ArgumentError("graphcode coefficients must be finite"))
+    coerce(F,x)
+end
+function _rows(rows,maps,x,y,F,budget)
     m,n=length(x),length(y)
     _coordinates(x,"x");_coordinates(y,"y")
     _bound(big(m)*n,budget.max_vertices,"vertices")
@@ -32,7 +40,7 @@ function _rows(rows,maps,x,y,budget)
     for (j,A) in enumerate(maps)
         A isa AbstractMatrix && size(A)==(length(rows[j+1]),length(rows[j])) || throw(ArgumentError("connecting matrix $j has the wrong shape"))
         for s in axes(A,2),t in axes(A,1)
-            a=_coefficient(A[t,s])
+            a=_coefficient(F,A[t,s])
             iszero(a) || _admissible(rows[j][s],rows[j+1][t]) ||
                 throw(ArgumentError("nonzero coefficient ($t,$s) in row $j violates the interval Hom condition"))
         end
@@ -40,16 +48,17 @@ function _rows(rows,maps,x,y,budget)
     nothing
 end
 
-"""`graphcode(rows, maps; x, y)` builds a checked F2 graphcode from inclusive
+"""`graphcode(rows, maps; x, y, field=F2())` builds a checked graphcode from inclusive
 index supports `(first,last)` in each row and target-by-source coefficient
 matrices. `x` and `y` are exact coordinate labels in module order (either
 increasing or decreasing). Duplicate intervals remain separate basis members.
 """
-function graphcode(rows::AbstractVector,maps::AbstractVector;x,y,budget::GraphcodeBudget=GraphcodeBudget())
-    xs=_coordinates(x,"x");ys=_coordinates(y,"y");_rows(rows,maps,xs,ys,budget)
-    K=coeff_type(F2());rr=[Tuple{Int,Int}[(Int(a),Int(b)) for (a,b) in row] for row in rows]
-    aa=Matrix{K}[map(_coefficient,A) for A in maps]
-    Graphcode(xs,ys,rr,aa,nothing,nothing,reshape(collect(1:length(xs)*length(ys)),length(xs),length(ys)),:supplied_rows)
+function graphcode(rows::AbstractVector,maps::AbstractVector;x,y,field=F2(),budget::GraphcodeBudget=GraphcodeBudget())
+    F=_field(field)
+    xs=_coordinates(x,"x");ys=_coordinates(y,"y");_rows(rows,maps,xs,ys,F,budget)
+    K=coeff_type(F);rr=[Tuple{Int,Int}[(Int(a),Int(b)) for (a,b) in row] for row in rows]
+    aa=Matrix{K}[map(x->_coefficient(F,x),A) for A in maps]
+    Graphcode(F,xs,ys,rr,aa,nothing,nothing,reshape(collect(1:length(xs)*length(ys)),length(xs),length(ys)),:supplied_rows)
 end
 
 function _grid(M,vertices,x,y,budget)
@@ -83,16 +92,16 @@ function _grid(M,vertices,x,y,budget)
 end
 
 """`graphcode(M; vertices=nothing, x=nothing, y=nothing, budget=GraphcodeBudget())`
-constructs row barcodes and their actual maps from a finite F2 module. Native
+constructs row barcodes and their actual maps from a finite module over QQ or a prime field. Native
 two-dimensional grid orders, including reversed axes, use all vertices.
 An explicit order-preserving vertex matrix instead declares a grid restriction;
 repeated labels are permitted. The result owns the restricted source and its
 noncanonical basis identifications. It does not infer maps from bar matching.
 """
 function graphcode(M::PModule;vertices=nothing,x=nothing,y=nothing,budget::GraphcodeBudget=GraphcodeBudget())
-    M.field==F2() || throw(ArgumentError("graphcodes currently require F2"))
+    F=_field(M.field)
     _bound(nvertices(M.Q),budget.max_vertices,"input vertices")
-    ids,xs,ys,scope=_grid(M,vertices,x,y,budget);m,n=size(ids);K=coeff_type(F2())
+    ids,xs,ys,scope=_grid(M,vertices,x,y,budget);m,n=size(ids);K=coeff_type(F)
     dims=M.dims[vec(ids)];d=maximum(dims;init=0);_bound(d,budget.max_dimension,"stalk dimension")
     entries=sum(big(v)^2 for v in dims;init=big(0))
     Q=ProductOfChainsPoset((m,n));edges=collect(cover_edges(Q))
@@ -100,13 +109,13 @@ function graphcode(M::PModule;vertices=nothing,x=nothing,y=nothing,budget::Graph
     _bound(3entries+6big(d)^2,budget.max_entries,"source and row bases")
     # Reject malformed input diagrams before trusting an arbitrary path query.
     check_module_functoriality(M;throw=true)
-    source=PModule{K}(Q,dims,Dict((u,v)=>Matrix(map_leq(M,ids[u],ids[v])) for (u,v) in edges);field=F2())
+    source=PModule{K}(Q,dims,Dict((u,v)=>Matrix(map_leq(M,ids[u],ids[v])) for (u,v) in edges);field=F)
     Z=ZigzagPersistence;b=Z.ZigzagBudget(max_vertices=budget.max_vertices,max_dimension=budget.max_dimension,
         max_matrix_entries=budget.max_entries,max_representative_entries=budget.max_entries)
     rows=Vector{Tuple{Int,Int}}[];bases=Vector{Matrix{K}}[];total=0
     for j in 1:n
         rids=collect(1:m).+(j-1)*m
-        z=Z.ZigzagModule(dims[rids],[Matrix(map_leq(source,rids[i],rids[i+1])) for i in 1:m-1];directions=fill(:forward,m-1),field=F2(),budget=b)
+        z=Z.ZigzagModule(dims[rids],[Matrix(map_leq(source,rids[i],rids[i+1])) for i in 1:m-1];directions=fill(:forward,m-1),field=F,budget=b)
         result=Z.zigzag_persistence(z;representatives=true,budget=b);bars=Z.zigzag_intervals(result)
         order=sortperm(bars;by=t->(t.first,t.last));supports=[(bars[k].first,bars[k].last) for k in order]
         total+=length(supports);_bound(total,budget.max_intervals,"intervals")
@@ -126,11 +135,11 @@ function graphcode(M::PModule;vertices=nothing,x=nothing,y=nothing,budget::Graph
             born=findall(s->s[1]==i,rows[j]);isempty(born) && continue
             active=_active(rows[j],i);target=_active(rows[j+1],i)
             columns=[findfirst(==(k),active) for k in born]
-            C[target,born]=FieldLinAlg.solve_fullcolumn(F2(),bases[j+1][i],map_leq(source,i+(j-1)*m,i+j*m)*bases[j][i][:,columns])
+            C[target,born]=FieldLinAlg.solve_fullcolumn(F,bases[j+1][i],map_leq(source,i+(j-1)*m,i+j*m)*bases[j][i][:,columns])
         end
         push!(maps,C)
     end
-    g=Graphcode(xs,ys,rows,maps,bases,source,ids,scope)
+    g=Graphcode(F,xs,ys,rows,maps,bases,source,ids,scope)
     check_graphcode(g;throw=true,budget);g
 end
 graphcode(e::Results.EncodingResult;kwargs...)=graphcode(Results.encoding_module(e);kwargs...)

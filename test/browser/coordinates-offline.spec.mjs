@@ -1,0 +1,27 @@
+import {test,expect} from '@playwright/test';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {readFile} from 'node:fs/promises';
+import {checkOfflineChartScroll} from './helpers.mjs';
+test('A97 saved coordinate states reopen without Julia',async({page,context},info)=>{
+ const file=process.env.TAMEROP_A97_HTML||path.resolve('artifacts/coordinates.html');
+ const errors=[],requests=[];
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/^https?:|^wss?:/.test(r.url()))requests.push(r.url());});
+ page.on('websocket',s=>requests.push(s.url()));await context.setOffline(true);
+ await page.goto(pathToFileURL(file).href);await expect(page.locator('html')).toHaveAttribute('data-ready','true');
+ await expect(page.locator('html')).toHaveAttribute('data-selected-state','selected');
+ await page.getByLabel('Saved view',{exact:true}).selectOption('rotated');
+ await expect(page.locator('html')).toHaveAttribute('data-selected-state','rotated');
+ const selected=await page.evaluate(()=>JSON.parse(document.getElementById('portable-visual-data').textContent).states.find(s=>s.id==='rotated'));
+ expect(selected.plotted_json).toContain('cocycles');
+ expect(selected.plotted_json).toContain('lifts');
+ const download=page.waitForEvent('download');await page.getByRole('button',{name:'Download selected values',exact:true}).click();
+ expect(await readFile(await (await download).path(),'utf8')).toBe(selected.plotted_json);
+ await page.screenshot({path:info.outputPath('coordinates-offline-wide.png'),fullPage:true});
+ await page.setViewportSize({width:480,height:900});
+ await checkOfflineChartScroll(page,page.getByRole('region',{name:'Saved figure',exact:true}),page.locator('#saved-figure'));
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+ await page.reload();await expect(page.locator('html')).toHaveAttribute('data-selected-state','rotated');
+ await page.screenshot({path:info.outputPath('coordinates-offline-narrow.png'),fullPage:true});
+ expect(requests).toEqual([]);expect(errors).toEqual([]);
+});

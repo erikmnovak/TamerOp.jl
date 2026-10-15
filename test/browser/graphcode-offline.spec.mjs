@@ -16,3 +16,22 @@ test('A126 saved graphcode coefficients and compression survive without Julia',a
  await page.reload();await expect(page.locator('html')).toHaveAttribute('data-selected-state','compressed');
  await page.screenshot({path:info.outputPath('a126-offline-narrow.png'),fullPage:true});expect(requests).toEqual([]);expect(errors).toEqual([]);
 });
+
+test('A126 saved rational coefficients and internal compression scalars remain exact',async({page,context},info)=>{
+ const file=process.env.TAMEROP_GRAPHCODE_QQ_HTML;expect(file,'Generate TAMEROP_GRAPHCODE_QQ_HTML with the A126 native owner').toBeTruthy();
+ const requests=[],errors=[];page.on('request',r=>{if(/^https?:/.test(r.url()))requests.push(r.url());});page.on('websocket',s=>requests.push(s.url()));page.on('pageerror',e=>errors.push(e.message));
+ await context.setOffline(true);await page.goto(pathToFileURL(file).href);await expect(page.locator('html')).toHaveAttribute('data-ready','true');
+ const data=await page.locator('#portable-visual-data').evaluate(el=>JSON.parse(el.textContent));
+ for(const name of ['original','compressed']) {
+  await page.getByLabel('Saved view',{exact:true}).selectOption(name);await expect(page.locator('html')).toHaveAttribute('data-selected-state',name);
+  await expect(page.locator('#saved-figure')).toBeVisible();
+  const selected=data.states.find(s=>s.id===name);expect(selected.plotted_json).toContain('Selected coefficient: -2/3');
+  expect(selected.plotted_json).toContain('continuations');expect(selected.plotted_json).toContain('QQ');
+  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Download selected values',exact:true}).click();
+  const {readFile}=await import('node:fs/promises');expect(await readFile(await (await download).path(),'utf8')).toBe(selected.plotted_json);
+ }
+ await page.screenshot({path:info.outputPath('a126-qq-offline.png'),fullPage:true});
+ await page.setViewportSize({width:480,height:900});await checkOfflineChartScroll(page,page.getByRole('region',{name:'Saved figure',exact:true}),page.locator('#saved-figure'));
+ await page.reload();await expect(page.locator('html')).toHaveAttribute('data-selected-state','compressed');
+ expect(requests).toEqual([]);expect(errors).toEqual([]);
+});

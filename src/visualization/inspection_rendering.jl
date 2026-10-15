@@ -54,8 +54,10 @@ function _check_linked_inspection!(issues::Vector{String}, spec::VisualizationSp
         (:interval_selection, :interval_member, :interval_representative) :
         (:inspection_selection, :inspection_view, :inspection_basis, :inspection_slice)
     session isa TemporalInspectionSession && (expected_widgets = (:temporal_selection,))
+    session isa CoordinateInspectionSession && (expected_widgets = (:coordinate_selection,))
     session isa ReductionInspectionSession && (expected_widgets = (:reduction_selection,))
     session isa EndCurveInspectionSession && (expected_widgets = (:end_curve_selection,))
+    session isa StabilityInspectionSession && (expected_widgets = (:stability_selection,))
     session isa GraphcodeInspectionSession && (expected_widgets = (:graphcode_selection,))
     session isa ClusteringInspectionSession && (expected_widgets = (:clustering_cut,:clustering_rule))
     session isa SourceLaboratorySession && (expected_widgets = (:source_draft,:source_rebuild,:source_history))

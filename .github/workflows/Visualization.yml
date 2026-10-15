@@ -23,11 +23,14 @@ jobs:
       TAMEROP_STATIC_HTML: ${{ github.workspace }}/test/browser/artifacts/static.html
       TAMEROP_SOURCE_PREVIEW_HTML: ${{ github.workspace }}/test/browser/artifacts/source-preview.html
       TAMEROP_BATCHED_HTML: ${{ github.workspace }}/test/browser/artifacts/batched.html
+      TAMEROP_A97_HTML: ${{ github.workspace }}/test/browser/artifacts/coordinates.html
       TAMEROP_A55_HTML: ${{ github.workspace }}/test/browser/artifacts/temporal.html
       TAMEROP_A40_HTML: ${{ github.workspace }}/test/browser/artifacts/slice-classes.html
       TAMEROP_REDUCTION_HTML: ${{ github.workspace }}/test/browser/artifacts/reduction.html
       TAMEROP_END_CURVES_HTML: ${{ github.workspace }}/test/browser/artifacts/end-curves.html
+      TAMEROP_STABILITY_HTML: ${{ github.workspace }}/test/browser/artifacts/stability.html
       TAMEROP_GRAPHCODE_HTML: ${{ github.workspace }}/test/browser/artifacts/graphcode.html
+      TAMEROP_GRAPHCODE_QQ_HTML: ${{ github.workspace }}/test/browser/artifacts/graphcode-qq.html
       TAMEROP_CLUSTERING_HTML: ${{ github.workspace }}/test/browser/artifacts/clustering.html
       TAMEROP_SOURCE_LAB_HTML: ${{ github.workspace }}/test/browser/artifacts/source-laboratory.html
       TAMEROP_PATH_HTML: ${{ github.workspace }}/test/browser/artifacts/path.html

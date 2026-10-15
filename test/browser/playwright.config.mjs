@@ -11,7 +11,7 @@ const project = process.env.TAMEROP_JULIA_PROJECT || directory;
 export default defineConfig({
   testDir: directory,
   testMatch: '*.spec.mjs',
-  testIgnore: ['portable-session.spec.mjs', 'composition-offline.spec.mjs', 'static-export.spec.mjs', 'source-preview-offline.spec.mjs', 'atlas-offline.spec.mjs', 'certificates-offline.spec.mjs', 'extended-offline.spec.mjs', 'relative-offline.spec.mjs', 'paths-offline.spec.mjs', 'source-laboratory-offline.spec.mjs', 'clustering-offline.spec.mjs', 'graphcode-offline.spec.mjs', 'end-curves-offline.spec.mjs', 'reduction-offline.spec.mjs', 'slice-classes-offline.spec.mjs', 'temporal-offline.spec.mjs'],
+  testIgnore: ['portable-session.spec.mjs', 'composition-offline.spec.mjs', 'static-export.spec.mjs', 'source-preview-offline.spec.mjs', 'atlas-offline.spec.mjs', 'certificates-offline.spec.mjs', 'extended-offline.spec.mjs', 'relative-offline.spec.mjs', 'paths-offline.spec.mjs', 'source-laboratory-offline.spec.mjs', 'clustering-offline.spec.mjs', 'graphcode-offline.spec.mjs', 'end-curves-offline.spec.mjs', 'stability-offline.spec.mjs', 'reduction-offline.spec.mjs', 'slice-classes-offline.spec.mjs', 'temporal-offline.spec.mjs', 'coordinates-offline.spec.mjs'],
   fullyParallel: false,
   forbidOnly: true,
   workers: 1,

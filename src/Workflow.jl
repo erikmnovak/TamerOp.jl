@@ -230,6 +230,9 @@ import ..InvariantCore: _exact_slice_barcodes, _exact_euler_signed_measure,
                         _exact_rectangle_signed_barcode, _exact_rank_signed_measure
 using ..SignedMeasures
 import ..JordanInvariants
+import ..Interleavings
+import ..Stability
+import ..PersistenceContours
 using ..SliceInvariants: CompiledSlicePlan, SlicePlanCache
 import ..MultiparameterImages: _mp_landscape_slice_request, _mp_landscape_from_slice_barcodes
 import ..Fibered2D
@@ -2473,6 +2476,8 @@ end
         return true, slice_barcodes(enc; opts=opts, cache=session_cache, kwargs...)
     elseif which === :mp_landscape
         return true, mp_landscape(enc; opts=opts, cache=session_cache, kwargs...)
+    elseif which === :jordan_filtered_rank
+        return true, jordan_filtered_rank(enc; cache=session_cache, kwargs...)
     end
     return false, nothing
 end
@@ -3066,6 +3071,25 @@ function jordan_type(enc::EncodingResult;cache=:auto,kwargs...)
     enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
     return JordanInvariants.jordan_type(pmodule(enc2);kwargs...)
 end
+"""Build the translated Jordan image family from an exact ambient module or
+an encoding with explicit continuation. Slices contain geometric points.
+"""
+jordan_filtration(M::Union{PModule,Interleavings.RectilinearModule};kwargs...) = JordanInvariants.jordan_filtration(M;kwargs...)
+function jordan_filtration(enc::EncodingResult;cache=:auto,kwargs...)
+    enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    return JordanInvariants.jordan_filtration(enc2;kwargs...)
+end
+
+"""Compute translated Jordan ranks from a prepared family, or directly from
+an encoding with geometric slices and an explicit continuation declaration.
+"""
+jordan_filtered_rank(f::JordanInvariants.JordanFiltration;kwargs...) = JordanInvariants.jordan_filtered_rank(f;kwargs...)
+function jordan_filtered_rank(enc::EncodingResult;slices,extension=:none,cache=:auto,
+        budget=JordanInvariants.JordanBudget(),kwargs...)
+    f=jordan_filtration(enc;slices,extension,cache,budget)
+    return JordanInvariants.jordan_filtered_rank(f;budget,kwargs...)
+end
+
 """
     multirank(M; sources, targets, kwargs...)
     multirank(enc::EncodingResult; sources, targets, cache=:auto, kwargs...)
@@ -3076,6 +3100,55 @@ multirank(M::PModule;kwargs...) = JordanInvariants.multirank(M;kwargs...)
 function multirank(enc::EncodingResult;cache=:auto,kwargs...)
     enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
     return JordanInvariants.multirank(pmodule(enc2);kwargs...)
+end
+
+"""Compute exact HN data on the finite base for explicit stability weights.
+Encoding inputs materialize their finite module. Arbitrary finite stalk
+dimensions over QQ and prime fields use certified exact optimization. See
+`Stability.hn_filtration` for witnesses, splitting reuse and resource limits.
+"""
+hn_filtration(M::Union{PModule,IndecomposableDecompositions.IndecomposableDecompositionResult},z::Stability.StabilityWeights;kwargs...) =
+    Stability.hn_filtration(M,z;kwargs...)
+function hn_filtration(enc::EncodingResult,z::Stability.StabilityWeights;cache=:auto,kwargs...)
+    enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    Stability.hn_filtration(pmodule(enc2),z;kwargs...)
+end
+"""Compute a selected-anchor skyscraper filtration. Finite modules and encoding
+results use declared stalk weights; `SkyscraperGrid` uses explicit geometric
+cell volumes. Supply `box` and optional positive `density` for geometric queries
+on a box or rational polyhedral encoding. See `Stability.skyscraper` for the supported exact routes.
+"""
+skyscraper(M::Union{PModule,Stability.SkyscraperGrid,Stability.SkyscraperEncoding,IndecomposableDecompositions.IndecomposableDecompositionResult};kwargs...) =
+    Stability.skyscraper(M;kwargs...)
+function skyscraper(enc::EncodingResult;cache=:auto,box=nothing,density=1,
+        budget::Stability.HNBudget=Stability.HNBudget(),kwargs...)
+    enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    if box===nothing
+        density==1 || throw(ArgumentError("geometric density requires an explicit observation box"))
+        return Stability.skyscraper(pmodule(enc2);budget,kwargs...)
+    end
+    g=Stability.SkyscraperEncoding(enc2;box,density,budget)
+    Stability.skyscraper(g;budget,kwargs...)
+end
+"""Compute an exact linear-contour stable-rank curve for one bivariate interval.
+Finite modules and encodings require explicit half-open cell `axes`. General
+direct sums are unsupported because stable rank is not additive.
+"""
+stable_rank(I::Union{PersistenceContours.BivariateInterval,PModule,AbstractVector};kwargs...)=PersistenceContours.stable_rank(I;kwargs...)
+"""Compute the minimum generator number containing a prescribed shifted image
+of one bivariate interval. Finite modules and encodings require explicit cell
+`axes`; request `witnesses=true` for a minimal cover and a lower certificate.
+"""
+shift_dimension(I::Union{PersistenceContours.BivariateInterval,PModule};kwargs...)=PersistenceContours.shift_dimension(I;kwargs...)
+function stable_rank(enc::EncodingResult;axes,cache=:auto,budget=PersistenceContours.ContourBudget(),kwargs...)
+    enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    I=PersistenceContours.BivariateInterval(pmodule(enc2);axes,budget)
+    PersistenceContours.stable_rank(I;budget,kwargs...)
+end
+function shift_dimension(enc::EncodingResult;axes,cache=:auto,budget=PersistenceContours.ContourBudget(),kwargs...)
+    enc2=_encoding_with_session_cache(enc,_resolve_workflow_session_cache(cache))
+    I=PersistenceContours.BivariateInterval(pmodule(enc2);axes,budget)
+    PersistenceContours.shift_dimension(I;budget,kwargs...)
 end
 
 """

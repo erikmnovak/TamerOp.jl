@@ -60,16 +60,22 @@ jobs:
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_ordinary_persistence.jl --file=test_extensions.jl --file=test_visualization.jl --file=test_featurizers.jl --prefix=A16 --prefix=A21
       - name: Ingestion owner
         if: matrix.suite == 'ingestion'
-        run: julia --startup-file=no --project=. test/runtests.jl --file=test_data_pipeline.jl --fields=QQ,F2,F3,F5,Real64
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_data_pipeline.jl --file=test_spatial_alpha.jl --fields=QQ,F2,F3,F5,Real64
       - name: Kan cache ownership across fields
         if: matrix.suite == 'core'
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_encoding.jl --prefix='A16 Kan maps respect module-owned caches on equal posets' --fields=QQ,F2,F3,F5,Real64
       - name: Invariants owner
         if: matrix.suite == 'invariants'
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_invariants.jl --fields=QQ,F2,F3,F5,Real64
+      - name: Integral cohomological coordinates
+        if: matrix.suite == 'core'
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_cohomological_coordinates.jl
       - name: Native indecomposable decomposition
         if: matrix.suite == 'core'
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_indecomposable_decompositions.jl
+      - name: Exact HN, skyscraper and contour invariants
+        if: matrix.suite == 'invariants'
+        run: julia --startup-file=no --project=. test/runtests.jl --file=test_stability.jl --file=test_persistence_contours.jl
       - name: Behavioral option contracts across owners
         if: matrix.suite == 'core'
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_zn_backend.jl --file=test_pl_backend.jl --file=test_derived_functors.jl --file=test_poset_interface.jl --prefix=A14 --fields=QQ,F2,F3,F5,Real64
@@ -113,7 +119,7 @@ jobs:
               Pkg.develop(path=root)
               Pkg.instantiate()
               Pkg.status()
-              append!(ARGS, ["--file=test_extensions.jl", "--file=test_featurizers.jl", "--file=test_visualization.jl", "--file=test_ordinary_persistence.jl", "--file=test_examples.jl", "--file=test_indecomposable_decompositions.jl"])
+              append!(ARGS, ["--file=test_extensions.jl", "--file=test_spatial_alpha.jl", "--file=test_featurizers.jl", "--file=test_visualization.jl", "--file=test_ordinary_persistence.jl", "--file=test_examples.jl", "--file=test_indecomposable_decompositions.jl"])
               append!(ARGS, ["--require-extension=" * name for name in sort!(collect(keys(project["extensions"])))])
               include(joinpath(root, "test", "runtests.jl"))
             end'

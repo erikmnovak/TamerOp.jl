@@ -149,7 +149,7 @@ function _choose_linalg_backend(field::AbstractCoeffField, A; op::Symbol=:rank, 
 end
 
 """
-    _explain_backend_choice(field, A; op=:rank, backend=:auto)
+    _explain_backend_choice(field, A; op=:rank, backend=:auto, cache=true)
 
 Internal debugging helper for FieldLinAlg backend selection.
 
@@ -160,8 +160,11 @@ Returns a compact named tuple describing:
 - thresholds consulted,
 - a human-readable reason for the choice.
 """
-function _explain_backend_choice(field::AbstractCoeffField, A; op::Symbol=:rank, backend::Symbol=:auto)
-    chosen = _choose_linalg_backend(field, A; op=op, backend=backend)
+function _explain_backend_choice(field::AbstractCoeffField, A; op::Symbol=:rank,
+                                 backend::Symbol=:auto, cache::Bool=true)
+    chosen = field isa QQField && op == :solve ?
+        _choose_solve_backend(field, A; backend=backend, cache=cache) :
+        _choose_linalg_backend(field, A; op=op, backend=backend)
     m, n = size(A)
     work = m * n
     sparse_like = _is_sparse_like(A)
@@ -219,7 +222,9 @@ function _explain_backend_choice(field::AbstractCoeffField, A; op::Symbol=:rank,
             elseif op == :solve
                 push!(thresholds, (name=:qq_nemo_solve_threshold, value=_qq_nemo_threshold(:solve, shape_bucket)))
                 push!(thresholds, (name=:qq_modular_solve_threshold, value=_qq_modular_threshold(:solve, shape_bucket)))
-                reason = chosen == :nemo ? "QQ dense solve crossed the Nemo threshold" :
+                !cache && push!(thresholds, (name=:qq_nemo_direct_min_cols, value=_QQ_NEMO_DIRECT_MIN_COLS[]))
+                reason = !cache && _use_nemo_QQ_direct(A) ? "QQ dense one-shot solve avoids a reusable inverse" :
+                         chosen == :nemo ? "QQ dense solve crossed the Nemo threshold" :
                          chosen == :modular ? "QQ dense solve crossed the modular threshold" :
                          "QQ dense solve stayed on Julia exact path"
             else

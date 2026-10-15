@@ -21,6 +21,7 @@ TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
 [weakdeps]
+MiniQhull = "978d7f02-9e05-4691-894f-ae31a51d76ca"
 Hecke = "3e1990a7-5d81-5526-99ce-9ba3ff248f21"
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
 CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
@@ -38,6 +39,7 @@ ProgressLogging = "33c8b6b6-d38a-422a-b730-caa89a2f386c"
 Tables = "bd369af6-aec1-5ad0-b16a-f7cc5008161c"
 
 [extensions]
+TamerOpMiniQhullExt = "MiniQhull"
 TamerOpHeckeExt = "Hecke"
 TamerOpArrowExt = ["Arrow", "Tables"]
 TamerOpCSVExt = "CSV"
@@ -55,6 +57,7 @@ TamerOpTablesExt = "Tables"
 TamerOpWGLMakieExt = "WGLMakie"
 
 [compat]
+MiniQhull = "0.4"
 Hecke = "0.39.15"
 julia = "1.12"
 Arrow = "2"

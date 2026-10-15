@@ -22,7 +22,8 @@ _index(i,n,label)=i isa Integer && !(i isa Bool) && 1<=i<=n ? Int(i) :
 `graphcode_map` gives coefficients in the retained row bases. Returned
 accessor arrays are copies. Direct mutation of stored fields is unsupported.
 """
-struct Graphcode{K,X,Y}
+struct Graphcode{K,F,X,Y}
+    field::F
     x::Vector{X}
     y::Vector{Y}
     rows::Vector{Vector{Tuple{Int,Int}}}
@@ -38,12 +39,12 @@ function Base.copy(g::Graphcode{K}) where {K}
         nothing
     else
         Q=ProductOfChainsPoset((length(g.x),length(g.y)))
-        PModule{K}(Q,copy(g.source.dims),Dict((u,v)=>Matrix(map_leq(g.source,u,v)) for (u,v) in cover_edges(Q));field=F2())
+        PModule{K}(Q,copy(g.source.dims),Dict((u,v)=>Matrix(map_leq(g.source,u,v)) for (u,v) in cover_edges(Q));field=field(g))
     end
-    Graphcode(copy(g.x),copy(g.y),[copy(row) for row in g.rows],copy.(g.maps),
+    Graphcode(field(g),copy(g.x),copy(g.y),[copy(row) for row in g.rows],copy.(g.maps),
         g.bases===nothing ? nothing : [copy.(row) for row in g.bases],source,copy(g.vertices),g.scope)
 end
-field(::Graphcode)=F2()
+field(g::Graphcode)=g.field
 graphcode_axes(g::Graphcode)=(copy(g.x),copy(g.y))
 graphcode_vertices(g::Graphcode)=copy(g.vertices)
 function graphcode_rows(g::Graphcode)
@@ -57,7 +58,7 @@ end
 """Columns identify active row intervals with the retained input stalk basis."""
 function graphcode_basis(g::Graphcode;row,column)
     j=_index(row,length(g.y),"row");i=_index(column,length(g.x),"column")
-    g.bases===nothing ? Matrix{coeff_type(F2())}(I,length(_active(g.rows[j],i)),length(_active(g.rows[j],i))) : copy(g.bases[j][i])
+    g.bases===nothing ? Matrix{coeff_type(field(g))}(I,length(_active(g.rows[j],i)),length(_active(g.rows[j],i))) : copy(g.bases[j][i])
 end
 function graphcode_edges(g::Graphcode)
     [(;row=j,source=s,target=t,coefficient=A[t,s]) for (j,A) in enumerate(g.maps)
@@ -65,15 +66,15 @@ function graphcode_edges(g::Graphcode)
 end
 function graphcode_summary(g::Graphcode)
     (;kind=:graphcode,grid=(length(g.x),length(g.y)),intervals=sum(length,g.rows),
-        edges=sum(A->count(!iszero,A),g.maps;init=0),field=F2(),scope=g.scope,
+        edges=sum(A->count(!iszero,A),g.maps;init=0),field=field(g),scope=g.scope,
         basis=:noncanonical,source_bases=g.bases!==nothing,compression=:none,right_boundary=:censored)
 end
 describe(g::Graphcode)=graphcode_summary(g)
-Base.show(io::IO,g::Graphcode)=print(io,"Graphcode(",length(g.x)," x ",length(g.y),", ",sum(length,g.rows)," intervals, F2)")
+Base.show(io::IO,g::Graphcode)=print(io,"Graphcode(",length(g.x)," x ",length(g.y),", ",sum(length,g.rows)," intervals, ",field(g),")")
 
 """Reconstruct the exact finite-grid module in the stored barcode bases."""
 function graphcode_module(g::Graphcode)
-    m,n=length(g.x),length(g.y);K=coeff_type(F2());Q=ProductOfChainsPoset((m,n))
+    m,n=length(g.x),length(g.y);K=coeff_type(field(g));Q=ProductOfChainsPoset((m,n))
     active=[_active(g.rows[j],i) for i in 1:m,j in 1:n]
     maps=Dict{Tuple{Int,Int},Matrix{K}}()
     for j in 1:n,i in 1:m
@@ -81,7 +82,7 @@ function graphcode_module(g::Graphcode)
         i<m && (maps[u,u+1]=K[a==b for a in active[i+1,j],b in active[i,j]])
         j<n && (maps[u,u+m]=g.maps[j][active[i,j+1],active[i,j]])
     end
-    PModule{K}(Q,vec(length.(active)),maps;field=F2())
+    PModule{K}(Q,vec(length.(active)),maps;field=field(g))
 end
 
 """Connected graph components in the current bases; these need not be indecomposable."""
@@ -108,10 +109,10 @@ end
 """Return a graph component's summand and exact inclusion/projection maps."""
 function graphcode_summand(g::Graphcode;component)
     parts=graphcode_components(g);ids=Set(parts[_index(component,length(parts),"component")])
-    ambient=graphcode_module(g);m,n=length(g.x),length(g.y);K=coeff_type(F2())
+    ambient=graphcode_module(g);m,n=length(g.x),length(g.y);K=coeff_type(field(g))
     selected=[findall(k->(j,k) in ids,_active(g.rows[j],i)) for j in 1:n for i in 1:m]
     maps=Dict(e=>Matrix(map_leq(ambient,e[1],e[2])[selected[e[2]],selected[e[1]]]) for e in cover_edges(ambient.Q))
-    N=PModule{K}(ambient.Q,length.(selected),maps;field=F2())
+    N=PModule{K}(ambient.Q,length.(selected),maps;field=field(g))
     inc=Matrix{K}[];prj=Matrix{K}[]
     for (q,s) in enumerate(selected)
         B=zeros(K,ambient.dims[q],length(s))
@@ -131,8 +132,9 @@ Base.:(==)(a::GraphcodeValidationSummary,b::GraphcodeValidationSummary)=a.valid=
 Base.isequal(a::GraphcodeValidationSummary,b::GraphcodeValidationSummary)=isequal(a.valid,b.valid) && isequal(a.issues,b.issues)
 Base.hash(v::GraphcodeValidationSummary,h::UInt)=hash((v.valid,Tuple(v.issues)),h)
 
-function _check_graphcode(g::Graphcode,budget)
-    _rows(g.rows,g.maps,g.x,g.y,budget)
+function _check_graphcode(g::Graphcode{K},budget) where {K}
+    _field(field(g));coeff_type(field(g))===K || throw(ArgumentError("graphcode coefficient storage disagrees with its field"))
+    _rows(g.rows,g.maps,g.x,g.y,field(g),budget)
     m,n=length(g.x),length(g.y)
     size(g.vertices)==(m,n) || throw(ArgumentError("source vertex grid has the wrong shape"))
     all(>(0),g.vertices) || throw(ArgumentError("source vertices must be positive indices"))
@@ -143,12 +145,12 @@ function _check_graphcode(g::Graphcode,budget)
         N=graphcode_module(g);S=g.source
         S.Q isa ProductOfChainsPoset{2} && S.Q.sizes==(m,n) && S.Q.orientation==(1,1) ||
             throw(ArgumentError("retained source must use the canonical ordered grid"))
-        S.field==F2() && S.dims==N.dims || throw(ArgumentError("source dimensions or field disagree"))
+        S.field==field(g) && S.dims==N.dims || throw(ArgumentError("source dimensions or field disagree"))
         for j in 1:n
             length(g.bases[j])==m || throw(ArgumentError("one basis per column is required"))
             for i in 1:m
                 B=g.bases[j][i];q=i+(j-1)*m;d=N.dims[q]
-                size(B)==(d,d) && FieldLinAlg.rank(F2(),B)==d || throw(ArgumentError("barcode basis is not invertible"))
+                size(B)==(d,d) && FieldLinAlg.rank(field(g),B)==d || throw(ArgumentError("barcode basis is not invertible"))
             end
         end
         for (u,v) in cover_edges(N.Q)

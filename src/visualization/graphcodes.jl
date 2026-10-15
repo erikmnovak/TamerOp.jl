@@ -30,6 +30,7 @@ function _graphcode_selection(g;row=1,source_interval=0,target_interval=0,column
 end
 function _graphcode_snapshot(g,c,p)
     m,n=length(g.x),length(g.y);xx=Float64.(g.x)
+    F=Graphcodes.field(g);field_label=_inspection_field_label(F)
     all(isfinite,xx) && (m==1 || all(diff(xx).>0) || all(diff(xx).<0)) ||
         throw(ArgumentError("graphcode coordinates cannot be distinguished in Float64 drawing coordinates"))
     parts=Graphcodes.graphcode_components(g);membership=Dict(v=>k for (k,vs) in enumerate(parts) for v in vs)
@@ -40,7 +41,7 @@ function _graphcode_snapshot(g,c,p)
     nodes=p.compressed ? [(first(v)...,) for v in c.members] : [(j,i) for j in 1:n for i in eachindex(g.rows[j])]
     spans=p.compressed ? c.members : [[v] for v in nodes]
     edgelist=p.compressed ? [(;row=last(c.members[u])[1],source=last(c.members[u])[2],target=first(c.members[v])[2],
-        from=first(c.members[u]),to=first(c.members[v])) for (u,v) in c.edges] :
+        from=first(c.members[u]),to=first(c.members[v]),coefficient=c.coefficients[k]) for (k,(u,v)) in enumerate(c.edges)] :
         [merge(e,(;from=(e.row,e.source),to=(e.row+1,e.target))) for e in Graphcodes.graphcode_edges(g)]
     pos=Dict{Tuple{Int,Int},Tuple{Float64,Float64}}();layers=AbstractVisualizationLayer[];targets=NamedTuple[]
     for (j,i) in nodes
@@ -61,7 +62,7 @@ function _graphcode_snapshot(g,c,p)
         end
         midpoint=((a[1]+b[1])/2,(a[2]+b[2])/2)
         push!(targets,(;point=midpoint,segment=(a...,b...),selection=(;row=e.row,source_interval=e.source,target_interval=e.target),
-            label="Map $(e.row) -> $(e.row+1): interval $(e.source) -> $(e.target), coefficient 1 in F2"))
+            label="Map $(e.row) -> $(e.row+1): interval $(e.source) -> $(e.target), coefficient $(_matrix_coefficient_text(e.coefficient)) in $field_label"))
     end
     for (k,(j,i)) in enumerate(nodes)
         a,b=g.rows[j][i];yl=location(j,i);right=xx[min(b+1,m)];part=membership[(j,i)]
@@ -81,17 +82,18 @@ function _graphcode_snapshot(g,c,p)
     push!(layers,SegmentLayer([(xx[p.column],0.,xx[p.column],Float64(last(offsets)))],_VisualRole(:selected),0.5,1.,:dash))
     span=max(maximum(xx)-minimum(xx),1.);rowlabels=["$j:  $(_matrix_coefficient_text(g.y[j]))" for j in 1:n]
     chart=VisualizationSpec(:graphcode_rows;title=p.compressed ? "Compressed graphcode" : "Barcode rows and connecting maps",
-        subtitle="F2; maps run toward increasing row numbers. Colors mark graph components, not necessarily indecomposables.",layers,
+        subtitle="$field_label; maps run toward increasing row numbers. Colors mark graph components, not necessarily indecomposables.",layers,
         axes=(;xlabel="First parameter",ylabel="Row: second parameter (schematic spacing)",aspect=:auto,
             xlimits=(minimum(xx)-0.08span,maximum(xx)+0.1span),ylimits=(0.,Float64(last(offsets))),yticks=(Float64.(row_centers),rowlabels)),
         metadata=(;pick_targets=targets,rows=Graphcodes.graphcode_rows(g),edges=Graphcodes.graphcode_edges(g),
             original_axes=Graphcodes.graphcode_axes(g),compression=p.compressed ? :superfluous_vertices : :none,
-            compressed_members=deepcopy(c.members),compressed_edges=copy(c.edges),basis=:noncanonical))
-    r=p.row;K=CoreModules.coeff_type(CoreModules.F2())
+            compressed_members=deepcopy(c.members),compressed_edges=Graphcodes.graphcode_edges(c),
+            continuations=Graphcodes.graphcode_continuations(c),field=field_label,basis=:noncanonical))
+    r=p.row;K=CoreModules.coeff_type(F)
     C=r<n ? g.maps[r] : zeros(K,0,length(g.rows[r]))
     matrix=_presentation_matrix_panel(C,"Connecting coefficients: row $r to $(r+1)",
         ["$(r+1).$i" for i in axes(C,1)],["$r.$i" for i in axes(C,2)],(12,12);
-        subtitle=r<n ? "Rows are target intervals; columns are source intervals. Entries are in F2." : "The final row has no outgoing map.",
+        subtitle=r<n ? "Rows are target intervals; columns are source intervals. Entries are in $field_label." : "The final row has no outgoing map.",
         metadata=(;cell_roles=[i==p.target_interval && j==p.source_interval ? :selected : :foreground for i in 1:min(12,size(C,1)),j in 1:min(12,size(C,2))]))
     source=_graphcode_active(g.rows[r],p.column);target=r<n ? _graphcode_active(g.rows[r+1],p.column) : Int[]
     A=C[target,source];value=p.source_interval>0 && p.target_interval>0 ? C[p.target_interval,p.source_interval] : nothing
@@ -101,14 +103,14 @@ function _graphcode_snapshot(g,c,p)
         "Selected coefficient: $(value===nothing ? "none" : _matrix_coefficient_text(value)); interval Hom condition: $(relation===nothing ? "select both intervals" : relation).",
         "Active source intervals: $(Tuple(source)). Active target intervals: $(Tuple(target)).",
         "$(length(parts)) graph components in these bases. A connected component may still split after a change of basis.",
-        "Compose coefficients in F2: paths can cancel, so a drawn path alone does not certify a nonzero composite.",
-        "$(sum(length,g.rows)) row intervals; $(length(c.members)) compressed vertices. Compression retains intermediate identity maps and all original row/member IDs.",
+        "Compose coefficients in $field_label: paths can cancel, so a drawn path alone does not certify a nonzero composite.",
+        "$(sum(length,g.rows)) row intervals; $(length(c.members)) compressed vertices. Compression retains every intermediate scalar map and all original row/member IDs.",
         "The dashed line selects a finite-grid column. Endpoint o is open; ? means censored at the final grid coordinate.",
         "Scope: $(g.scope===:supplied_rows ? "supplied barcode rows" : g.scope===:finite_grid ? "complete finite grid" : "declared grid restriction"). Row spacing is schematic; exact parameter labels are retained. No extension beyond this grid is asserted."]
     localmap=_presentation_matrix_panel(A,"Actual stalk map at the selected column",string.(target),string.(source),(12,12);
         subtitle="Restriction of the row coefficient matrix to intervals active at this column.")
     VisualizationSpec(:graphcode;title="Graphcode",panels=[chart,matrix,localmap,_inspection_text_panel("Selection and basis",lines)],
-        metadata=(;selection=p,coefficients=copy(C),stalk_map=copy(A),coefficient=value,hom_admissible=relation,
+        metadata=(;selection=p,field=field_label,coefficients=copy(C),stalk_map=copy(A),coefficient=value,hom_admissible=relation,
             active_source=Tuple(source),active_target=Tuple(target),components=Tuple(Tuple(v) for v in parts),
             panel_positions=[(1:1,1:2),(2:2,1:1),(2:2,2:2),(3:3,1:2)],
             panel_row_weights=[Float64(chart_height),220.,300.],figure_size=(1200,chart_height+520),chart_height,basis=:noncanonical))

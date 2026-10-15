@@ -1,29 +1,49 @@
 """
 Jordan type and multirank of exact finite-poset modules on selected disjoint
 subsets. Consecutive subsets determine a nilpotent block operator; ranks of
-its powers determine the multiplicities of its Jordan blocks.
+its powers determine the multiplicities of its Jordan blocks. Ambient modules
+also support translated image filtrations, their rank invariants, landscapes,
+global erosion comparisons and transport of interleaving certificates.
 """
 module JordanInvariants
 
 using SparseArrays
-using ..CoreModules: QQField, PrimeField, coeff_type
-using ..FiniteFringe: nvertices, leq
+using LinearAlgebra: I
+using ..CoreModules: QQ, QQField, PrimeField, coeff_type
+using ..FiniteFringe: nvertices, leq, cover_edges, GridPoset
 using ..Modules: PModule, map_leq, check_module, check_module_functoriality
+using ..Interleavings: RectilinearModule, InterleavingBudget, InterleavingCertificate,
+    interleaving_problem, interleaving_certificate, check_interleaving, interleaving_maps
+using ..Results: EncodingResult
+using ..EncodingCore: locate
+import ..Interleavings: ambient_module
+import ..EncodingCore: encoding_axes
+import ..Results: encoding_module
+import ..Modules: structure_map
 import ..FieldLinAlg
 import ..ChainComplexes: describe, dimensions
 import ..FiniteFringe: field
 import ..Results: provenance
 
-"""Bounds on selected stalks, block matrices and consecutive block products."""
+"""Resource limits for finite and translated Jordan computations.
+`max_vertices` bounds probe points, `max_dimension` their total stalk dimension,
+and `max_entries` bounds matrix storage. `max_cells` bounds complete ambient
+refinements; `max_events` bounds critical-cut/event construction; `max_pairs`
+bounds the comparable parameter pairs in a global erosion decision.
+"""
 struct JordanBudget
     max_vertices::Int
     max_slices::Int
     max_dimension::Int
     max_entries::Int
     max_products::Int
+    max_cells::Int
+    max_events::Int
+    max_pairs::Int
     function JordanBudget(;max_vertices=1024,max_slices=256,max_dimension=4096,
-            max_entries=8_000_000,max_products=100000)
-        xs=(max_vertices,max_slices,max_dimension,max_entries,max_products)
+            max_entries=8_000_000,max_products=100000,
+            max_cells=10000,max_events=10000,max_pairs=100000)
+        xs=(max_vertices,max_slices,max_dimension,max_entries,max_products,max_cells,max_events,max_pairs)
         all(x->x isa Integer && !(x isa Bool) && 0<=x<=typemax(Int),xs) ||
             throw(ArgumentError("Jordan budgets must be nonnegative integers fitting Int"))
         new(Int.(xs)...)
@@ -200,7 +220,7 @@ describe(r::JordanTypeResult)=(kind=:jordan_type,field=r.field,slices=length(r.s
     category=:finite_poset,witness=r.blocks!==nothing)
 Base.show(io::IO,r::JordanTypeResult)=print(io,"JordanTypeResult(multiplicities=",r.multiplicities,", field=",r.field,")")
 Base.show(io::IO,b::JordanBudget)=print(io,"JordanBudget(max_vertices=",b.max_vertices,", max_dimension=",b.max_dimension,")")
-describe(b::JordanBudget)=(max_vertices=b.max_vertices,max_slices=b.max_slices,max_dimension=b.max_dimension,max_entries=b.max_entries,max_products=b.max_products)
+describe(b::JordanBudget)=(max_vertices=b.max_vertices,max_slices=b.max_slices,max_dimension=b.max_dimension,max_entries=b.max_entries,max_products=b.max_products,max_cells=b.max_cells,max_events=b.max_events,max_pairs=b.max_pairs)
 
 """
     check_jordan_type(result; source=nothing, budget=JordanBudget(), throw=false)
@@ -260,5 +280,8 @@ function check_jordan_type(r::JordanTypeResult{K};source=nothing,
     end
     return _report(errors,throw)
 end
+
+include("jordan_invariants/translated.jl")
+include("jordan_invariants/comparisons.jl")
 
 end # module JordanInvariants

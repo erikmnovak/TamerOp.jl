@@ -53,6 +53,7 @@ import ..Results
 import ..CoreModules
 import ..FieldLinAlg
 import ..Invariants
+import ..IntervalApproximations
 import ..IntervalDecompositions
 import ..IndecomposableDecompositions
 import ..Interleavings
@@ -69,8 +70,10 @@ import ..DataIngestion
 import ..OrdinaryPersistence
 import ..ZigzagPersistence
 import ..TemporalPersistence
+import ..CohomologicalCoordinates
 import ..Graphcodes
 import ..EndCurves
+import ..Stability
 import ..Fibered2D
 using ..EncodingCore: AbstractPLikeEncodingMap, CompiledEncoding, GridEncodingMap,
                       encoding_axes, encoding_map,
@@ -157,6 +160,7 @@ include("visualization/inspection_chains.jl")
 include("visualization/inspection_components.jl")
 include("visualization/inspection_transport.jl")
 include("visualization/builders_summands.jl")
+include("visualization/interval_approximations.jl")
 include("visualization/inspection_summands.jl")
 include("visualization/builders_generalized_rank.jl")
 include("visualization/inspection_generalized_rank.jl")
@@ -182,8 +186,10 @@ include("visualization/module_editor.jl")
 include("visualization/clustering.jl")
 include("visualization/graphcodes.jl")
 include("visualization/end_curves.jl")
+include("visualization/stability.jl")
 include("visualization/reduction.jl")
 include("visualization/temporal.jl")
+include("visualization/cohomological_coordinates.jl")
 include("visualization/source_laboratory.jl")
 include("visualization/builders_source_laboratory.jl")
 include("visualization/session_composition.jl")

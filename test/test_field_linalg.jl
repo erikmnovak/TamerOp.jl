@@ -3406,6 +3406,119 @@ end
     end
 end
 
+@testset "QQ direct one-shot solve oracles" begin
+    field = CM.QQField()
+    for n in (2, 17), rhs in (1, 4, 23)
+        # Independent columns with dependent leading rows exercise rectangular
+        # solving without assuming an invertible leading minor.
+        B = zeros(QQ, n + 3, n)
+        B[3:n+2, :] .= Matrix{QQ}(I, n, n)
+        B[1, :] .= [QQ(j + 2, j + 3) for j in 1:n]
+        B[2, :] .= 2 .* B[1, :]
+        X = [QQ((-1)^j * (i + j), big(2)^140 + i + 2j) for i in 1:n, j in 1:rhs]
+        Y = B * X
+        bad = copy(Y); bad[end, end] = 1
+        for A in (B, sparse(B), view(B, :, :), transpose(sparse(transpose(B)))),
+            R in (Y, sparse(Y), view(Y, :, :))
+            FL._clear_fullcolumn_cache!()
+            oldA, oldR = deepcopy(A), deepcopy(R)
+            @test FL.solve_fullcolumn(field, A, R; backend=:nemo, cache=false) == X
+            @test FL.solve_fullcolumn(field, A, R; backend=:nemo, cache=false, check_rhs=false) == X
+            @test FL.solve_fullcolumn(field, A, view(R, :, 1); backend=:nemo, cache=false) == X[:, 1]
+            @test size(FL.solve_fullcolumn(field, A, zeros(QQ, n+3, 0); backend=:nemo, cache=false)) == (n, 0)
+            @test_throws ErrorException FL.solve_fullcolumn(field, A, bad; backend=:nemo, cache=false)
+            @test FL.solve_fullcolumn(field, A, bad; backend=:nemo, cache=false, check_rhs=false) == X
+            @test_throws DimensionMismatch FL.solve_fullcolumn(field, A, Y[2:end, :]; backend=:nemo, cache=false)
+            @test isempty(FL._NEMO_FULLCOLUMN_FACTOR_CACHE_QQ)
+            @test A == oldA && R == oldR
+        end
+        # Even a consistent or empty RHS cannot excuse deficient columns.
+        deficient = hcat(B, B[:, 1])
+        for check_rhs in (false, true), R in (Y, zeros(QQ, n+3, 0))
+            @test_throws ErrorException FL.solve_fullcolumn(field, deficient, R; backend=:nemo, cache=false, check_rhs)
+        end
+    end
+    for m in (0, 5), rhs in (0, 1, 3)
+        B, Y = zeros(QQ, m, 0), zeros(QQ, m, rhs)
+        @test FL.solve_fullcolumn(field, B, Y; backend=:nemo, cache=false) == zeros(QQ, 0, rhs)
+        @test FL.solve_fullcolumn(field, B, zeros(QQ, m); backend=:nemo, cache=false) == QQ[]
+        if m > 0 && rhs > 0
+            @test_throws ErrorException FL.solve_fullcolumn(field, B, ones(QQ, m, rhs); backend=:nemo, cache=false)
+            @test FL.solve_fullcolumn(field, B, ones(QQ, m, rhs); backend=:nemo, cache=false, check_rhs=false) == zeros(QQ, 0, rhs)
+        end
+    end
+    @test_throws ErrorException FL.solve_fullcolumn(field, ones(QQ, 2, 3), zeros(QQ, 2, 0); backend=:nemo, cache=false)
+    # Unusable modular probes must fall back to exact rank, never reject a
+    # rationally independent matrix because its reductions lose rank.
+    p = prod(BigInt.(FL.DEFAULT_MODULAR_PRIMES[1:4]))
+    for a in (QQ(p), QQ(1, p))
+        B = QQ[a 0; 0 a; a a]
+        @test FL.solve_fullcolumn(field, B, B; backend=:nemo, cache=false) == Matrix{QQ}(I, 2, 2)
+    end
+    B = QQ[1 0; 0 1; 0 0]
+    for check_rhs in (false, true)
+        invalid = copy(B); invalid[1, 1] = QQ(1, 0)
+        @test_throws ArgumentError FL.solve_fullcolumn(field, invalid, B; backend=:nemo, cache=false, check_rhs)
+        @test_throws ArgumentError FL.solve_fullcolumn(field, B, invalid; backend=:nemo, cache=false, check_rhs)
+    end
+    Y = B * QQ[1 2; 3 4]
+    FL._clear_fullcolumn_cache!()
+    FL.solve_fullcolumn(field, B, Y; backend=:nemo, cache=true)
+    cached = FL._NEMO_FULLCOLUMN_FACTOR_CACHE_QQ[B]
+    @test FL.solve_fullcolumn(field, B, Y; backend=:nemo, cache=true) == QQ[1 2; 3 4]
+    @test FL._NEMO_FULLCOLUMN_FACTOR_CACHE_QQ[B] === cached
+    fac = FL.factor_fullcolumn(field, B; backend=:nemo, cache=false)
+    @test FL.solve_fullcolumn(field, B, Y; factor=fac, cache=false) == QQ[1 2; 3 4]
+    FL._clear_fullcolumn_cache!()
+end
+
+@testset "QQ one-shot routing preserves reuse and structure" begin
+    field = CM.QQField()
+    previous = FL._current_linalg_thresholds()
+    enabled = FL._NEMO_ENABLED[]
+    try
+        FL._QQ_NEMO_DIRECT_MIN_COLS[] = 16
+        for n in (15, 16, 24)
+            # Strictly diagonally dominant square block certifies independence.
+            B = [QQ(i==j ? n+1 : 1, i+1) for i in 1:n+3, j in 1:n]
+            X = [QQ(i-j, i+j+1) for i in 1:n, j in 1:3]
+            Y = B * X
+            @test FL._choose_solve_backend(field, B; cache=false) == (n<16 ? :julia_exact : :nemo)
+            @test FL._choose_solve_backend(field, B; cache=true) == :julia_exact
+            @test FL._explain_backend_choice(field, B; op=:solve, cache=false).chosen_backend == (n<16 ? :julia_exact : :nemo)
+            @test FL.solve_fullcolumn(field, B, Y; cache=false) == X
+            @test FL.solve_fullcolumn(field, B, Y; cache=true) == X
+            fac = FL.factor_fullcolumn(field, B; backend=:julia_exact, cache=false)
+            @test FL.solve_fullcolumn(field, B, Y; factor=fac, cache=false) == X
+            @test FL._resolve_factor_backend(field, B; factor=fac, cache=false) == :julia_exact
+            FL._QQ_NEMO_DIRECT_MIN_COLS[] = typemax(Int)
+            @test FL.solve_fullcolumn(field, B, Y; cache=false) == X
+            @test FL._choose_solve_backend(field, B; cache=false) == :julia_exact
+            FL._QQ_NEMO_DIRECT_MIN_COLS[] = 16
+            for A in (sparse(B), Matrix{QQ}(I,n,n), Diagonal(fill(one(QQ),n)),
+                      vcat(Matrix{QQ}(I,n,n),B))
+                @test !FL._use_nemo_QQ_direct(A)
+            end
+        end
+        B = ones(QQ, 20, 16)
+        FL._NEMO_ENABLED[] = false
+        @test FL._choose_solve_backend(field, B; cache=false) == :julia_exact
+        FL._NEMO_ENABLED[] = enabled
+        FL._QQ_NEMO_DIRECT_MIN_COLS[] = 23
+        mktempdir() do dir
+            path = joinpath(dir,"thresholds.toml")
+            FL._save_linalg_thresholds!(;path)
+            FL._QQ_NEMO_DIRECT_MIN_COLS[] = 99
+            @test FL._load_linalg_thresholds!(;path)
+            @test FL._QQ_NEMO_DIRECT_MIN_COLS[] == 23
+        end
+    finally
+        FL._NEMO_ENABLED[] = enabled
+        FL._apply_linalg_thresholds!(previous)
+        FL._clear_fullcolumn_cache!()
+    end
+end
+
 @testset "QQ factored solve product and certification oracles" begin
     field = CM.QQField()
     for n in (2, 9, 28), rhs in (1, 7)

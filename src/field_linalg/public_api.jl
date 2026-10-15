@@ -193,14 +193,15 @@ _kernel_image_summary(A::QQMatrixAnalysis) = _kernel_image_summary(A.summary)
 @inline _wrapped_factor_backend(analysis::QQMatrixAnalysis) = analysis.factor === nothing ? nothing : factor_backend(analysis.factor)
 
 @inline function _resolve_factor_backend(field::AbstractCoeffField, B;
-                                         backend::Symbol=:auto, factor=nothing)
+                                         backend::Symbol=:auto, factor=nothing,
+                                         cache::Bool=true)
     fac_backend = _wrapped_factor_backend(factor)
     if fac_backend !== nothing
         backend == :auto || backend == fac_backend ||
             error("solve_fullcolumn: explicit backend $backend does not match factor backend $fac_backend")
         return fac_backend
     end
-    return field isa QQField ? _choose_solve_backend(field, B; backend=backend, factor=factor) :
+    return field isa QQField ? _choose_solve_backend(field, B; backend=backend, factor=factor, cache=cache) :
                                _choose_linalg_backend(field, B; op=:solve, backend=backend)
 end
 
@@ -559,6 +560,9 @@ verification is disabled. Explicit real solve backends are
 Cached or explicitly factored solves require an unchanged left matrix. Sparse
 numerical cache entries distinguish the effective rank tolerance. Reusable
 `factor_fullcolumn`/`analysis` objects are currently a QQ capability.
+For one-shot rational solves, `cache=false` permits direct native solving
+without constructing a reusable inverse; automatic routing retains the
+structured and small-matrix paths.
 """
 function solve_fullcolumn(field::AbstractCoeffField, B, Y;
                           check_rhs::Bool=true, backend::Symbol=:auto,
@@ -576,7 +580,7 @@ function solve_fullcolumn(field::AbstractCoeffField, B, Y;
     if backend == :auto && _is_tiny_solve(B, Y) && !(field isa RealField)
         return _solve_fullcolumn_tiny(field, B, Y; check_rhs=check_rhs)
     end
-    factor_backend = _resolve_factor_backend(field, B; backend=backend, factor=factor)
+    factor_backend = _resolve_factor_backend(field, B; backend=backend, factor=factor, cache=cache)
     factor_payload = _unwrap_factor(factor)
     if field isa QQField
         be = factor_backend

@@ -291,12 +291,14 @@ function _QQ_at_least_half_nonzero(A)
     end
     return false
 end
-@inline function _use_nemo_QQ_factor(B)
-    return _have_nemo() && size(B, 1) >= size(B, 2) >= _QQ_NEMO_FACTOR_MIN_COLS[] &&
+@inline function _dense_QQ_solve_candidate(B, min_cols::Int)
+    return _have_nemo() && size(B, 1) >= size(B, 2) >= min_cols &&
            _dense_QQ_storage(B) &&
            _QQ_at_least_half_nonzero(view(B, 1:size(B, 2), :)) &&
            _QQ_at_least_half_nonzero(B)
 end
+@inline _use_nemo_QQ_factor(B) = _dense_QQ_solve_candidate(B, _QQ_NEMO_FACTOR_MIN_COLS[])
+@inline _use_nemo_QQ_direct(B) = _dense_QQ_solve_candidate(B, _QQ_NEMO_DIRECT_MIN_COLS[])
 @inline function _use_nemo_QQ_product(A, B)
     return _have_nemo() && size(A, 2) >= _QQ_NEMO_PRODUCT_MIN_INNER[] &&
            size(A, 1) >= 4 && size(B, 2) >= 4 &&
@@ -564,12 +566,16 @@ function _solve_fullcolumnQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
 end
 
 @inline function _choose_solve_backend(field::QQField, B;
-                                       backend::Symbol=:auto, factor=nothing)::Symbol
+                                       backend::Symbol=:auto, factor=nothing,
+                                       cache::Bool=true)::Symbol
     backend != :auto && return _choose_linalg_backend(field, B; op=:solve, backend=backend)
     if factor isa NemoFullColumnFactorQQ
         return :nemo
     elseif factor isa FullColumnFactor{QQ}
         return _is_sparse_like(B) ? :julia_sparse : :julia_exact
+    end
+    if factor === nothing && !cache && _use_nemo_QQ_direct(B)
+        return :nemo
     end
     return _choose_linalg_backend(field, B; op=:solve, backend=backend)
 end
@@ -629,6 +635,39 @@ function _factor_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ})::NemoFullColumnFacto
     return NemoFullColumnFactorQQ(rows, invB)
 end
 
+function _solve_fullcolumn_nemoQQ_direct(B::AbstractMatrix{<:QQ}, Y::AbstractMatrix{<:QQ};
+                                         check_rhs::Bool=true)
+    Base.require_one_based_indexing(B, Y)
+    m, n = size(B)
+    size(Y, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+    all(isfinite, B) && all(isfinite, Y) ||
+        throw(ArgumentError("solve: entries must be finite rational numbers"))
+    m >= n || error("solve_fullcolumn_nemoQQ: expected full column rank")
+    # A native solve permits nonunique solutions. Certify independence as well:
+    # full rank modulo a valid prime proves full rank over QQ, and inconclusive
+    # probes fall back to exact rank. Do this even for an empty RHS.
+    _rankQQ_dim(B; backend=:modular) == n ||
+        error("solve_fullcolumn_nemoQQ: expected full column rank")
+    if n == 0
+        check_rhs && !all(iszero, Y) && error("solve_fullcolumn_nemoQQ: RHS check failed")
+        return zeros(QQ, 0, size(Y, 2))
+    end
+    size(Y, 2) == 0 && return zeros(QQ, n, 0)
+
+    Bn, Yn = _to_fmpq_mat(B), _to_fmpq_mat(Y)
+    consistent, Xn = Nemo.can_solve_with_solution(Bn, Yn; side=:right)
+    if !consistent
+        check_rhs && error("solve_fullcolumn_nemoQQ: RHS check failed")
+        # Unchecked solves historically use the first independent rows, even
+        # for an inconsistent RHS. Preserve that convention without charging
+        # valid one-shot solves for an inverse they will never reuse.
+        fac = _factor_fullcolumn_nemoQQ(B)
+        return _from_fmpq_mat(fac.invB * _to_fmpq_mat(Matrix{QQ}(view(Y, fac.rows, :))))
+    end
+    check_rhs && Bn * Xn != Yn && error("solve_fullcolumn_nemoQQ: RHS check failed")
+    return _from_fmpq_mat(Xn)
+end
+
 function _solve_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<:QQ};
                                   check_rhs::Bool=true, cache::Bool=true,
                                   factor::Union{Nothing,FullColumnFactor{QQ},NemoFullColumnFactorQQ}=nothing)
@@ -645,6 +684,11 @@ function _solve_fullcolumn_nemoQQ(B::AbstractMatrix{<:QQ}, Y::AbstractVecOrMat{<
 
     m, n = size(B)
     size(Ymat, 1) == m || throw(DimensionMismatch("B and Y must have same row count"))
+
+    if factor === nothing && !cache
+        X = _solve_fullcolumn_nemoQQ_direct(B, Ymat; check_rhs=check_rhs)
+        return want_vec ? vec(X) : X
+    end
 
     fac = factor
     if fac === nothing

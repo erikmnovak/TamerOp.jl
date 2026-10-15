@@ -36,7 +36,7 @@ using Random
 using LinearAlgebra
 
 import ..EncodingCore: locate, locate_many!, locate_many, dimension, representatives, axes_from_encoding
-import ..RegionGeometry: region_weights, region_volume, region_bbox, region_diameter, region_adjacency,
+import ..RegionGeometry: region_weights_exact, region_weights, region_volume, region_bbox, region_diameter, region_adjacency,
                          region_boundary_measure, region_boundary_measure_breakdown,
                          region_centroid, region_principal_directions,
                          region_chebyshev_ball, region_circumradius, region_mean_width,
@@ -2780,5 +2780,7 @@ _region_geometry_summary_fast(pi::CompiledEncoding{<:PLEncodingMapBoxes}, r::Int
         mean_width_method=mean_width_method, mean_width_ndirs=mean_width_ndirs,
         mean_width_rng=mean_width_rng, mean_width_directions=mean_width_directions,
         need_mean_width=need_mean_width)
+
+include("pl_backend/exact_mass.jl")
 
 end # module PLBackend

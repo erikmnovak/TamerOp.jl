@@ -22,7 +22,7 @@ function _ingestion_construction_provenance(data, spec, filtration)
     effective = requested
     substitution = :none
     projection = :none
-    if data isa PointCloud && !isempty(data.points) && length(first(data.points)) > 2 &&
+    if data isa PointCloud && !isempty(data.points) && length(first(data.points)) > (requested === :alpha ? 3 : 2) &&
        requested in (:alpha, :delaunay_lower_star)
         effective = requested === :alpha ? :rips : :function_rips
         projection = requested === :alpha ? :none : :function_coordinate
@@ -35,7 +35,14 @@ function _ingestion_construction_provenance(data, spec, filtration)
                   effective in (:core, :core_delaunay, :function_delaunay, :rhomboid) ? :radius :
                   effective in (:rips, :function_rips, :rips_density, :rips_codensity, :degree_rips, :radius_degree_rips,
                                 :landmark_rips) ? :diameter : :filtration_values
-    return (; requested, effective, substitution, projection, grade_scale)
+    base = (; requested, effective, substitution, projection, grade_scale)
+    if requested === :alpha && data isa PointCloud && size(point_matrix(data), 2) == 3
+        base = merge(base, (ambient_dimension=3,
+            affine_dimension=length(_alpha_affine_basis(_spatial_alpha_points(data)))-1,
+            geometry=:exact_rational_predicates, grade_arithmetic=:exact_rational_squared_radius,
+            duplicates=:rejected, cospheres=:triangulated_delaunay_refinement))
+    end
+    return base
 end
 
 function _ingestion_provenance(plan, P, axes, orientation, degree, stage, trace;
@@ -99,7 +106,8 @@ function _ingestion_provenance(plan, P, axes, orientation, degree, stage, trace;
                        multicritical=plan.multicritical,
                        onecritical_selector=plan.multicritical === :one_critical ? plan.onecritical_selector : nothing,
                        onecritical_enforce_boundary=plan.multicritical === :one_critical ? plan.onecritical_enforce_boundary : nothing,
-                       grade_arithmetic=any(a -> eltype(a) <: AlgebraicReal, axes) ? :exact_real_algebraic :
+                       grade_arithmetic=get(construction, :grade_arithmetic, nothing) !== nothing ? construction.grade_arithmetic :
+                                        any(a -> eltype(a) <: AlgebraicReal, axes) ? :exact_real_algebraic :
                                         numerical_grades ? :float64 : :input_arithmetic,
                        neighbor_search=nn_approximation,
                        construction_substitution=construction.substitution),

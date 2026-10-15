@@ -2326,6 +2326,40 @@ end
     @test_throws ErrorException TO.equalizer(f, z; cache=:bogus)
 end
 
+@testset "Rational kernel transport through direct one-shot solves" begin
+    if field isa CM.QQField
+        P = FF.ProductOfChainsPoset((4,))
+        n, r = 16, 24
+        C = [QQ(2i+j+1, i+3j+2) for i in 1:r, j in 1:n]
+        A = hcat(Matrix{QQ}(I,r,r), C)
+        expected_inclusion = vcat(-C, Matrix{QQ}(I,n,n))
+        old = FL._QQ_NEMO_DIRECT_MIN_COLS[]
+        try
+            for threshold in (16, typemax(Int))
+                FL._QQ_NEMO_DIRECT_MIN_COLS[] = threshold
+                CM.clear_runtime_caches!()
+                dom = MD.PModule{QQ}(P,fill(r+n,4),
+                    Dict((u,v)=>QQ(v,u)*Matrix{QQ}(I,r+n,r+n) for (u,v) in FF.cover_edges(P));field)
+                cod = MD.PModule{QQ}(P,fill(r,4),
+                    Dict((u,v)=>QQ(v,u)*Matrix{QQ}(I,r,r) for (u,v) in FF.cover_edges(P));field)
+                f = MD.PMorphism{QQ}(dom,cod,[copy(A) for _ in 1:4])
+                K, inclusion = TO.kernel_with_inclusion(f)
+                @test K.dims == fill(n,4)
+                @test all(==(expected_inclusion),inclusion.comps)
+                @test all(iszero,A*expected_inclusion)
+                @test MD.check_morphism(inclusion).valid
+                @test MD.check_module_functoriality(K;throw=true).valid
+                for u in 1:4, v in u:4
+                    @test MD.map_leq(K,u,v) == QQ(v,u)*Matrix{QQ}(I,n,n)
+                end
+            end
+        finally
+            FL._QQ_NEMO_DIRECT_MIN_COLS[] = old
+            CM.clear_runtime_caches!()
+        end
+    end
+end
+
 @testset "AbelianCategories perf guards (kernel/image/cokernel)" begin
     if field isa CM.QQField
         function _median_time_alloc(fn::Function; reps::Int=3)
@@ -5488,4 +5522,31 @@ end
             @test same49(fast[1].comps[v]*x,y)
         end
     end
+end
+
+@testset "Cohomology cycle coordinates preserve exact and numerical membership" begin
+    for field in FIELDS_FULL
+        K=CM.coeff_type(field)
+        matrix(A)=K[CM.coerce(field,x) for x in A]
+        Z=matrix([1 2;1 0;0 1;3 -1])
+        X=matrix([2 3;5 7]);Y=Z*X
+        rows=MCM._cohomology_cycle_rows(field,Z)
+        if field isa CM.RealField
+            @test rows===nothing
+        else
+            @test Z[rows,:]==Matrix{K}(I,2,2)
+        end
+        same(A,B)=field isa CM.RealField ? isapprox(A,B;atol=1e-9,rtol=1e-9) : A==B
+        @test same(MCM._cohomology_cycle_coordinates(field,Z,rows,Y),X)
+        @test same(MCM._cohomology_cycle_coordinates(field,Z,rows,Y;check_rhs=true),X)
+        # Selecting the correct rows alone would accept this non-cycle.
+        bad=copy(Y);bad[1,1]+=one(K)
+        @test_throws Exception MCM._cohomology_cycle_coordinates(field,Z,rows,bad;check_rhs=true)
+    end
+    Z=QQ[2 3;3 5;4 7];X=reshape(QQ[2,-1],2,1)
+    @test MCM._cohomology_cycle_rows(CM.QQField(),Z)===nothing
+    @test MCM._cohomology_cycle_coordinates(CM.QQField(),Z,nothing,Z*X)==X
+    emptyZ=zeros(QQ,3,0)
+    @test MCM._cohomology_cycle_rows(CM.QQField(),emptyZ)==Int[]
+    @test MCM._cohomology_cycle_coordinates(CM.QQField(),emptyZ,Int[],zeros(QQ,3,2))==zeros(QQ,0,2)
 end

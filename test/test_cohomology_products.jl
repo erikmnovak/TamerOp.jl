@@ -279,7 +279,7 @@ end
     for s in (:CohomologyAlgebra,:PersistentCupProducts,:CupModule,:CupProductBudget,
               :CupProductValidationSummary,:check_cohomology_algebra,:check_persistent_cup_products,
               :check_cup_module,:cup_unit,:cup_product_matrix,:cochain_cup,:cohomology_coordinates,
-              :cohomology_representatives,:cohomology_restriction,:cohomology_module,:cup_parameters,:cup_embedding,:cup_pmodule)
+              :cohomology_representatives,:cohomology_restriction,:cohomology_module,:cup_parameters,:cup_poset,:cup_embedding,:cup_pmodule)
         @test getproperty(TOA,s)===getproperty(CP,s)
     end
 end
@@ -315,7 +315,7 @@ end
         V=CP.cup_module(R);damaged=deepcopy(V);damaged.images[1][3].=zero(K)
         @test !CP.check_cup_module(damaged).valid
         @test_throws ArgumentError CP.check_cup_module(damaged;throw=true)
-        badmaps=deepcopy(R);badmaps.restrictions[1][3].=zero(K)
+        badmaps=deepcopy(R);badmaps.restrictions[2,1][3].=zero(K)
         @test !CP.check_persistent_cup_products(badmaps).valid
         wrongshape=deepcopy(A);wrongshape.products[(1,1)]=zeros(K,2,2)
         @test !CP.check_cohomology_algebra(wrongshape).valid
@@ -362,4 +362,143 @@ end
     @test CP.cup_parameters(zerosigned)==[0.0]
     @test CP.check_persistent_cup_products(zerosigned).valid
     @test_throws ArgumentError CP.persistent_cup_products(CP.cohomology_module(R;degree=1))
+end
+
+@testset "A108 arbitrary posets, path relations, and cup images" begin
+    CP=TamerOp.CohomologyProducts;FF=TamerOp.FiniteFringe;MM=TamerOp.Modules
+    P=FF.FinitePoset(Bool[1 1 1 1;0 1 0 1;0 0 1 1;0 0 0 1])
+    for F in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5),CM.Fp(101))
+        K=CM.coeff_type(F);A=_cup_exterior(F)
+        id=Matrix{K}(I,2,2);projection=K[1 0;0 0]
+        ringmap(B)=Dict(0=>ones(K,1,1),1=>copy(B),2=>reshape(K[B[1,1]*B[2,2]-B[1,2]*B[2,1]],1,1))
+        maps=Dict((2,1)=>ringmap(id),(4,2)=>ringmap(projection),(3,1)=>ringmap(projection),(4,3)=>ringmap(id))
+        R=CP.persistent_cup_products(P,fill(A,4);restrictions=maps)
+        @test CP.check_persistent_cup_products(R).valid
+        @test CP.cup_parameters(R)===nothing
+        @test CP.cup_product_summary(R).provenance.indexing===:opposite_finite_poset
+        @test CP.cup_product_summary(R).provenance.continuation===:finite_base
+        @test CP.cohomology_restriction(R;source=4,target=1,degree=1)==projection
+        @test CP.cup_length(R;source=4,target=1)==1
+        @test CP.cup_length(R;source=4)==2
+        V=CP.cup_module(R);W=CP.partition_module(R,[1,1])
+        @test CP.dimensions(V)==CP.dimensions(W)==ones(Int,4)
+        @test CP.check_cup_module(V).valid && CP.check_cup_module(W).valid
+        for ((s,t),m) in maps
+            @test CP.structure_map(V;source=s,target=t)==m[2]
+            @test CP.structure_map(W;source=s,target=t)==m[2]
+        end
+        @test iszero(only(CP.structure_map(V;source=4,target=1)))
+        for d in 0:2
+            M=CP.cohomology_module(R;degree=d)
+            @test MM.check_module_functoriality(M).valid
+            @test all(FF.leq(M.Q,i,j)==FF.leq(P,j,i) for i in 1:4,j in 1:4)
+            @test MM.structure_map(M;source=4,target=1)==CP.cohomology_restriction(R;source=4,target=1,degree=d)
+        end
+        @test_throws ArgumentError CP.cohomology_restriction(R;source=2,target=3,degree=1)
+        @test_throws ArgumentError CP.structure_map(V;source=1,target=4)
+        @test_throws ArgumentError CP.cup_length(R;source=2,target=3)
+        @test_throws ArgumentError CP.cup_intervals(V)
+        bad=deepcopy(maps);bad[4,2]=ringmap(id)
+        @test_throws ArgumentError CP.persistent_cup_products(P,fill(A,4);restrictions=bad)
+        broken=deepcopy(R);broken.restrictions[4,2][2].=id;broken.restrictions[4,2][3].=one(K)
+        @test !CP.check_persistent_cup_products(broken).valid
+        @test_throws ArgumentError CP.check_persistent_cup_products(broken;throw=true)
+        incomplete=deepcopy(maps);delete!(incomplete,(4,2))
+        @test_throws ArgumentError CP.persistent_cup_products(P,fill(A,4);restrictions=incomplete)
+        extra=deepcopy(maps);extra[4,1]=ringmap(projection)
+        @test_throws ArgumentError CP.persistent_cup_products(P,fill(A,4);restrictions=extra)
+        @test_throws ArgumentError CP.persistent_cup_products(P,fill(A,4);restrictions=maps,budget=CP.CupProductBudget(max_stages=3))
+        # Independent basis changes at every vertex, including orientation signs.
+        Ts=[[ones(K,1,1),K[1 i;0 -1],reshape(K[-1],1,1)] for i in 1:4]
+        Is=[[ones(K,1,1),K[1 i;0 -1],reshape(K[-1],1,1)] for i in 1:4]
+        As=[CP.cohomology_algebra(A.dims,
+            Dict((p,q)=>Is[i][p+q+1]*CP.cup_product_matrix(A;left_degree=p,right_degree=q)*kron(Ts[i][q+1],Ts[i][p+1])
+                for p in 0:2 for q in 0:2-p);unit=[1],field=F) for i in 1:4]
+        changed=Dict((s,t)=>Dict(d=>Is[t][d+1]*m[d]*Ts[s][d+1] for d in 0:2) for ((s,t),m) in maps)
+        C=CP.persistent_cup_products(P,As;restrictions=changed)
+        @test CP.check_persistent_cup_products(C).valid
+        @test CP.cup_length(C;source=4,target=1)==1
+        for Vc in (CP.cup_module(C),CP.partition_module(C,[1,1]),CP.cup_module(C;factors=1))
+            @test CP.check_cup_module(Vc).valid
+            for ((s,t),m) in changed
+                ambient=zeros(K,4,4);ambient[1,1]=m[0][1,1];ambient[2:3,2:3]=m[1];ambient[4,4]=m[2][1,1]
+                @test CP.cup_embedding(Vc;stage=t)*CP.structure_map(Vc;source=s,target=t)==ambient*CP.cup_embedding(Vc;stage=s)
+            end
+        end
+        # Relabel the poset: neither its labels nor map keys are topologically sorted.
+        perm=[4,2,1,3];inverse=invperm(perm)
+        Q=FF.FinitePoset([FF.leq(P,perm[i],perm[j]) for i in 1:4,j in 1:4])
+        S=CP.persistent_cup_products(Q,As[perm];restrictions=Dict((inverse[s],inverse[t])=>m for ((s,t),m) in changed))
+        @test CP.check_cup_module(CP.cup_module(S)).valid
+        @test CP.cohomology_restriction(S;source=inverse[4],target=inverse[1],degree=1)==CP.cohomology_restriction(C;source=4,target=1,degree=1)
+        maps[2,1][1].=zero(K)
+        @test CP.check_persistent_cup_products(R).valid # constructor owns its data
+        copied=CP.cup_poset(R);copied._leq[1,4]=false
+        @test FF.leq(CP.cup_poset(V),1,4)
+        # A merge with paths of unequal length must also commute.
+        L=Matrix{Bool}(I,5,5)
+        for (u,v) in ((1,2),(2,5),(1,3),(3,4),(4,5));L[u,v]=true;end
+        for k in 1:5,i in 1:5,j in 1:5;L[i,j]|=L[i,k]&&L[k,j];end
+        Q=FF.FinitePoset(L);ms=Dict((v,u)=>ringmap(id) for (u,v) in FF.cover_edges(Q));ms[5,4]=ringmap(projection)
+        @test_throws ArgumentError CP.persistent_cup_products(Q,fill(A,5);restrictions=ms)
+        # Disconnected posets and empty algebras are allowed.
+        Q=FF.FinitePoset(Matrix{Bool}(I,2,2));Z=CP.cohomology_algebra([0],Dict();unit=Int[],field=F)
+        D=CP.persistent_cup_products(Q,[A,Z];restrictions=Dict())
+        @test CP.dimensions(CP.cup_module(D))==[1,0]
+        @test CP.check_cup_module(CP.cup_module(D)).valid
+    end
+end
+
+@testset "A108 finite-poset and multiparameter simplicial sources" begin
+    CP=TamerOp.CohomologyProducts;FF=TamerOp.FiniteFringe;DT=TamerOp.DataTypes;MM=TamerOp.Modules
+    P=FF.FinitePoset(Bool[1 1 1 1;0 1 0 1;0 0 1 1;0 0 0 1])
+    triangles=_cup_torus();edges=unique([sort(s[[i,j]]) for s in triangles for i in 1:3 for j in i+1:3])
+    cone=[[10;s] for s in triangles]
+    for F in (CM.QQField(),CM.F2(),CM.F3(),CM.Fp(5))
+        # Skeleton, torus on one branch, cone on the other, and their union.
+        R=CP.persistent_cup_products(P,[edges,triangles,cone,cone];field=F)
+        @test CP.check_persistent_cup_products(R).valid
+        @test CP.dimensions(CP.cup_module(R))==[0,1,0,0]
+        @test CP.check_cup_module(CP.partition_module(R,[1,1])).valid
+        @test_throws ArgumentError CP.persistent_cup_products(P,[triangles,edges,cone,cone];field=F)
+        for order in (:sublevel,:superlevel)
+            sign=order===:sublevel ? 1 : -1
+            cells=[edges;triangles;cone]
+            gs=[fill((0//1,0//1),length(edges));fill((2//3,0//1),length(triangles));fill((0//1,5//2),length(cone))]
+            gs=[sign.*g for g in gs]
+            S=CP.persistent_cup_products(cells;grades=gs,field=F,order)
+            @test CP.cup_parameters(S)==[sign.*g for g in [(0//1,0//1),(2//3,0//1),(0//1,5//2),(2//3,5//2)]]
+            @test CP.dimensions(CP.cup_module(S))==[0,1,0,0]
+            @test CP.check_persistent_cup_products(S).valid
+            @test CP.check_cup_module(CP.cup_module(S)).valid
+            @test MM.check_module_functoriality(CP.cohomology_module(S;degree=1)).valid
+            @test_throws ArgumentError CP.cup_intervals(CP.cup_module(S))
+            # All induced maps agree with literal cochain restriction modulo boundaries.
+            for (u,v) in FF.cover_edges(CP.cup_poset(S)),d in 0:3
+                B=CP.cohomology_algebra(S;stage=u);A=CP.cohomology_algebra(S;stage=v)
+                d<length(A.dims) && d<length(B.dims) || continue
+                a=CP.cohomology_representatives(A;degree=d);b=CP.cohomology_representatives(B;degree=d)
+                rows=[findfirst(==(c),a.cells) for c in b.cells]
+                image=a.representatives[rows,:]
+                difference=image-b.representatives*CP.cohomology_restriction(S;source=v,target=u,degree=d)
+                @test _cup_oracle_rank(hcat(b.coboundaries,difference))==size(b.coboundaries,2)
+            end
+        end
+    end
+    # A multicritical vertex appears in both incomparable arms, not their meet.
+    tree=DT.SimplexTreeMulti([1,2],[1],[0],[1,2],[1,3],[(0,2),(3,0)])
+    S=CP.persistent_cup_products(tree)
+    @test CP.cup_parameters(S)==[(0,0),(3,0),(0,2),(3,2)]
+    @test CP.cohomology_module(S;degree=0).dims==[0,1,1,1]
+    @test CP.check_persistent_cup_products(S).valid
+    # The full grid also supports three parameters and budgeted joins.
+    R=CP.persistent_cup_products([[1],[2]];grades=[(0,1,2),(3,0,0)])
+    @test length(CP.cup_parameters(R))==8
+    @test CP.check_persistent_cup_products(R).valid
+    @test_throws ArgumentError CP.persistent_cup_products([[1],[2]];grades=[(0,1,2),(3,0,0)],budget=CP.CupProductBudget(max_stages=7))
+    @test_throws ArgumentError CP.persistent_cup_products([[1],[2]];grades=[(0,1),(1,)])
+    @test_throws ArgumentError CP.persistent_cup_products([[1],[2]];grades=[(0,1),(Inf,0)])
+    # Full tree boundary closure must hold at every grade, even between samples.
+    bad=DT.SimplexTreeMulti([1,2,3,5],[1,2,1,2],[0,0,1],[1,3,4],[1,2,3,4],[(2,2),(0,0),(1,1)])
+    @test_throws ArgumentError CP.persistent_cup_products(bad)
 end

@@ -26,7 +26,7 @@ using ..Stats: _wilson_interval
 using Random
 
 import ..EncodingCore: locate, locate_many!, locate_many, dimension, representatives, axes_from_encoding
-import ..RegionGeometry: region_weights, region_volume, region_bbox, region_diameter,
+import ..RegionGeometry: region_weights_exact, region_weights, region_volume, region_bbox, region_diameter,
                          region_facet_count, region_vertex_count, region_adjacency,
                          region_boundary_measure, region_boundary_measure_breakdown, 
                          region_centroid, region_perimeter, region_principal_directions,
@@ -8236,5 +8236,7 @@ region_adjacency(pi::CompiledEncoding{<:PLEncodingMap}; box=nothing, cache=nothi
 import ..CoreModules: _register_runtime_cache!
 _register_runtime_cache!(:polyhedral_group_workspaces, _LOCATE_GROUP_SCRATCH)
 _register_runtime_cache!(:polyhedral_rational_workspaces, _LOCATE_QQCOL_SCRATCH)
+
+include("pl_polyhedra/exact_mass.jl")
 
 end # module

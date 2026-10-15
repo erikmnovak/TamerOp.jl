@@ -7,12 +7,16 @@ on:
   workflow_dispatch:
 
 # TagBot follows registration in General; running it does not register a package.
-# Use repository default permissions as recommended by upstream TagBot.
 # Configuration and release verification: https://github.com/erikmnovak/TamerOp-site/blob/main/docs/releasing.md.
 jobs:
   TagBot:
     if: github.event_name == 'workflow_dispatch' || github.actor == 'JuliaTagBot'
     runs-on: ubuntu-latest
+    # Repository defaults are read-only; grant release access to this job.
+    permissions:
+      contents: write # Create tags and releases.
+      issues: write # Read release notes and report failed releases.
+      pull-requests: read # Build the changelog.
 
     steps:
       - uses: JuliaRegistries/TagBot@v1

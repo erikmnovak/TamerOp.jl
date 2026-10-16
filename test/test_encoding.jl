@@ -2827,6 +2827,23 @@ end
         @test getfield(H, :translated) !== nothing
         @test getfield(H, :hom) !== nothing
         @test B[1] === morphism
+        materialized = getfield(H, :hom)
+        @test DF.hom_summary(materialized).algorithm == :naturality
+        @test DF.hom_summary(materialized).variables == 6
+        @test getfield(materialized, :basis_matrix) === basis_matrix
+        @test only(collect(B)) === morphism
+
+        # A zero source has no coordinates or morphisms, even after translation.
+        Z = MD.PModule{K}(P, zeros(Int, 2),
+            Dict((1, 2) => zeros(K, 0, 0)); field=field)
+        Hzero = owner.hom_common_refinement(Z, N; use_cache=false)
+        @test DF.dim(Hzero) == 0
+        @test owner.check_common_refinement_hom(Hzero).valid
+        @test isempty(collect(DF.basis(Hzero)))
+        zero_summary = DF.hom_summary(getfield(Hzero, :hom))
+        @test zero_summary.algorithm == :zero
+        @test zero_summary.variables == 0
+        @test owner.check_common_refinement_hom(Hzero).valid
     end
 end
 

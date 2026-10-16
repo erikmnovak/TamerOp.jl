@@ -4,6 +4,7 @@ module Interleavings
 using ..CoreModules: QQ, QQField, PrimeField, coeff_type, coerce
 using ..FiniteFringe: GridPoset, nvertices, leq, cover_edges
 using ..Modules: PModule, PMorphism, map_leq, check_module_functoriality, check_morphism
+import ..AbelianCategories: ambient_module
 using ..Encoding: EncodingMap
 using ..ChangeOfPosets: pullback
 using ..DerivedFunctors: Hom, basis

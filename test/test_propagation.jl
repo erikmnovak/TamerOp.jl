@@ -18,6 +18,7 @@ end
                   K[1 0;0 1],K[1 2 0;1 2 0],zeros(K,2,0),zeros(K,2,1))
             r=TamerOp.propagate(a.enc;source=6,vectors=X)
             @test AC.check_propagation(r).report.valid
+            @test TamerOp.ambient_module(r) === a.M
             @test TamerOp.propagation_summary(r).encoding===a.enc
             @test TamerOp.describe(r).summand===:not_certified
             @test TamerOp.dimensions(r)==r.image_dimensions

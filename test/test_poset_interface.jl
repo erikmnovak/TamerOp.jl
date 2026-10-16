@@ -76,7 +76,7 @@ FF.leq_matrix(::A79ScalarOrderPoset) = error("dense order materialization is uns
 
     @test occursin("Workflow output policy", workflow_doc)
     @test occursin("typed wrappers", workflow_doc)
-    @test occursin("task-oriented workflow surface", workflow_doc)
+    @test occursin("cache=sc::SessionCache", workflow_doc)
 
     @test occursin("Presentation encoding", encode_doc)
     @test occursin("Data-ingestion execution", encode_doc)
@@ -1008,7 +1008,9 @@ end
     @test !RES.check_invariant_result(bad_inv).valid
     @test_throws ArgumentError RES.check_invariant_result(bad_inv; throw=true)
 
-    @test occursin("workflow-facing wrapper", lowercase(string(@doc RES.EncodingResult)))
+    encoding_result_doc = string(@doc RES.EncodingResult)
+    @test all(name -> occursin(name, encoding_result_doc),
+              ("encoding_poset", "encoding_module", "encoding_map"))
     @test occursin("encoded cochain complex", lowercase(string(@doc RES.EncodedComplexResult)))
     @test occursin("semantic accessor", lowercase(string(@doc RES.encoding_module)))
     @test occursin("provenance", lowercase(string(@doc RES.source_result)))

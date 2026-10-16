@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 # TagBot follows registration in General; running it does not register a package.
-# Configuration and release verification: https://github.com/erikmnovak/TamerOp-site/blob/main/docs/releasing.md.
+# Configuration and release verification: RELEASING.md in this repository.
 jobs:
   TagBot:
     if: github.event_name == 'workflow_dispatch' || github.actor == 'JuliaTagBot'

@@ -7,15 +7,20 @@ const control=(p,s)=>p.locator(`${inputs.has(s)?"input":""}[id^="tamerop-module-
 async function input(p,s,t){const c=control(p,s);await c.fill(t);await c.press('Tab');}
 async function action(p,s){const old=(await state(p)).summary.revision;await keyboardActivate(control(p,s));
   await expect.poll(async()=>(await state(p)).summary.revision,{timeout:120000}).toBeGreaterThan(old);
+  // Applying a matrix must publish the edit and its selection together, so
+  // linked viewers never initialize an already-replaced intermediate scene.
+  expect((await state(p)).summary.revision).toBe(old+1);
+  await expect.poll(async()=>(await state(p)).summary.updating,{timeout:120000}).toBe(false);
   await expect(control(p,'error')).toBeEmpty();
   await expect.poll(async()=>(await state(p)).summary.listener_errors).toEqual([]);}
 async function ready(p){await p.waitForFunction(()=>[...document.querySelectorAll('canvas')].some(c=>c.wglmakie_screen?.renderer?.info.render.frame>0),null,{timeout:180000});}
 test('A99 edit failed paths, exact matrices, order, fields, history, exports and linked cleanup',async({page},info)=>{
   const errors=[];await openInspector(page,`${base}/editor`,errors);await ready(page);
   await expect(control(page,'status')).toContainText('Valid module');
-  await input(page,'source','3');await input(page,'target','4');await action(page,'select');
+  await input(page,'source','3');await input(page,'target','4');
   await input(page,'matrix','2');await action(page,'apply-matrix');
   const invalid=await state(page);expect(invalid.validation.valid).toBe(false);
+  expect(invalid.selection.edge).toEqual([3,4]);
   expect(invalid.validation.witness.first.rows).toEqual([['1']]);
   expect(invalid.validation.witness.second.rows).toEqual([['2']]);
   await expect(control(page,'readout')).toContainText('different composites');
@@ -24,8 +29,10 @@ test('A99 edit failed paths, exact matrices, order, fields, history, exports and
   await expect(control(page,'code-download')).toBeHidden();
   await capture(page,info,'failed-diamond');
   await action(page,'undo');expect((await state(page)).validation.valid).toBe(true);
+  expect((await state(page)).selection.edge).toEqual([1,2]);
   await action(page,'redo');expect((await state(page)).validation.valid).toBe(false);
   await action(page,'undo');
+  await input(page,'source','3');await input(page,'target','4');await action(page,'select');
   const before=(await state(page)).summary.revision;
   await input(page,'matrix','run(`no`)');await keyboardActivate(control(page,'apply-matrix'));
   await expect(control(page,'error')).not.toBeEmpty();expect((await state(page)).summary.revision).toBe(before);
@@ -57,9 +64,15 @@ test('A99 edit failed paths, exact matrices, order, fields, history, exports and
   const chart=page.getByLabel('Module editor diagram',{exact:true});
   await chart.focus();await chart.press('ArrowRight');
   await expect.poll(()=>chart.evaluate(element=>element.scrollLeft)).toBeGreaterThan(0);
-  await action(page,'undo');await capture(page,info,'narrow-editor');
+  await action(page,'undo');await ready(page);await capture(page,info,'narrow-editor');
+  // Close a newly replaced diagram without waiting for its first browser frame.
+  await action(page,'redo');
   await control(page,'close').click();await expect.poll(async()=>(await state(page)).summary.closed).toBe(true);
-  await expect.poll(async()=>(await state(page)).viewer_count).toBe(0);expect(errors).toEqual([]);
+  await expect.poll(async()=>(await state(page)).viewer_count).toBe(0);
+  await expect.poll(async()=>(await state(page)).summary.updating).toBe(false);
+  expect((await state(page)).summary.listener_count).toBe(0);
+  await expect(page.getByText('Editor closed. The final static snapshot remains available.',{exact:true})).toBeVisible();
+  expect(errors).toEqual([]);
 });
 test('A99 presentation support closure and active zero coefficients',async({page},info)=>{
   const errors=[];await openInspector(page,`${base}/editor-presentation`,errors);await ready(page);

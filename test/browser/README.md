@@ -10,9 +10,9 @@ provide evidence of the rendered result.
 
 This focused browser suite is required in the Visualization CI workflow. It
 does not run the full package suite or certify notebook frontends, Firefox, or
-other browsers. The [support matrix](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/visualization_support.md) records
+other browsers. The [support matrix](../visualization_support.toml) records
 family coverage and the distinction between supported and verified paths. The broader
-[A41 acceptance checklist](https://github.com/erikmnovak/TamerOp-site/blob/main/docs/testing.md#a41-interval-semantics-and-retained-representatives)
+[A41 acceptance checklist](../README.md#a41-interval-semantics-and-retained-representatives)
 also includes fixtures and visual checks beyond this harness. Installing the
 tools alone does not establish that any browser check has passed.
 
@@ -448,11 +448,11 @@ Playwright setup and `collection.spec.mjs` as the file filter.
 A100 has a separate no-server lane. Its producer creates two actual Cairo
 views of a finite-module calculation, retains exact selections and includes
 literal markup in a caption to exercise safe text handling. Run the producer
-to completion before starting the browser check:
+to completion before starting the browser check. From the repository root:
 
 ```sh
 TAMEROP_PORTABLE_SESSION_OUTPUT=/tmp/tamerop-saved-view.html \
-  julia --project=docs test/runtests.jl \
+  julia --project=test/browser test/runtests.jl \
   --file=test_visual_session_exports.jl --require-extension=TamerOpCairoMakieExt
 cd test/browser
 TAMEROP_PORTABLE_SESSION=/tmp/tamerop-saved-view.html \

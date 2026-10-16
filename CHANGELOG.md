@@ -1,678 +1,576 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 (unreleased)
 
-- Inspect checked summands through support galleries, selected/complement
-  dimensions, ranking and optional ordinary Hom tables. Extend the decomposition
-  lesson and executable guide with these views.
+This release broadens the mathematics we can explore with TamerOp and gives the
+project a clearer home for each part of that work. The library has gained new
+constructions for persistence and finite modules, more ways to recover the
+classes and maps behind an answer, and interactive views that let us follow
+those calculations. Much of the work also went into making the existing
+computations use less memory and avoid repeating algebra they had already done.
 
-- Compare declared parameter states with aligned atlas figures and linked
-  selection. Inspect actual endpoint maps, source-cell entries, and optional
-  cycles and fillings; preserve sampled coverage and incomparable-state
-  semantics in static and portable exports.
+The surrounding project has changed considerably. The library, teaching site
+and benchmark studies now have separate repositories, with short contribution
+guides and links between them. Someone arriving with a mathematical question,
+a proposed lesson or a performance improvement should have a clearer place to
+begin, without having to reconstruct how the project was assembled.
 
-- Scrub retained filtrations with scalar sliders, exact event steps and a
-  draggable parameter cursor; move encoded-module slices with line handles.
-  Coalesce requests, discard superseded results and preserve compatible
-  source axes while cells change. Keep exact entry and committed readouts,
-  with shared-view lifecycle checks and browser interaction measurements.
+The [0.1.0 account below](#010) describes the substantial foundation already in
+that release. The sections here describe the additions and changes since then.
 
-- Compute exact interval-summand multiplicities on finite posets, prune candidates
-  with top/socle data, and decide interval-decomposability with explicit search
-  budgets. Retain simultaneous splitting maps on request, with a lesson,
-  executable guide, API contracts and algorithm account.
+### A clearer project to use and contribute to
 
-- Compute relative persistence from checked filtered pairs, including later
-  subcomplex entry. Inspect quotient boundaries, homology bases, projection,
-  inclusion and signed connecting maps with their induced filtration maps.
+The three repositories have distinct responsibilities:
 
-- Publish the completed CubicalRipser comparison on 48 large image/volume
-  requests, with verified barcodes, runtime curves, machine details and
-  downloadable measurements, including substantial losses and calibration limits.
+| Repository | What belongs there |
+| --- | --- |
+| [TamerOp.jl](https://github.com/erikmnovak/TamerOp.jl) | The installable Julia library, its tests, package metadata and release history. |
+| [TamerOp-site](https://github.com/erikmnovak/TamerOp-site) | The lessons, guides, notebooks, figures and build tools for [tamerop.com](https://tamerop.com/). |
+| [TamerOp-benchmarks](https://github.com/erikmnovak/TamerOp-benchmarks) | Runnable comparisons, frozen source versions, inputs and recorded measurements. |
 
-- Reduce 3D cubical barcode work with precomputed local boundary plans, compact
-  per-image ranks and shared ordering scratch. Preserve exact endpoints and
-  retain the existing 2D and advanced-output routes; report the local method
-  in provenance.
+Moving the website out of the library keeps its teaching material and build
+environment separate from package installation. The benchmark project gives
+measurements a home where their inputs and software versions can be preserved
+and the computations repeated. The repository READMEs link to one another, and
+the library README now concentrates on installation, a first calculation and
+where to continue reading.
 
-- Compare repeated persistence results on declared common probes, with empirical
-  bands, support frequencies and linked replicate/source inspection. Add
-  conditional bounded-mean confidence intervals and reproducible whole-row
-  bootstrap bands with explicit IID and finite-grid contracts.
+The website has become a teaching companion, with mathematical introductions,
+worked examples, usage guides, API references and benchmark reports. Its
+[Using TamerOp overview](https://tamerop.com/collections/using.html) follows inputs
+into a finite encoding and then into the questions that encoding makes
+accessible. Topic menus expose the individual articles, and prepared interactive
+examples let readers vary a parameter or selection while following the
+explanation. Published notebooks have executed examples and downloadable copies.
+The site builds against the current library source.
 
-- Reduce cubical H1 storage by replaying simple square boundaries when needed,
-  and cancel equal-grade singleton relations during the existing sweep.
-  Preserve exact barcodes and the general routes for richer outputs.
+There are now public paths for proposing library changes, teaching material and
+benchmark studies. Questions and proposals share the library's
+[issue tracker](https://github.com/erikmnovak/TamerOp.jl/issues) and
+[Discussions](https://github.com/erikmnovak/TamerOp.jl/discussions); pull requests
+go to the repository being changed. Erik reviews and integrates contributions,
+including their mathematical meaning, API and final presentation. The
+[contribution guide](CONTRIBUTING.md) explains the process and invites anyone
+interested in becoming a maintainer to get in touch.
 
-- Reuse sparse-ingestion neighbor graphs and source coordinates in previews.
-  Add explicit point, edge, label and preparation budgets with original source
-  IDs, full counts and visible omissions; retain supplied graph geometry and
-  report reconstructed metric graphs separately.
+Testing instructions now live [beside the library tests](test/README.md), with
+separate [browser testing instructions](test/browser/README.md) for changes to
+interactive viewers. The [release procedure](RELEASING.md) remains with the
+package. These public instructions can be followed from the corresponding
+repository checkout.
 
-- Keep coordinate-field and matching inspector plots during compatible selections,
-  and batch measured persistence-diagram labels and leaders for faster rendering.
+### More ways to construct a filtered space
 
-- Compute full rank invariants with per-source map scratch and comparable-pair
-  output, without unconditional square rank buffers. Preserve serial and
-  threaded results, including zero ranks when requested.
+A filtration describes when cells enter a space as its parameters change. The
+new input routes give us more choices about that space, while retaining the
+information needed to interpret its homology.
 
-- Keep reversed grid axes as structured products, preserving vertex labels,
-  oriented covers, coordinate lookup, inspection order and JSON round trips.
+- Alpha filtrations now accept point clouds in three-dimensional space. Exact
+  predicates check the empty circumspheres that determine the cells and their
+  entry values. The native construction handles lower affine dimensions and
+  cospherical configurations; the optional MiniQhull extension supplies larger
+  candidate triangulations that are checked by the exact geometry.
+- Sparse multicover constructions provide a further way to study how many
+  neighborhoods cover a location, starting from distinct Euclidean sites. They
+  retain exact algebraic radii, sparse subdivision–Čech cells, multiplicative
+  comparison factors and pointwise inclusion witnesses relating the sparse
+  cover to the original multicover.
+- Radius–degree Rips filtrations record the number of neighbors actually present
+  at each radius. Component queries can then select clusters by diameter,
+  neighbor count, size and observed persistence, while retaining the original
+  point memberships.
+- Weighted graph and distance inputs can specify vertex births, the dimension
+  of cliques to include and an inclusive threshold. Landmark selection returns
+  the selected points in order, their insertion radii, nearest-landmark
+  assignments and covering radius, so the reduction of the point cloud can be
+  inspected as part of the result.
+- `filtered_complex` keeps cell geometry, original identities, entry values and
+  signed boundaries together. Homology classes can be related back to those
+  cells, including through retained maps from a filtered collapse. A filtered
+  collapse removes paired cells while preserving the relevant homology.
 
-- Encode closed box faces and points on the fast axis-aligned route. Retain
-  shared birth/death events, exact rational witnesses, coefficient maps and
-  zero-volume geometry, with cell budgets that include the extra strata.
+### Ordinary persistence, with the classes behind the intervals
 
-- Store cubical component metadata compactly and handle already-reduced square
-  boundaries directly, avoiding generic column bookkeeping for those cases.
-  Preserve exact barcode endpoints, both input conventions and general routes
-  for periodicity, other fields and retained representatives.
+Ordinary persistence now works over prime fields beyond F₂, the field with two
+elements. Signs and coefficients are retained over odd primes. When requested,
+a result includes a cycle representing a class, a chain that fills it at its
+death, or a persistent cocycle, which describes a class through values on cells.
+These can be inspected at a chosen parameter and traced to the original source.
 
-- Explore higher-dimensional scalar fields through linked coordinate planes,
-  shared signed scales, stable layers and explicit interpolated contours.
-  Place sampled landscapes in ambient coordinates with declared line parameters,
-  source windows, coverage masks and conditional interpolation bounds.
+Several related workflows have expanded:
 
-- Batch Makie edges, support polygons, spatial faces, bars and labels, including
-  decorated interval views and exact coefficient tables. Preserve endpoint
-  conventions, selection anchors and overlapping outlines; add mandatory scene
-  growth checks and an offline browser fixture for the shared renderer.
+- Rips barcodes through homological degree two can be computed directly from
+  points or dense and sparse distance data, generating the necessary cofaces
+  during reduction instead of constructing all boundary matrices first. This
+  route supports prime coefficients, radius restrictions, landmarks and
+  persistent cocycles.
+- Cubical persistence accepts values on pixels and voxels in any positive
+  array dimension, extending the earlier image route. Values assigned to grid
+  vertices remain a separate input convention. Both descriptions support
+  periodic axes and retained source information through their general
+  constructions.
+- Connected-component histories record which original cells belong to each
+  component and how components merge. A barcode interval can therefore be
+  followed back to the component it describes.
+- For retained source cycles over prime fields, representative optimization
+  minimizes the sum of chosen cell weights within an explicit search budget.
+  It returns a chain witnessing that the homology class is unchanged. Taking
+  every weight to be one asks for a representative using the fewest cells.
+- `PersistenceDiagram` results can be passed directly to bottleneck and
+  Wasserstein distances, landscapes, images, silhouettes, entropy and scalar
+  summaries, selecting the homological degree to analyze. These functions use
+  the result's interval and filtration conventions.
+- Ordinary diagrams can be saved and loaded with exact grades, coefficients,
+  representatives, source geometry and retained maps. Extended diagrams have
+  their own format preserving the phases described below.
 
-- Explore exact generalized rank on selected finite regions and continuous worms,
-  with optional limit/colimit matrices, repeated-occurrence boundary barcodes
-  and fixed-probe GRIL layers. Add a guide, task recipe and implementation account.
+The [ordinary persistence guide](https://tamerop.com/ordinary_persistence.html)
+connects these results to the filtration and its barcode.
 
-- Add a finite-module and fringe-presentation editor with explicit failed-path witnesses, bounded undo/redo, checked object and Julia exports, saved drafts, and a construction guide.
+### Relative, extended and changing persistence
 
+A class can be followed through more than a growing sequence of spaces. This
+release adds several ways to specify how a space changes and which maps connect
+its successive states.
 
-- Reuse cubical component pairings to shrink the remaining barcode reduction
-  and skip redundant dual-graph work. Traverse grid neighbors directly from
-  linear cell indices, preserving exact grades, tied events and thin grids.
+- Relative persistence computes the homology over a prime field of a pair
+  `(K, A)` filtered by one parameter, where chains in the chosen subcomplex `A`
+  are set to zero. Cells of `A` may enter
+  later in the filtration. The result retains the inclusion, quotient and
+  connecting maps that relate the pair's homology to that of its two spaces.
+  Spatial selection rules can choose the subcomplex from existing source cells.
+- Extended persistence follows a lower-star filtration, in which vertex values
+  determine when cells enter, by a relative phase.
+  This gives ordinary essential classes, which never die during the first
+  phase, an endpoint in the extended calculation. Ordinary, relative and
+  extended intervals retain their phase labels.
+- Zigzag persistence allows the maps in a finite sequence to point in either
+  direction. Exact interval decompositions over rational and prime fields can
+  retain representatives, including for supplied chain maps and supported
+  sequences of simplex additions and deletions.
+- Temporal persistence connects scalar filtrations through specified chain
+  maps. It retains the time occurrences, spatial scales and directed maps, with
+  a zigzag barcode at each stored scale. Input routes include unions of point
+  clouds and overlapping windows of delayed observations; spatiotemporal
+  landscapes summarize persistence on the resulting finite grid.
+- A retained persistence state supports cell insertion, deletion, append and
+  changes to filtration order. Explicit continuation of the grades records
+  crossing events and interval correspondences along the path. These are the
+  data needed to follow a vineyard, a family of persistence diagrams as the
+  filtration changes.
+- An inspectable reference reduction records the column operations that produce a
+  barcode, including the original boundary matrix, its reduced form and the
+  change of basis. Pairings, cycles and fillings can be read alongside the
+  steps that produce them.
 
-- Make coordinate and interaction acceptance mandatory across visualization
-  families, with a checked support matrix and native/browser CI. Add accessible
-  volume controls, preserve Tab navigation past inspector plots, fix nested
-  browser-fixture styling with Bonito 5.2, and keep saved figures readable in
-  narrow browsers through accessible chart scrolling.
+### Further algebra on finite modules
 
-- Compute nonperiodic 1D-3D cubical F₂ barcodes directly from grid grades and
-  neighboring cells, without constructing boundary matrices. Preserve exact
-  grades, budgets and both input conventions; keep the general route for
-  periodicity, other fields and retained chains/source geometry. Remove the
-  vertex-grade round trip through ranked image ingestion on that route too.
+The finite encoding remains the common object behind the algebra. Its ordered
+labels carry vector spaces and maps, so we can ask how vectors move, which
+parts form submodules, and whether the whole module splits into simpler pieces.
 
-- Build general-dimensional cubical topology with arithmetic grid indexing and
-  preallocated sparse boundaries, reducing construction time and allocation
-  traffic while preserving cell order, oriented periodic boundaries, source
-  identities and cache reuse. The specialized 2D path is unchanged.
+- Vector and subspace propagation follows chosen vectors through the structure
+  maps. It reports their images and can construct the submodule they generate,
+  together with its inclusion and quotient.
+- Exact interval multiplicities count copies of a specified interval module:
+  one copy of the field on an order-convex connected support, with identity
+  maps within that support. Bounded searches can find the interval summands
+  and retain the inclusion and projection maps that split them from the rest.
+- Indecomposable decomposition goes further, splitting a module into pieces
+  that cannot themselves be written as nontrivial direct sums. Results retain
+  actual splitting maps and certificates on the chosen finite poset. There is
+  a specialized bipath route, for two directed paths sharing their endpoints,
+  and an optional Hecke extension for rational algebra certification.
+- Minimal presentations of zeroth homology can be obtained directly from
+  graph connectivity. Their generators, relations and Betti data describe
+  components and mergers without first building a larger general presentation.
+- Selected map ranks and local Betti queries can be answered without always
+  constructing the full encoded module or resolution. Betti data count the
+  generators appearing at each location and degree of a minimal resolution.
+- Pointwise duality replaces each vector space by its linear dual and reverses
+  the arrows. It now applies consistently to finite modules, morphisms,
+  presentations, complexes and projective or injective resolutions, including
+  the corresponding degree reversals.
+- Rank-exact resolutions organize a module using exact sequences that preserve
+  the ranks of its structure maps additively. Their lower-hook terms are
+  supported above one label, optionally with the region above another removed.
+  The result includes the terms, differentials, Betti data and signed hook
+  decomposition.
 
-- Save named mathematical views with exact retained readouts, source identities
-  and original module coordinates. Reopen supported Julia inspectors, share
-  self-contained offline HTML, and export figures with machine-readable records;
-  add an executable guide and session/serialization documentation.
+The existing Hom, Ext and Tor calculations have gained more economical basis
+and coordinate queries and fuller inspection. These derived constructions are
+computed in the representation category of the chosen finite poset, as
+explained in the [mathematical categories guide](https://tamerop.com/math_categories.html).
 
-- Explore collections of supplied features, distances and kernels with linked
-  sample views, declared embeddings and selected-pair matching witnesses.
-  Preserve feature definitions, original values, masks and mathematical context
-  without hidden normalization or all-pairs work; extend the comparison guide.
+### Products and invariants that retain more structure
 
-- Explore multicover and core constructions through linked source coverage,
-  retained cells, radius–depth events and homology. Preserve exact rhomboid
-  radii, terminal caps and repeated-site labels; add fixed-depth barcodes,
-  an executable geometric guide and the rhomboid implementation account.
+Dimensions and ordinary ranks answer useful first questions. The additions
+here let us ask about multiplication, persistence across a region, or the
+organization of a module under a chosen weighting.
 
-- Compare dimensions, anchored ranks and ordinary barcodes across fields,
-  degrees and construction choices through declared query correspondences.
-  Share scales and live selections, inspect signed differences and selected
-  matrices, retain provenance and numerical tolerance sensitivity, and add
-  an executable comparison guide with API and implementation documentation.
+- Cohomology algebras retain cup products, the multiplication of cohomology
+  classes. Ordered simplicial sources and supplied compatible algebra diagrams
+  support restrictions, persistent product images and partition modules, which
+  group products by the degrees of their factors. Cup length records how many
+  positive-degree factors can have a nonzero product. Along a finite chain,
+  the resulting modules can be expressed by intervals.
+- Generalized rank measures how much persists coherently across a selected
+  connected convex region of a finite poset. Results can retain the limit and
+  colimit matrices that establish the answer. Signed summaries reconstruct
+  ranks on a declared finite family of intervals.
+- Generalized rank invariant landscapes (GRIL) evaluate these ranks on growing
+  worm-shaped regions. The implementation computes exact critical widths at
+  fixed probes of supported positive two-dimensional grid encodings, with
+  boundary zigzag barcodes available for inspection.
+- Harder–Narasimhan filtrations organize finite modules by slope, the ratio
+  of weighted degree to positive weighted mass. Their successive factors are
+  semistable: no nonzero submodule has a larger slope. Exact computations over
+  rational and prime fields can retain the actual filtration maps. Skyscraper
+  queries follow subspaces generated at an anchor, comparing their dimension
+  there with the weighted mass of their images throughout the module. Geometric
+  versions use declared region masses, and planar Cartesian models support
+  chamber diagrams showing where the filtration changes. Filtered landscapes
+  summarize the resulting persistence.
+- For Jordan type and multirank, the maps between selected disjoint sets of
+  labels form one nilpotent block operator, whose sufficiently high powers
+  vanish. The ranks of its powers recover Jordan block multiplicities and give
+  multiranks. Globally described parameter models also support translated
+  image filtrations, their ranks and landscapes, and erosion comparisons that
+  measure how much shifting is needed to compare those rank functions.
+- Graphcodes express a module on a two-dimensional grid as rows of barcodes
+  together with the actual linear maps between rows. The representation keeps
+  coefficients and chosen bases, and supports lossless compression. Connected
+  components of the graph identify direct summands.
+- Two-parameter counts and birth and death curves describe finite-support
+  lattice modules through the kernel and cokernel of a diagonal unit shift.
+  Their locations and multiplicities use the declared lattice and its zero
+  extension outside the stored grid.
+- A supplied morphism between persistence modules now determines an additive
+  partial matching of their intervals, with unmatched multiplicities and
+  optional coefficient witnesses. This follows the given map, whereas a
+  distance computation chooses a matching to minimize a cost.
+- For individual finitely presented bivariate interval modules, linear
+  persistence contours in nonnegative directions specify how to shift
+  parameters. Exact shift dimensions and stable rank curves give the minimum
+  number of generators whose submodule contains the shifted image, with
+  generating witnesses available.
 
-- Correct vertex-valued cubical construction budgets to estimate sparse topology,
-  grades and assembly workspace. Feasible images and volumes no longer fail
-  a hypothetical dense-boundary check; cell, edge and memory limits still apply.
+### Comparing modules and making features from their results
 
-- Inspect finite-category Ext/Tor dimensions, selected representatives and
-  actual Yoneda or supplied Tor products. Retain checked quotient witnesses,
-  coefficient fields, basis conventions and bounded multiplication tables;
-  add the derived-algebra guide, reference and product implementation account.
+Comparisons now include explicit maps relating shifted modules. A globally
+described rectilinear module records its behavior on coordinate regions,
+including the region beyond a finite plotting window. Such models support
+parameter shifts, checked interleaving maps, bounded searches for those maps
+and bounds on interleaving distance. An interleaving uses maps in both directions
+whose compositions agree with the prescribed shifts. A search distinguishes a
+found interleaving, proved nonexistence and an unresolved bounded search.
 
-- Add named figure composition, checked overlays and shared scales, authored
-  annotations and verified source-cycle/barcode connectors. Anchors follow
-  layout and live axis changes; static PNG/SVG/PDF and self-contained responsive
-  HTML preserve the selected figure. Include a figure-composition guide and recipe.
+The existing exact matching-distance calculation can now return its exact
+value and, for a comparison window of positive area, a maximizing line and
+its bottleneck assignment. Use `matching_distance_exact_2d(...; witness=true)`
+to inspect the intervals responsible for that value.
 
+Epsilon-pruning constructs the associated shifted subquotient and retains the
+maps relating it to the original module. For an exploratory description by
+intervals, matched diagonal slices can instead produce candidate planar
+supports and error measurements on chosen lines. Those sampled errors describe
+the candidate on the queried lines; they do not certify an exact splitting or
+a global approximation bound.
 
-- Follow selected vectors and subspaces through finite module maps, with checked
-  path agreement, image support and dimensions, optional generated submodules
-  and quotients, and explicit retained source-cycle bases. Add actual matrix
-  and region views, an executed guide, API contracts and the B08 account.
+Other additions connect persistence results to numerical analysis:
 
-- Add exact H0 component histories, source memberships and merge events for
-  one-parameter filtrations and declared multicritical slices. Link bars,
-  source geometry and merge forests in static and live inspectors, with explicit
-  tie rules, original-source checks and the component workflow in the source-cell guide.
+- Signed transport compares balanced signed measures, retaining their positive
+  and negative contributions. Sliced transport uses selected projection
+  directions, while signed convolution smooths the measure on a chosen grid
+  to produce numerical features.
+- Ambient landscapes place retained slice values back on a Cartesian parameter
+  grid. Their values retain coverage information and, where interpolation is
+  requested, its applicable error bounds.
+- Ensembles align repeated results on common probes and provide means,
+  empirical bands and support frequencies. Confidence intervals for bounded
+  means and bootstrap bands resampling whole replicates are available when
+  the declared sampling assumptions justify population inference.
+- Circular coordinates turn selected persistent first cohomology classes on a
+  retained source with one filtration parameter into values on a circle. The
+  construction checks an integer lift of each cocycle
+  before numerical smoothing; several selected classes give coordinates in a
+  product of circles. Original vertex identities connect these coordinates
+  to the source data.
 
-- Added a separate comparison with original C++ Ripser on larger Rips-barcode workloads, with verified results, machine details, and a documented sparse-cutoff limitation. The Ripser.py report remains separate.
+### Seeing and following the calculation
 
-- Add refinement and change-of-poset inspection for arbitrary finite bases,
-  realized label pairs, actual classifier regions and supplied naturality
-  comparisons. Linked viewers share selection and retain explicit finite-category
-  guarantees. Add the executable transport guide, reference and implementation account.
+The visualization system has expanded from plotting results to connecting
+several views of the same mathematical calculation. Selecting an interval can
+highlight its source cells; moving a slice can change the barcode beside it;
+selecting a map can expose the matrix responsible for a rank. Static figures
+and live Julia viewers draw on the same prepared mathematical records.
 
-- Add chain/cochain and connecting-map inspectors, with checked cycle, boundary,
-  quotient and induced-map coordinates, supplied homotopy witnesses, exact source
-  overlays, and linked browser selection. Extend the canonical complexes guide.
-  Correct sparse zero validation to accept cancellation with explicitly stored zeros.
+The available views now cover:
 
-- Retain verified source cycles, death fillings and cocycles, including filtered
-  chain correspondences through collapse, periodic source overlays and a bounded
-  exact weighted-support optimizer. Owned persistence JSON now uses schema 2
-  to preserve source geometry and maps.
+- Finite modules, presentations and their parameter regions, with selected
+  spaces and structure maps. Algebra figures expose morphisms, Hom basis maps,
+  kernels, images, cokernels, exact sequences, chain maps and homotopies.
+- Resolutions and derived algebra, including Betti and Bass tables, principal
+  supports, selected differentials, Ext and Tor representatives and product
+  tables. Spectral-page viewers connect a differential to its kernel and image.
+- Linked barcodes and persistence diagrams, with exact endpoints, repeated
+  intervals and source representatives. Moving planar slices retains endpoint
+  conventions, and supported encodings can certify a whole-line restriction
+  independently of the drawing window.
+- Filtered cells, connected components, relative pairs and multicover geometry.
+  Threshold controls and parameter atlases connect selected states to their
+  source cells, maps, cycles and fillings. Volume and coordinate-plane controls
+  expose higher-dimensional data through chosen sections.
+- Anchored rank sections, signed contributions, generalized rank and GRIL.
+  Comparisons on the same queries place fields, degrees or constructions side by side;
+  collections and ensemble views connect numerical features to their samples.
+- Summand galleries, refinements, interleavings and pruning, with the maps
+  underlying a split, transport or comparison available for inspection.
+- Graphcodes, birth and death curves, stability filtrations, temporal modules
+  and circular coordinates. Linked selections connect these newer invariants
+  to their source labels, maps or vertices.
+- Persistence-path playback and stepwise matrix reduction, so a changing answer
+  or an individual column operation can be followed rather than viewed only
+  at its endpoint.
 
-- Add filtered-complex geometry and linked cell inspection, with exact activity queries, source identities, signed boundaries, periodic and skeleton views, and a canonical source-cell guide. Correct superlevel image cell grades to use the required minimum over incident vertices.
+A module and presentation editor checks the defining relations and shows a
+conflicting path when they fail. Valid constructions can be exported as Julia
+code or mathematical objects. For planar Rips and codensity examples, the source
+laboratory lets us edit points and construction parameters, rebuild the
+filtration, and compare the original and edited results. Undo and redo retain
+the editing history.
 
-- Add linked signed-contribution inspection, rank endpoint-pair and prominence views, explicit smoothing, named backgrounds and direct-query checks.
+Figure composition brings named panels together with shared scales,
+annotations and checked connectors between source cycles and barcode intervals.
+`VisualStyle` supplies consistent typography, colors, spacing and emphasis.
+Marker shapes and labels distinguish mathematical roles in grayscale as well
+as color; interval labels, image axes and narrow layouts have been revised
+for readability.
 
-Changes prepared for the next release. Once a finite encoded module has been
-constructed, its retained algebra should support further questions without
-repeating work. These updates make dimensions, bases and coordinates cheaper
-to obtain while preserving the existing basis conventions and the
-[finite-poset interpretation of Ext and Tor](https://www.tamerop.com/math_categories.html).
+Named saved views preserve exact readouts, selections and mathematical context.
+Prepared states can be shared in self-contained HTML, while supported retained
+sources can be reopened in Julia for further queries. Figures can be exported
+as PNG, SVG or PDF. The [visualization guide](https://tamerop.com/guides/visualization.html)
+explains the display and saving choices.
 
-### Spectral pages and differential inspection
+### Less repeated work in the computation
 
-- Add page charts and selected differential/kernel/image views for cohomological
-  and Tor spectral sequences, with explicit unknown, cropping and limit scope.
-- Add linked page navigation and supplied structure-map overlays; exact and
-  numerical fields use the existing owners' page and linear-algebra contracts.
-- Add the complexes-and-spectral-pages usage notebook and method reference.
+A recurring aim of this release was to make a requested answer determine how
+much algebra is prepared. Asking for a dimension should not require every
+representative, and asking another coordinate question of the same result
+should be able to reuse the factorization already available.
 
-### Distance and matching inspection
+- Homology and cohomology results retain reusable matrix factorizations and
+  construct quotient representatives when requested. Exact cohomology dimension
+  queries also defer boundary coordinates. Ext bases reuse retained
+  representatives and can be transported together to another resolution model.
+- Rational Hom constraints use sparse integer elimination to reduce repeated
+  fraction arithmetic. Suitable dense rational products and factorizations use
+  Nemo, the exact algebra library, while structured and sparse calculations
+  retain their corresponding methods. Tables of Yoneda products, which compose
+  Ext classes, reuse their lifts within the calculation.
+- Ordinary persistence over F₂ reuses column storage and scratch buffers,
+  and combines many binary entries in a single machine operation. Component
+  merging and previously identified persistence pairs help skip unnecessary
+  reductions. Exact grades and their tie order are retained.
+- Eligible nonperiodic cubical barcodes in dimensions one through three work
+  directly from grid grades and neighbors over F₂. Component pairings, compact
+  square boundaries and local volume boundary plans reduce the remaining
+  reduction. General cubical construction uses arithmetic grid indexing and
+  preallocated sparse boundaries.
+- Rips computations reuse neighbor lists and distance order, combine landmark
+  selection with distance updates, and store triangles and reduction terms
+  more compactly. Immediate cancellations at equal grades avoid filling queues
+  with work that would be removed again. Eligible bounded requests can stop
+  at a radius where one vertex connects to every other vertex, making the
+  Rips complex a cone.
+- Full rank invariants reuse map storage and record comparable pairs without
+  a square array containing all pairs, including incomparable ones. Viewers
+  reuse prepared source geometry,
+  compatible axes and plotted objects, and batch bars, edges, polygons, faces
+  and labels. Superseded interaction requests cannot overwrite a newer answer.
 
-- Add reusable matching diagrams, aligned barcodes and pair costs with diagonal
-  assignments, essential endpoints, duplicate-member IDs and linked selection.
-- Compare common slices through two encoded modules, inspect a bounded sampled
-  cost map, and explicitly request the exact finite-window optimum.
-- Retain the exact value, line and numerical-owner assignment with
-  `matching_distance_exact_2d(...; witness=true)` while keeping the scalar default.
-- Add a focused matching recipe and extend the finite-window comparison guide.
+Advanced users can inspect retained process caches with
+`Advanced.runtime_cache_summary()` and clear them between calculations with
+`Advanced.clear_runtime_caches!()` while keeping their result objects.
+Precompilation now includes explicit Hom maps and positive-degree Ext on a
+branching poset, preparing more of that algebra before its first use.
 
-### Resolution inspection
+The [benchmark reports](https://tamerop.com/benchmarks/index.html) compare finite
+module algebra with QPA, boundary-matrix persistence with PHAT, Rips workflows
+with Ripser.py and C++ Ripser, and image and volume persistence with CubicalRipser.
+A separate study measures the time from a viewer input to the displayed result.
+The reports give the workloads and observed differences; the benchmark
+repository contains the procedures and measurements needed to repeat them.
 
-- Inspect finite-poset Betti/Bass multiplicities, selected differentials and
-  principal supports, with explicit minimality, truncation and category scope.
-- Add supplied grade-plane views and certified graded basis changes for
-  resolution and presentation incidence; distinguish cokernels, kernels and
-  fringe images. Rendering consumes prepared mathematical data.
-- Add a resolution usage notebook and method reference in their planned homes.
-  Projective lift views now use explicit `kind=:resolution_lift`; the default
-  resolution view is the cheap multiplicity table.
+### Corrections and details for existing users
 
-### Benchmarks
+- Superlevel image cells now receive the minimum of their incident vertex
+  values, correcting the previous use of the sublevel maximum rule.
+- Fast axis-aligned encodings retain closed faces and isolated points at shared
+  birth and death thresholds. Their exact witnesses and saved encodings
+  preserve these boundary strata.
+- Reversed grid axes retain their structured product representation, vertex
+  labels, oriented maps and coordinate lookup after saving and loading.
+- Cubical construction budgets estimate sparse topology, grades and assembly
+  storage. Feasible inputs are no longer rejected by an estimate based on a
+  dense boundary matrix that the construction would not build.
+- Wasserstein assignment refinement and exact-rational bottleneck comparisons
+  involving essential intervals have been corrected. Numerical failures in
+  the assignment calculation are reported rather than becoming plausible
+  distance values.
+- Sparse relation checks accept cancellation with explicitly stored zero
+  entries. Nonfinite rational entries are rejected before shortcuts that skip
+  multiplication by zero, including when a destination matrix is supplied.
+- Comparisons between projective and injective Ext calculations respect the
+  configured tolerances over numerical real fields. Exact coefficients retain
+  exact equality checks.
+- Resolution figures default to the inexpensive multiplicity view. A
+  projective lift figure is selected explicitly with `kind=:resolution_lift`.
+- Retaining source representatives, persistent cocycles or a mutable reduction
+  is an explicit choice, so ordinary barcode requests need not store that
+  additional information. Ordinary diagram JSON uses schema 2; extended
+  persistence has a separate schema preserving its interval kinds and phases.
+- Julia compatibility remains at 1.12 and compatible later 1.x releases.
+  MiniQhull and Hecke are optional extensions; plotting and table adapters
+  continue to load only when their corresponding packages are imported.
 
-- Added the final Ripser.py comparison: ordinary barcodes, cocycles and landmark workflows across 37 requests, with separate reserved evaluation, machine details and downloadable results. Independent checks now certify nontriviality of the sampled larger H2 cocycles.
+The automated checks have been reorganized into separate core, ingestion and
+invariant jobs across Linux, macOS and Windows. Visualization checks now
+exercise native rendering, real browser controls and saved HTML, including
+coordinate correspondence, linked selection, keyboard use and viewer cleanup.
+Algebraic regression checks compare known kernels, quotient coordinates,
+representatives, products and comparison maps, including concurrent queries.
 
-### Generalized rank and GRIL
+## 0.1.0
 
-- Add exact generalized rank on selected connected convex finite subposets,
-  with optional limit/colimit witnesses over rational and prime fields.
-- Add signed summaries on declared finite interval families, with total-diagram
-  compression and reconstruction restricted to that family.
-- Compute continuous-worm GRIL at fixed probes on positive 2D grid encodings,
-  using exact critical widths and explicit extension and resource contracts.
-  Include independent mathematical oracles, executable examples, and an
-  implementation account; plan separate mathematical and library-usage lessons.
+The [first registered release](https://github.com/erikmnovak/TamerOp.jl/releases/tag/v0.1.0)
+established TamerOp's finite encoding approach to persistence and homological
+algebra. A finite encoding consists of a finite partially ordered set (poset),
+vector spaces and maps on that set, and an order preserving assignment from the
+original parameters to its labels. This lets a module with a large or continuous
+parameter space
+be studied through a finite description while retaining its meaning on that
+parameter space.
+
+The original release already contained the following capabilities.
+
+### Inputs, geometry and finite encodings
+
+- Point clouds could be turned into Rips filtrations and density, codensity,
+  function and landmark variants. Low-dimensional alpha and Delaunay
+  constructions, core filtrations, degree Rips and rhomboid multicovers supplied
+  further geometric choices.
+- Graph inputs supported vertex functions, clique complexes, edge weights,
+  geodesic distances, centrality and graph core constructions. Images supplied
+  cubical filtrations and constructions using their values and distances.
+- Users could supply graded complexes directly, including complexes where a
+  cell has several minimal entry grades. Construction options controlled
+  dimensions, geometry, intermediate results and resource limits.
+- Modules could also begin algebraically: with spaces and maps on a finite
+  poset, lattice presentations, or piecewise linear regions. Fringe
+  presentations described a module as the image of a map from pieces supported
+  on upsets to pieces supported on downsets. An upset contains everything above each
+  of its points; a downset contains everything below.
+- Encodings supported individual and batched parameter queries, coarsening,
+  the structure of finite grids and summaries of their spaces and maps. Rational and
+  real algebraic grades were retained by the constructions using them.
+- Rhomboid multicovers used exact sphere predicates and physical radii.
+  General polyhedral encodings retained nonconvex pieces and modules supported
+  only on boundaries. Region queries included volumes, boundaries, centroids,
+  moments and support measurements, with exact or sampled methods according
+  to the question.
 
 ### Ordinary persistence
 
-- Extend top-cell cubical persistence from images to volumes and arbitrary
-  positive array dimensions, with exact grades, signed periodic boundaries,
-  construction budgets, and retained source cells, cycles and cocycles.
-  Keep the established 2D construction path and distinguish voxel values
-  from vertex values.
+The ordinary reducer computed barcodes over F₂ from supplied filtered complexes
+and supported input constructions. Results retained exact finite endpoints and
+separated finite intervals from essential classes, which have no death in the
+stored filtration.
 
-- Analyze `PersistenceDiagram` directly by degree with bottleneck/Wasserstein
-  distances, landscapes, images, silhouettes, entropy and scalar summaries.
-  Make essential-bar handling, superlevel reflection and numerical grids explicit.
-- Save and load owned diagram results with exact grades, field, provenance and
-  retained cycle/cocycle data; add a checked novice analysis notebook.
-- Repair shared Wasserstein auction refinement and exact-rational bottleneck
-  comparisons involving essential intervals, with independent matching oracles.
+Cubical persistence supported sublevel and superlevel filtrations and periodic
+axes. Values assigned to top-dimensional cells were supported for two-dimensional
+images; values assigned to vertices already worked in arrays of arbitrary
+positive dimension. These were two distinct ways of describing the filtered
+space.
 
-- Fuse farthest-landmark selection with distance updates and accelerate native
-  floating-point distance checks while preserving selection ties and errors.
-- Reuse certified-radius neighbor lists for Rips coface searches while retaining
-  the original catalog rows and exact filtration grades.
-- Reduce F2 queue work with sorted batches, in-place sorting and buffer reuse
-  within a query. Keep compact term heaps when a terminal radius removes neighbors,
-  and signed coefficient heaps over odd prime fields.
+### Spaces, maps and derived algebra
 
-- Find immediate equal-grade coface cancellations before filling Rips queues.
-  Build complete graph rows directly, reuse sorted sparse rows, and avoid
-  boxing the H0 clearing set. Preserve exact grades, signs and cocycle outputs.
-- Check landmark finiteness in the existing distance-validation traversal,
-  retaining complete input checks without a second full scan.
+- Finite modules supported morphisms, direct sums, submodules and quotients.
+  Kernels, images, cokernels and coimages came with the maps identifying them.
+  Pushouts and pullbacks combined diagrams with a common source or target, while
+  equalizers and coequalizers imposed agreement between two maps.
+- Short exact sequences and the snake lemma supplied connecting maps between
+  kernels and cokernels. These operations worked with actual module maps and
+  their equations.
+- Projective covers, injective hulls and projective, injective and indicator
+  resolutions expressed modules through simpler building blocks. Betti and
+  Bass tables recorded the multiplicities of those blocks by location and
+  degree.
+- Hom computed the space of module maps. Ext and Tor extended Hom and tensor
+  computations through resolutions, with dimensions, bases, representatives,
+  coordinates and induced maps. Yoneda composition combined Ext classes into
+  multiplication tables for Ext algebras, with actions of Ext classes on Tor.
+  Tor products used supplied compatible multiplicative data.
+- Chain and cochain complexes supported homology, cohomology, maps, homotopies,
+  mapping cones and their long exact sequences. Module complexes extended
+  these calculations across the finite base.
+- Derived Hom and tensor complexes, hyper-Ext, hyper-Tor and spectral sequences
+  organized calculations involving complexes of modules. Spectral sequences
+  exposed successive pages and differentials, with convergence and extension
+  information where determined by the construction.
 
-- Store one-term Rips reduction columns compactly, share edge ordering between
-  connected components and H1, and reconstruct apparent pairs when needed.
-  Preserve signed prime-field computation, signed-zero tie ordering and opt-in
-  cocycle representatives.
-- Stop eligible bounded Rips barcode requests at a certified cone radius, with
-  the certificate recorded in provenance. Keep requested budgets, user cutoffs,
-  retained cocycles and truncated-skeleton semantics intact.
-- Pack triangle catalogs without narrowing Float64 grades or changing the
-  simplex tie order, reducing catalog storage and sorting work.
+These derived calculations were already formulated in the category of modules
+on the specified finite poset. Changing that base was an explicit mathematical
+operation, supported by restriction, left and right Kan extensions and their
+derived versions. Kan extensions transport a diagram along a map of posets.
+Common refinements supplied shared finite descriptions and the maps needed to
+compare their modules.
 
-- Reduce implicit Rips work with direct complete-graph distance lookup, direct
-  triangle enumeration and preallocated dense catalogs. Compact F2 queue records
-  omit redundant coefficients while preserving parity cancellation, signed
-  odd-prime reduction and opt-in cocycle representatives.
-- Validate dense distance matrices in cache-local tiles, improving landmark
-  selection while retaining symmetry, diagonal, sign and conversion checks.
+### Invariants, slices and features
 
-- Retain landmark selection order, insertion radii, nearest-point assignments
-  and covering radius, with an optional full distance table and a conditional
-  metric Rips approximation bound. Preserve distinct coincident input indices.
-- Extend `EdgeWeightedFiltration` with vertex births, clique dimensions and an
-  inclusive threshold. Accept graph inputs and dense/sparse matrices with
-  diagonal vertex births, using the implicit barcode/cocycle route through H2
-  and explicit construction for higher degrees or homology representatives.
+- Rank invariants counted the dimensions of images between comparable
+  parameters. Hilbert functions recorded the dimension at a parameter, and
+  Euler surfaces gave alternating sums across homological degrees.
+- Signed point measures and signed rectangle barcodes expressed changes in
+  these quantities through positive and negative contributions. Betti and
+  Bass support summaries described where the resolution data occurred.
+- Restricting to a line produced an ordinary barcode. Reusable arrangements
+  of slice barcodes, projected barcodes and sampled matching distances
+  supported comparisons between multiparameter modules. An exact optimizer
+  computed the two-dimensional matching distance within a specified finite
+  rectangle.
+- Bottleneck and Wasserstein distances between barcodes, persistence landscapes,
+  images, silhouettes, entropy and scalar summaries were available. Sampled
+  tracks across slices supplied multiparameter image and decomposition
+  summaries; these tracks recorded barcode matchings rather than certified
+  decompositions of the source module as a direct sum.
+- Feature specifications could be combined, applied in batches and saved with
+  names and parameter axes. Experiment records retained the chosen pipeline
+  and numerical features for subsequent analysis.
 
-- Add opt-in persistent cocycles over prime fields, with a scale-specific
-  accessor, restriction conventions, exact stored grades and source-cell
-  coefficients. Implicit Rips also retains oriented input vertex identities.
-  Homology cycles and death fillings remain a separate option; barcode-only
-  calls retain their existing reduction paths.
+### Arithmetic, figures and interchange
 
-### Visualization
+The algebra supported rational coefficients, prime fields and numerical real
+fields, with explicit field choices and numerical tolerances. Exact linear
+algebra used native methods and Nemo. Result summaries retained the construction
+and coefficient choices, and inexpensive inspection could leave larger module
+or basis calculations deferred.
 
-- Add anchored rank sections with a fixed source or target, exact parameter-order
-  masks, selected-map readouts and small multiples sharing a scale. Linked
-  inspectors reuse bounded rank rows and columns while preserving exact anchor
-  geometry, reversed axes and the distinction between zero and undefined maps.
+A common `visualize`, `save_visual` and `save_visuals` interface covered source
+geometry, encoding regions, ranks, barcodes, persistence diagrams, slice
+families, signed measures and numerical features. Optional CairoMakie and
+WGLMakie extensions supplied static figures and HTML output.
 
-- Add algebra inspection for module morphisms, naturality squares, computed
-  kernels/images/cokernels, and exact sequences. Display selected Hom basis
-  maps, supplied chain maps and homotopies, and projective-resolution lifts
-  with their actual equations and induced-map comparisons. Support overlays
-  require a shared classifier; numerical identities show residuals and
-  tolerances. All views share static Cairo/WGL rendering and export.
+Datasets, pipelines, encodings, lattice and piecewise linear presentations,
+feature sets and sampled multiparameter results had saving and loading
+interfaces. Prescribed external file formats connected selected workflows
+with other persistence and computer algebra tools. Optional integrations
+included Tables, DataFrames, CSV, Arrow, Parquet, NPZ, Distances, KernelFunctions,
+NearestNeighbors and DelaunayTriangulation, with Folds and ProgressLogging for
+selected execution and progress reporting tasks.
 
-- Make default image and interval figures easier to read with compact layouts,
-  simple axes, integer pixel labels for small images, and explanations of the
-  endpoint symbols actually shown. Keep relevant display limitations visible.
-- Keep image comparisons on a chosen colour range, label their displayed
-  quantity, and show complete outer pixels. Small interval plots now label
-  well-separated births and deaths inside the viewing window.
-
-- Keep barcode infinity, censoring and continuation labels inside the plotting
-  area and clear of selection strokes at larger text sizes, preserving their
-  exact interval anchors.
-- Rotate crowded persistence-diagram x-axis tick labels when needed, using
-  measured text widths and restoring horizontal labels when space permits.
-  Tick values and interval coordinates stay unchanged.
-- Add maintained Playwright checks for live interval and encoding inspectors,
-  including the earlier two-square manual cases, keyboard scrolling and actual
-  browser zoom. The optional harness starts and stops its own Julia server.
-
-### Documentation
-
-- Publish validated documentation from `main` through GitHub Pages, with
-  separate deployment permissions and browser checks under the project URL.
-
-- Publish the expanded PHAT ordinary-barcode comparison across 48 medium/large
-  inputs and sixteen structural variants, with timing tables, scaling curves,
-  machine details and verified downloadable results. Replace the earlier public
-  PHAT result set while retaining its raw evidence locally. Present practical
-  timing differences and actual savings before win/loss counts; include PHAT
-  and QPA reports and data in the documentation site.
-
-- Give the reading map equally visible example-first and definitions-first
-  starts, labeled optional detours, and installation alongside the ring.
-  Keep reference material off the main diagram and both starts visible on
-  narrow screens.
-- Align lesson endings, the reading map and website footer around explicit
-  reading routes. Remove development history and validation status from
-  teaching pages, retaining mathematical requirements and clearly labeled
-  placeholders for future figures.
-- Explain why finite constructions supply tameness and preserve it through
-  compatible algebraic operations, with a worked square morphism, a homology
-  diagram, and precise links to the closure results of Ezra Miller and Lukas
-  Waas. Extend the reading map and clarify each foundation chapter's role.
-- Add a linked reading map with practical and mathematical routes, an accessible
-  text outline, and grouped links to further guides. Both map views share one
-  source, with published pages and repository treatments clearly labeled.
-- Connect the ring lesson to finite encodings with a short two-parameter
-  explanation, reusing the parameter-order diagram and preserving the existing
-  mathematical chapter sequence as the full development.
-- Teach plotting options as they become useful, keeping comparison scales
-  explicit and moving styling/export to an optional section. Codify this in
-  the writing guide; the website folds optional notebook sections while the
-  executed download retains their cells and figures.
-- Add a ring teaching notebook with saved filtration snapshots, interval
-  figures and a prediction exercise. A separate documentation environment
-  builds a Documenter lesson and executed download from the same source,
-  with mathematical checks, figure/link validation and CI review artifacts.
-
-### Algebra and performance
-
-- Compute Rips barcodes through H₂ directly from point clouds and dense/sparse
-  distance graphs, generating signed cofaces as needed instead of materializing
-  boundary matrices. Support all prime fields, radius limits, landmarks and
-  existing construction budgets; retain explicit construction for cycle
-  representatives and higher degrees. Record the executed route and graph
-  selection in provenance.
-
-- Give sparse Rips distance matrices explicit missing-edge and zero-distance
-  semantics, reusing budgeted clique construction. Check requested homology
-  degrees against available filling dimensions, record radius restrictions,
-  and apply radius cutoffs to nearest-neighbor graphs consistently.
-
-- Extend direct ordinary persistence to prime fields, including F₃ and F₁₀₁,
-  with signed modular boundaries, exact stored grades and optional coefficient-bearing
-  cycles and death fillings. Preserve the F₂ fast paths and basis conventions;
-  validate chain and filtration conditions in the selected field.
-
-- Use component merging for ordinary F2 connected-component persistence inside
-  higher-dimensional complexes, and a reversed dual graph for eligible top
-  boundaries. Preserve periodic essential classes, exact grades, input checks,
-  algebraic fallbacks and the existing representative-producing reduction.
-- Extract finished binary columns in bulk and share storage across saved pivot
-  columns within each ordinary F2 barcode computation. Preserve exact supports,
-  filtration order, input validation and retained representatives.
-- Add densely occupied binary pivot columns by whole words during ordinary F2
-  barcode reduction, and reuse the previous pivot's word when locating its
-  successor. Keep sparse columns sparse and preserve retained representatives.
-- Use stable integer-grade ordering for ordinary persistence, preserving ties,
-  unsigned and extreme grades, and the existing conventions for other real grades.
-- Compute ordinary F2 barcodes with clearing and a reusable binary-column
-  workspace indexed by filtration order. Graph-shaped degree-one complexes use
-  component merging and cycle births. Keep the existing representative-producing
-  reduction and report the executed route in result provenance.
-- Speed up exact double-boundary validation with direct parity accumulation and
-  packed binary products selected by column density and reuse. Preserve all
-  storage, filtration and chain checks, including signed/even coefficients.
-- Speed up graded-complex construction by keeping grade conversion specialized
-  on its dimension and scalar type. Preserve exact grades, existing `BigFloat`
-  precision, empty-input checks and independent grade storage.
-- Reuse scratch buffers during ordinary F2 persistence reduction, including
-  representative tracking. Preserve the selected cycles, bounding chains and
-  boundary validation while reducing temporary column allocations.
-- Select Nemo for sufficiently dense rational factors and matrix products,
-  including coordinate setup. Preserve exact selected rows, bases, membership
-  checks and explicit backend choices. Small, sparse and structured work retains
-  its native paths; factor storage and existing sharing remain in place.
-- Speed up complete membership checks for eligible dense rational batches with
-  the same exact product backend. Explicit Julia-only solves keep Julia checks;
-  scalar, sparse and structured inputs retain their existing paths.
-- Factor eligible dense rational matrices directly from an invertible leading
-  square block. Preserve the canonical selected rows and use general row
-  selection when that block is singular, including full-rank matrices with
-  nonconsecutive selected rows.
-- Select rational pivot columns by forward elimination, preserving the same
-  ordered basis without computing a full reduced matrix just to discard it.
-- Remove copied row slices and redundant input copies from exact particular
-  solves. Detect inconsistent right-hand sides from augmented pivot columns;
-  preserve the free-variable convention and numerical-field behavior.
-- Share packed F2 factor application between dense and sparse solves, reusing
-  one scratch vector within each call while retaining full RHS checks.
-- Compute rational Hom constraints with sparse integer echelon rows and final
-  back substitution. Clearing denominators avoids repeated fraction reduction
-  while preserving the ordered basis of actual module maps.
-- Reuse result-owned factors for native prime-field quotient coordinates above
-  characteristic three. Every checked query still verifies its full input;
-  new results start with their own factors. F2/F3 and Nemo routing are retained.
-- Construct Ext and Tor representatives with the shared exact rational product
-  path, skipping structural zeros without changing their coordinates.
-- Add matrix-coordinate Yoneda products for whole tables, reusing each lift
-  within the request. `ExtAlgebra` uses this preparation when building its
-  multiplication tables. Scalar products, signs and comparison maps between
-  target resolutions retain their contracts.
-- Use the same rational products for module-map composition, induced homology
-  and cohomology maps, and exact relation checks. Keep sparse output where both
-  factors are sparse, preserve native diagonal/banded/triangular algorithms,
-  and retain the numerical-field validation tolerances.
-- Defer boundary coordinates and quotient representatives for exact cohomology
-  dimension queries, while still checking at construction that boundaries are
-  cycles. Later queries reuse the same result.
-- Build homology, cohomology and subquotient representatives by selecting the
-  required cycle-basis columns directly, avoiding unnecessary multiplication.
-- Retrieve canonical Ext bases from retained representatives. When another
-  resolution model is requested, transport the whole basis together. Preserve
-  its coordinate order and return independent representative vectors.
-- Reduce unnecessary rational arithmetic in matrix products, solution checks
-  and row reduction. Avoid a second elimination when factoring an invertible
-  square matrix; retain singular-input checks and the selected exact backend.
-- Reuse a checked coordinate calculation for rational homology and cohomology.
-  Every public query still verifies cycle membership in all ambient coordinates,
-  including when the quotient is zero. Coordinate requests leave representative
-  matrices deferred until explicitly requested.
-- Reuse factors already computed during construction, including sharing across
-  equal matrices while their weak-cache entries remain alive. Build quotient
-  projections without retaining an unnecessary completed-basis inverse.
-- Expand precompilation to explicit Hom maps and positive-degree projective Ext
-  on a branching poset, covering work missed by the earlier two-vertex example.
-
-See [lazy inspection and reuse](https://www.tamerop.com/guides/lazy_inspection.html) for the resulting query
-behavior. No new public cache option or query-count threshold is required.
-
-### Correctness and validation
-
-- Reject nonfinite rational coefficients before skipping zero products, so a
-  malformed differential cannot pass a relation check just because the adjacent
-  map is zero. Check before modifying a supplied product destination.
-- Check scalar and batched Yoneda products over QQ, F2, F3, F101 and Real64,
-  including units, ordering, empty batches, invalid inputs and transport into
-  another target resolution. Preserve strict associativity checks.
-- Fix projective/injective Ext comparison checks over `RealField` to use the
-  configured numerical tolerances in both inverse directions. Exact fields
-  continue to require exact equality.
-- Reject nonfinite entries in Julia's rational row-reduction path before
-  applying arithmetic shortcuts.
-- Add independent exact elimination and quotient-coordinate examples, including
-  nonconsecutive pivots, boundary shifts, invalid first queries, sparse inputs,
-  array views, lazy basis construction, shared factors and concurrent queries.
-- Extend tests of Ext dimensions, representatives and induced maps to the
-  Boolean three-cube and a 4-by-4 grid, with exact and numerical coefficients.
-  Retain checks of products, associativity and comparisons between resolutions.
-
-An earlier targeted algebra integration run passed 12,466 assertions with
-Julia 1.12.1, four threads, and QQ, F2, F3, F5 and Real64 selected. Independent exact checks
-also verified complete Hom kernels and unchanged ordered Ext representatives
-on 16 before/after fixture exports. This was a focused run, not a rerun of the
-full repository suite; see [testing](https://www.tamerop.com/contributing/testing.html) for validation scope.
-
-For the shared-product and Yoneda-table implementation, focused product and
-integration runs passed 24,525 assertions. After the finite-coefficient and
-structured-storage review, the final kernel and complex-validation run passed
-another 1,380 assertions (some repeat earlier checks). These maintained-runner
-checks include randomized module-map oracles, exact/numerical fields, threaded
-parity and backendized storage; they do not replace the full suite.
-
-The rational Hom and native prime-coordinate follow-up passed 7,863 focused
-assertions, including independent rational kernels, checked finite-field solves,
-threaded quotient coordinates, backend routing and strict Yoneda identities.
-It uses the maintained test runner; the full repository suite was not rerun.
-
-The dense certificate and leading-block follow-up passes 11,133 focused
-assertions, including hand-derived exact inverses, singular leading blocks,
-invalid first and last entries, explicit backend choices and threaded checks.
-Existing homology, cohomology, Ext/Tor and strict Yoneda checks are included;
-this is not a full-suite rerun.
-
-### Measured performance scope
-
-Selective dense rational routing passes 10,565 focused assertions and independent
-checks of 17 development workflows and 16 dense controls. Two process pairs yield
-492 accepted samples with verified resets and zero measured compilation.
-Complete size-16 coordinate requests improve by 2.07–4.06×; retained checked
-queries improve by 1.45–2.06×. These controls start from supplied cycle and
-boundary bases, with result construction and the requested answer timed together.
-
-The largest observed size-4 addition is 0.026 ms. Other module workflows are
-mixed, with a largest observed addition of 0.517 ms in one pair. Reachable
-size-16 result/cache storage is smaller, but Julia allocation counters omit
-FLINT allocations; no process-memory reduction is claimed. These are TamerOp
-before/after diagnostics, not a new QPA comparison or a full-suite test run.
-
-The rational Hom and native prime-coordinate follow-up verified 520 fresh-result
-samples and ten identical, independently checked before/after answers. The
-large-coefficient rational Hom request improves by 1.39–2.08× with 64% fewer
-allocated bytes; F101 Yoneda tables improve by 1.72–2.90× with 40% fewer allocated
-bytes. The full F101 tensor request ranges from near parity to 1.62× faster.
-These are two shared-host TamerOp process pairs, not a new QPA comparison.
-
-Keep the tradeoffs visible: a size-16 rational cohomology scalar control adds
-2.23–2.27 ms in both pairs, and several other controls are mixed. A separate
-240-sample prime-coordinate diagnostic finds 4.60–6.36× faster retained scalar
-queries at size 16, but first requests add 23–126 μs and retain 4,592 extra bytes.
-Retained 32-column queries are 4–19% slower. These changes target repeated
-coordinate work within complete computations; they do not make every query
-faster or close the broader optimization study.
-
-The shared-product and Yoneda-table changes improved a rational cube product
-request by 23.8–27.3× and a rational grid request by 2.83–4.20× in two shared-host
-passes with compiled code and verified mathematical resets. The cube request's
-allocation traffic fell from about 164 MiB to 4.1 MiB. All nineteen selected
-before/after answers were identical and independently checked. These are TamerOp
-before/after results, not new QPA comparison results.
-
-The initial study recorded dense and small-request losses; its final baseline
-reached the time cap before completing four dense controls' second passes.
-A completed follow-up with symmetric timing-only workers verified 380 samples.
-The cube gain remains 22.9–24.4× and complete grid Hom/Ext improves by 1.11–1.16×.
-The small F3 product adds 0.18–0.65 ms. Two larger dense cells remain slower in
-standalone timings, while interleaved rollback and CPU-time checks do not
-consistently reproduce a major extra multiplication cost. Retained dense storage
-is unchanged. Keep these shared-host losses and uncertainties visible; the
-follow-up introduces no speculative gate or further production change. The
-broader optimization study remains open.
-
-For the final factor-reuse and projection changes, one dense rational
-cohomology fixture improved from 8.4–9.2 ms to 3.2–4.5 ms for its first coordinate
-query. Allocations fell from 9.66 MB to 2.99 MB, and retained result-plus-factor
-storage fell from about 161 KB to 103 KB. These are two warm benchmark passes
-on a shared machine; first query means a fresh result, not Julia startup, and
-retained object size is not peak process memory.
-
-Performance depends on the workload. Some repeated queries and complete
-computations on the grid fixtures took longer. In the measured dense fixture,
-a conventional checked solve was cheaper for one isolated scalar query, while
-the retained plan reduced repeated-query times relative to those solves. These
-measurements do not establish a speedup for every operation or input.
-
-### Visualization
-
-- Share exact interval records across barcode and persistence-diagram recipes
-  for ordinary, packed, sliced and projected results. Keep multiplicity groups,
-  original member references, display counts and finite clipping separate from
-  essential infinity and unknown window endpoints.
-- Certify whole-line endpoints for supported planar encodings with
-  `slice_scope=:global`. The drawing window no longer limits the mathematical
-  restriction; incomplete domain coverage is rejected explicitly.
-- Add linked interval-only inspection with selection from either chart,
-  display budgets, exact readouts and explicit choice among repeated intervals.
-  Ordinary F2 persistence can retain noncanonical cycles and bounding chains
-  with `representatives=true`; `Advanced.persistence_representative` retrieves
-  an original interval's representative. Retention is off by default.
-- Link a movable planar slice to decorated barcode and persistence-diagram
-  views in the inspector. Preserve open/closed endpoints, singleton intervals
-  and multiplicities, and mark finite-window cuts without inferring essential
-  classes. Exact line controls, bounded reuse and shared interval selection
-  also work with static snapshots.
-- Add `VisualStyle` for shared typography, spacing, colors and marker emphasis
-  across static figures, the live inspector and saved exports. Styles apply to
-  each call without changing the mathematical specification or global themes.
-- Keep source and target roles recognizable through labels and marker shapes
-  in accessible and grayscale palettes. Preserve exact matrix coefficients,
-  empty spaces, boundary conventions and data-space marker extents.
-- Apply the shared style to existing module/presentation inspection panels,
-  barcode and persistence-diagram views, and numerical heatmaps. Batch exports
-  accept a default style and a separate override for each requested figure.
-
-See [visualization](https://www.tamerop.com/guides/visualization.html#rendering-and-saving) for examples.
-
-### Documentation
-
-- Add a [contributor guide](CONTRIBUTING.md) covering issue reports, development
-  setup, focused checks, documentation, and pull requests.
-- Use the expanded name, Toolkit for Algebraic Module Encodings over R^n
-  and Other Posets, in the software citation. Explain the connection to
-  tameness and the project's origin as an implementation of Ezra Miller's theory.
-- Center the README and Julia help on the finite encoded object and the
-  computations it supports.
-- Add a [finite-encoding introduction](https://www.tamerop.com/finite_encodings.html) and a
-  [writing guide](https://www.tamerop.com/contributing/writing.html) for connected, approachable exposition.
-- Give existing guides question-driven introductions while retaining their
-  mathematical hypotheses and detailed operation requirements.
-
-## 0.1.0 — unreleased candidate
-
-This section describes the first planned package release. It does not announce
-a published tag or General registration. The release procedure and validation
-requirements are in [the maintainer guide](https://www.tamerop.com/contributing/releasing.html).
-
-### Mathematical capabilities
-
-- Finite-poset encodings of persistence modules from point clouds, images,
-  graphs and hand-built presentations, with field-aware algebra and explicit
-  construction budgets.
-- Homology, invariants, resolutions, Ext/Tor and their maps, with category and
-  encoding hypotheses documented in [the mathematical-category guide](https://www.tamerop.com/math_categories.html).
-- Exact algebraic grades for supported geometric constructions, with
-  [multicover backend and degeneracy contracts](https://www.tamerop.com/guides/multicover.html) and
-  [exact-grade semantics](https://www.tamerop.com/guides/exact_grades.html).
-- One-parameter persistent homology over F₂, including cubical sublevel and
-  superlevel filtrations, exact finite endpoints and periodic axes. Other
-  coefficient fields are rejected by this reducer; see
-  [ordinary persistence](https://www.tamerop.com/ordinary_persistence.html).
-- A finite-window exact two-dimensional matching-distance implementation and
-  separately identified sampled computations. See the
-  [exact-matching scope](https://www.tamerop.com/guides/exact_matching.html).
-
-### Installation and use
-
-- An installable Julia package with a beginner walkthrough, isolated analysis
-  environments, `import TamerOp as OP`, selective imports and advanced access.
-- Optional plotting, table/file and ecosystem integrations loaded through
-  Julia's native package extensions. Core installation does not install a
-  renderer; the [integration guide](https://www.tamerop.com/guides/optional_integrations.html) lists the
-  additional packages and imports.
-- Persistence diagrams and barcodes, with CairoMakie PNG/SVG output and WGLMakie
-  HTML export. Browser interaction after Julia exits is a separate validation
-  concern and is not certified by file-generation tests.
-- Result summaries, mathematical provenance, lazy inspection and explicit
-  numerical contracts. Installed package loading does not benchmark or write
-  a tuning profile into package storage.
-- Maintained package-mode tests and installed-package verification, release
-  instructions, and [software citation metadata](CITATION.cff).
-
-### Correctness checks before registration
-
-- Iteration cardinality and checked indexing for finite upsets/downsets, packed
-  barcodes, backend matrices, polyline views and injective-generator views.
-- Field-aware dictionary and set keys. Finite-field scalars are `Number`s;
-  modular integer arithmetic remains available, while key identity retains the
-  characteristic. Coerce dictionary keys explicitly into the coefficient field.
-- Encoding/result validators check stored dimensions, coefficient fields and
-  base-poset agreement without forcing lazy computations. Exceptions raised
-  inside custom invariant callbacks retain their original meaning.
-- Invariant entrypoints accept their documented keyword options and preserve
-  positional owner calls, query strictness and automatic thread defaults. Rank
-  invariants accept both finite-poset modules and fringe presentations.
-- Batched polyhedral lookup skips bucket indexing for one or two small
-  inequality systems while retaining indexing for larger or facet-heavy cells.
-- Polyhedral encodings retain coefficients, closed boundary classes and every
-  piece of a nonconvex support. General PL strict feasibility is rational by
-  default, with explicit fixed-margin approximation available as an option.
-- Installed-source verification compares authenticated Git file contents on
-  Linux, macOS and Windows; Windows filesystem modes are treated separately.
-
-### Release scope
-
-Julia compatibility starts at 1.12. A completed test run certifies only its
-recorded Julia version, platform, dependencies, fields and execution settings;
-see [testing](https://www.tamerop.com/contributing/testing.html). This candidate's validation must pass before it
-is registered or tagged. No comparative speedup or universal correctness claim
-is attached to this release summary. Version 0.1.0 is pre-1.0 software and its
-public API can change in later minor versions.
+The package required Julia 1.12 and included tests of the installed package and
+its source contents, release instructions and software citation metadata. The
+[tagged source](https://github.com/erikmnovak/TamerOp.jl/tree/v0.1.0) preserves the
+implementation and documentation belonging to that release.

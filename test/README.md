@@ -464,8 +464,13 @@ a final unchanged candidate; a configured workflow alone is not evidence.
 
 Some owner suites include timing guards. The integer-grid box-cache and
 polyhedral batch-cache comparisons warm both variants, alternate their order,
-collect unused objects before each paired sample, and record the raw samples. Collections within a batch remain
-measured. Interpret these bounds within the recorded machine, Julia version
+collect unused objects before each paired sample, and record the raw samples.
+Both polyhedral cache guards share a measurement helper: nine pairs of sixteen
+calls, with the complete timing wrapper warmed first. They retain elapsed time,
+allocation, collection and compilation counters, and require samples without
+compilation. Collections within a batch remain measured. These checks compare
+repeated queries with preparation retained; cache construction is outside the
+timer. Interpret these bounds within the recorded machine, Julia version
 and thread configuration; retain and investigate timing failures alongside
 mathematical assertions.
 

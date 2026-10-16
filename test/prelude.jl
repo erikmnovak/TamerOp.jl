@@ -268,5 +268,6 @@ with_fields(f::Function, fields) = foreach(f, fields)
 
 
 include("helpers/visualization.jl")
+include("helpers/timing.jl")
 
 const ENDC = TamerOp.EndCurves

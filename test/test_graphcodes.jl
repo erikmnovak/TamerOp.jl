@@ -41,15 +41,15 @@ function _gc_fixture(rows,coeffs,m;reverse=(false,false),scramble=false,rng=Mers
     MD.PModule{K}(Q,ds,maps;field),ids
 end
 function _gc_reconstruction(M,g)
-    N=GC.graphcode_module(g);ids=GC.graphcode_vertices(g);m,n=size(ids)
-    @test GC.check_graphcode(g).valid
+    N=GRC.graphcode_module(g);ids=GRC.graphcode_vertices(g);m,n=size(ids)
+    @test GRC.check_graphcode(g).valid
     @test MD.check_module_functoriality(N).valid
     for j in 1:n,i in 1:m
-        B=GC.graphcode_basis(g;row=j,column=i)
+        B=GRC.graphcode_basis(g;row=j,column=i)
         @test size(B)==(M.dims[ids[i,j]],N.dims[i+(j-1)*m])
         @test _gc_rank(B)==size(B,1)
         for l in j:n,k in i:m
-            C=GC.graphcode_basis(g;row=l,column=k)
+            C=GRC.graphcode_basis(g;row=l,column=k)
             @test MD.map_leq(M,ids[i,j],ids[k,l])*B==C*MD.map_leq(N,i+(j-1)*m,k+(l-1)*m)
         end
     end
@@ -61,53 +61,53 @@ end
     coeffs=[Int[1 0;1 1],Int[1 1;0 1;0 0]]
     for reversed in ((false,false),(true,false),(false,true),(true,true)),scramble in (false,true)
         M,ids=_gc_fixture(rows,coeffs,4;reverse=reversed,scramble,rng)
-        g=GC.graphcode(M);_gc_reconstruction(M,g)
-        @test GC.graphcode_vertices(g)==ids
-        @test [[(r.first,r.last) for r in row] for row in GC.graphcode_rows(g)]==sort.(rows)
-        h=GC.graphcode(M;vertices=ids[[1,3,4],[1,3]],x=[1//7,3//2,9//1],y=[-4,8])
+        g=GRC.graphcode(M);_gc_reconstruction(M,g)
+        @test GRC.graphcode_vertices(g)==ids
+        @test [[(r.first,r.last) for r in row] for row in GRC.graphcode_rows(g)]==sort.(rows)
+        h=GRC.graphcode(M;vertices=ids[[1,3,4],[1,3]],x=[1//7,3//2,9//1],y=[-4,8])
         _gc_reconstruction(M,h);@test h.scope==:grid_restriction
-        @test GC.graphcode_axes(h)==([1//7,3//2,9//1],[-4,8])
-        saved=GC.graphcode_map(g;row=1);fill!(saved,zero(K))
-        @test GC.check_graphcode(g).valid
-        M.dims[1]=99;@test GC.check_graphcode(g).valid # owns input
+        @test GRC.graphcode_axes(h)==([1//7,3//2,9//1],[-4,8])
+        saved=GRC.graphcode_map(g;row=1);fill!(saved,zero(K))
+        @test GRC.check_graphcode(g).valid
+        M.dims[1]=99;@test GRC.check_graphcode(g).valid # owns input
     end
     encoded_source=first(_gc_fixture(rows,coeffs,4))
     encoded=TamerOp.Results.EncodingResult(encoded_source.Q,encoded_source,nothing)
-    @test GC.check_graphcode(GC.graphcode(encoded)).valid
-    native_session=TamerOp.Visualization.graphcode_explorer(GC.graphcode(encoded_source))
+    @test GRC.check_graphcode(GRC.graphcode(encoded)).valid
+    native_session=TamerOp.Visualization.graphcode_explorer(GRC.graphcode(encoded_source))
     @test TamerOp.Visualization.check_inspection_session(native_session).valid
     TamerOp.Visualization.close_inspection!(native_session)
     # Same barcode rows can encode nonisomorphic modules via their vertical maps.
     bars=[[(1,3)],[(1,3)]]
-    g0=GC.graphcode(bars,[zeros(Int,1,1)];x=[0,2,7],y=[0,1])
-    g1=GC.graphcode(bars,[ones(Int,1,1)];x=[0,2,7],y=[0,1])
-    @test GC.graphcode_rows(g0)==GC.graphcode_rows(g1)
-    @test _gc_rank(MD.map_leq(GC.graphcode_module(g0),1,4))==0
-    @test _gc_rank(MD.map_leq(GC.graphcode_module(g1),1,4))==1
-    @test length(GC.graphcode_components(g0))==2
-    @test length(GC.graphcode_components(g1))==1
+    g0=GRC.graphcode(bars,[zeros(Int,1,1)];x=[0,2,7],y=[0,1])
+    g1=GRC.graphcode(bars,[ones(Int,1,1)];x=[0,2,7],y=[0,1])
+    @test GRC.graphcode_rows(g0)==GRC.graphcode_rows(g1)
+    @test _gc_rank(MD.map_leq(GRC.graphcode_module(g0),1,4))==0
+    @test _gc_rank(MD.map_leq(GRC.graphcode_module(g1),1,4))==1
+    @test length(GRC.graphcode_components(g0))==2
+    @test length(GRC.graphcode_components(g1))==1
     # Branching can be a connected graph of a decomposable module (invertible map).
-    connected=GC.graphcode([[(1,2),(1,2)],[(1,2),(1,2)]],[Int[1 1;0 1]];x=[0,1],y=[0,1])
-    @test length(GC.graphcode_components(connected))==1
-    @test _gc_rank(GC.graphcode_map(connected;row=1))==2
+    connected=GRC.graphcode([[(1,2),(1,2)],[(1,2),(1,2)]],[Int[1 1;0 1]];x=[0,1],y=[0,1])
+    @test length(GRC.graphcode_components(connected))==1
+    @test _gc_rank(GRC.graphcode_map(connected;row=1))==2
     # Two nonzero adjacent matrices can have zero composite in characteristic 2.
-    cancel=GC.graphcode([[(1,3)],[(1,3),(1,3)],[(1,3)]],[ones(Int,2,1),ones(Int,1,2)];x=[0,2,9],y=[0,3,8])
-    N=GC.graphcode_module(cancel);@test iszero(MD.map_leq(N,1,7))
-    _gc_reconstruction(N,GC.graphcode(N))
+    cancel=GRC.graphcode([[(1,3)],[(1,3),(1,3)],[(1,3)]],[ones(Int,2,1),ones(Int,1,2)];x=[0,2,9],y=[0,3,8])
+    N=GRC.graphcode_module(cancel);@test iszero(MD.map_leq(N,1,7))
+    _gc_reconstruction(N,GRC.graphcode(N))
     for trial in 1:25
         m=rand(rng,1:5);n=rand(rng,1:4)
         rs=[sort!([(a=rand(rng,1:m);(a,rand(rng,a:m))) for _ in 1:rand(rng,0:5)]) for j in 1:n]
         cs=[Int[(rs[j+1][t][1]<=rs[j][s][1]<=rs[j+1][t][2]<=rs[j][s][2]) && rand(rng,Bool)
             for t in eachindex(rs[j+1]),s in eachindex(rs[j])] for j in 1:n-1]
-        M,ids=_gc_fixture(rs,cs,m;scramble=true,rng);g=GC.graphcode(M);_gc_reconstruction(M,g)
-        supplied=GC.graphcode(rs,cs;x=collect(1:m),y=collect(1:n));c=GC.compress_graphcode(supplied);e=GC.expand_graphcode(c)
+        M,ids=_gc_fixture(rs,cs,m;scramble=true,rng);g=GRC.graphcode(M);_gc_reconstruction(M,g)
+        supplied=GRC.graphcode(rs,cs;x=collect(1:m),y=collect(1:n));c=GRC.compress_graphcode(supplied);e=GRC.expand_graphcode(c)
         @test e.rows==supplied.rows && e.maps==supplied.maps
-        @test GC.check_graphcode(c).valid
+        @test GRC.check_graphcode(c).valid
         @test length(c.members)<=sum(length,rs)
         # Component projections sum to the identity, and all maps commute.
         total=[zeros(K,d,d) for d in M.dims]
-        for k in eachindex(GC.graphcode_components(g))
-            S=GC.graphcode_summand(g;component=k)
+        for k in eachindex(GRC.graphcode_components(g))
+            S=GRC.graphcode_summand(g;component=k)
             @test MD.check_morphism(S.inclusion).valid && MD.check_morphism(S.projection).valid
             for q in eachindex(total)
                 @test S.projection.comps[q]*S.inclusion.comps[q]==Matrix{K}(I,S.module_object.dims[q],S.module_object.dims[q])
@@ -116,45 +116,45 @@ end
         end
         @test all(total[q]==Matrix{K}(I,M.dims[q],M.dims[q]) for q in eachindex(total))
     end
-    chain=GC.graphcode(fill([(1,3)],5),fill(ones(Int,1,1),4);x=[0,2,8],y=[0,1,2,3,4])
-    c=GC.compress_graphcode(chain);@test length(c.members)==2
+    chain=GRC.graphcode(fill([(1,3)],5),fill(ones(Int,1,1),4);x=[0,2,8],y=[0,1,2,3,4])
+    c=GRC.compress_graphcode(chain);@test length(c.members)==2
     @test c.members==[[(1,1),(2,1),(3,1),(4,1)],[(5,1)]]
     @test c.edges==[(1,2)]
-    @test GC.expand_graphcode(c).maps==chain.maps
-    @test GC.graphcode_summary(c).compression==:superfluous_vertices
-    terminal=only(last(GC.graphcode_rows(g1))) # last row has one interval
+    @test GRC.expand_graphcode(c).maps==chain.maps
+    @test GRC.graphcode_summary(c).compression==:superfluous_vertices
+    terminal=only(last(GRC.graphcode_rows(g1))) # last row has one interval
     @test terminal.death===nothing && terminal.terminal==:censored
     @test occursin("Graphcode",sprint(show,chain))
-    @test GC.describe(chain)==GC.graphcode_summary(chain)
-    @test GC.check_graphcode(chain)==GC.check_graphcode(chain)
-    @test hash(GC.check_graphcode(chain))==hash(GC.check_graphcode(chain))
+    @test GRC.describe(chain)==GRC.graphcode_summary(chain)
+    @test GRC.check_graphcode(chain)==GRC.check_graphcode(chain)
+    @test hash(GRC.check_graphcode(chain))==hash(GRC.check_graphcode(chain))
 end
 
 @testset "A126 invalid inputs and witnesses" begin
-    g=_a126_graphcode();M=GC.graphcode_module(g)
+    g=_a126_graphcode();M=GRC.graphcode_module(g)
     for bad in ([[(0,1)]],[[(2,1)]],[[(1,5)]],[[(true,1)]])
-        @test_throws ArgumentError GC.graphcode(bad,Matrix{Int}[];x=[0,1,2,3],y=[0])
+        @test_throws ArgumentError GRC.graphcode(bad,Matrix{Int}[];x=[0,1,2,3],y=[0])
     end
-    @test_throws ArgumentError GC.graphcode([[(1,2)],[(2,3)]],[ones(Int,1,1)];x=[0,1,2],y=[0,1])
-    @test_throws ArgumentError GC.graphcode([[(1,2)],[(1,2)]],[ones(Float64,1,1)];x=[0,1],y=[0,1])
-    @test_throws ArgumentError GC.graphcode([[(1,2)]],Matrix{Int}[];x=[0,0],y=[0])
-    @test_throws ArgumentError GC.graphcode(M;vertices=[2 1;1 2])
-    @test_throws ArgumentError GC.graphcode(M;budget=GC.GraphcodeBudget(max_entries=1))
-    @test_throws ArgumentError GC.graphcode(M;budget=GC.GraphcodeBudget(max_vertices=2))
-    @test_throws ArgumentError GC.graphcode(M;budget=GC.GraphcodeBudget(max_intervals=0))
-    @test_throws ArgumentError GC.graphcode_rows(GC.graphcode([[(1,1)]],Matrix{Int}[];x=[NaN],y=[0]))
-    @test_throws ArgumentError GC.GraphcodeBudget(max_entries=-1)
-    @test_throws ArgumentError GC.graphcode_map(g;row=4)
-    @test_throws ArgumentError GC.graphcode_basis(g;row=true,column=1)
-    @test GC.field(GC.graphcode(MD.PModule{CM.coeff_type(CM.F3())}(FF.ProductOfChainsPoset((1,1)),[0],Dict{Tuple{Int,Int},Matrix{CM.coeff_type(CM.F3())}}();field=CM.F3())))==CM.F3()
-    h=GC.graphcode(M);fill!(h.bases[1][1],0)
-    @test !GC.check_graphcode(h).valid
-    @test_throws ArgumentError GC.check_graphcode(h;throw=true)
-    c=GC.compress_graphcode(g);push!(c.members[1],first(c.members[1]))
-    @test !GC.check_graphcode(c).valid
+    @test_throws ArgumentError GRC.graphcode([[(1,2)],[(2,3)]],[ones(Int,1,1)];x=[0,1,2],y=[0,1])
+    @test_throws ArgumentError GRC.graphcode([[(1,2)],[(1,2)]],[ones(Float64,1,1)];x=[0,1],y=[0,1])
+    @test_throws ArgumentError GRC.graphcode([[(1,2)]],Matrix{Int}[];x=[0,0],y=[0])
+    @test_throws ArgumentError GRC.graphcode(M;vertices=[2 1;1 2])
+    @test_throws ArgumentError GRC.graphcode(M;budget=GRC.GraphcodeBudget(max_entries=1))
+    @test_throws ArgumentError GRC.graphcode(M;budget=GRC.GraphcodeBudget(max_vertices=2))
+    @test_throws ArgumentError GRC.graphcode(M;budget=GRC.GraphcodeBudget(max_intervals=0))
+    @test_throws ArgumentError GRC.graphcode_rows(GRC.graphcode([[(1,1)]],Matrix{Int}[];x=[NaN],y=[0]))
+    @test_throws ArgumentError GRC.GraphcodeBudget(max_entries=-1)
+    @test_throws ArgumentError GRC.graphcode_map(g;row=4)
+    @test_throws ArgumentError GRC.graphcode_basis(g;row=true,column=1)
+    @test GRC.field(GRC.graphcode(MD.PModule{CM.coeff_type(CM.F3())}(FF.ProductOfChainsPoset((1,1)),[0],Dict{Tuple{Int,Int},Matrix{CM.coeff_type(CM.F3())}}();field=CM.F3())))==CM.F3()
+    h=GRC.graphcode(M);fill!(h.bases[1][1],0)
+    @test !GRC.check_graphcode(h).valid
+    @test_throws ArgumentError GRC.check_graphcode(h;throw=true)
+    c=GRC.compress_graphcode(g);push!(c.members[1],first(c.members[1]))
+    @test !GRC.check_graphcode(c).valid
     # A noncommuting source square is rejected rather than choosing an arbitrary path.
     bad=MD.PModule{CM.coeff_type(CM.F2())}(FF.ProductOfChainsPoset((2,2)),ones(Int,4),Dict((1,2)=>ones(CM.coeff_type(CM.F2()),1,1),(1,3)=>ones(CM.coeff_type(CM.F2()),1,1),(2,4)=>ones(CM.coeff_type(CM.F2()),1,1),(3,4)=>zeros(CM.coeff_type(CM.F2()),1,1));field=CM.F2())
-    @test_throws Exception GC.graphcode(bad)
+    @test_throws Exception GRC.graphcode(bad)
 end
 
 @testset "A126 graphcode visualization" begin
@@ -174,20 +174,20 @@ end
     @test_throws ArgumentError V.graphcode_explorer(g;max_edges=true)
     @test_throws ArgumentError V.graphcode_explorer(g;max_rows=1)
     @test_throws ArgumentError V.visual_spec(g;max_rows=1)
-    @test_throws ArgumentError V.visual_spec(GC.compress_graphcode(g);max_intervals=1)
+    @test_throws ArgumentError V.visual_spec(GRC.compress_graphcode(g);max_intervals=1)
     @test V.available_visuals(g)==(:graphcode,)
     @test V.check_visual_spec(V.visual_spec(g)).valid
-    @test V.check_visual_spec(V.visual_spec(GC.compress_graphcode(g))).valid
+    @test V.check_visual_spec(V.visual_spec(GRC.compress_graphcode(g))).valid
     V.select_inspection!(s;row=4,source_interval=0,target_interval=0,column=4,compressed=true)
     @test size(V.inspection_snapshot(s).metadata.coefficients)==(0,2)
     @test V.inspection_snapshot(s).panels[1].metadata.compression==:superfluous_vertices
     V.reset_inspection!(s)
     # Descending and nonuniform coordinates remain physical x coordinates.
-    rev=GC.graphcode(g.rows,g.maps;x=reverse(g.x),y=g.y)
+    rev=GRC.graphcode(g.rows,g.maps;x=reverse(g.x),y=g.y)
     rs=V.visual_spec(rev);@test rs.panels[1].metadata.original_axes[1]==reverse(g.x)
     # Float64 cannot silently collapse distinct exact coordinates.
     closex=[big(2)^60+i for i in 1:4]
-    @test_throws ArgumentError V.visual_spec(GC.graphcode(g.rows,g.maps;x=closex,y=g.y))
+    @test_throws ArgumentError V.visual_spec(GRC.graphcode(g.rows,g.maps;x=closex,y=g.y))
     for (backend,extname) in ((:cairomakie,:TamerOpCairoMakieExt),(:wglmakie,:TamerOpWGLMakieExt))
         ext=Base.get_extension(TamerOp,extname)
         if ext===nothing;@test_skip false;continue;end
@@ -234,34 +234,34 @@ end
         coeffs=[Int[2 0;-1 3],Int[1 -2;0 4;0 0]]
         for reversed in ((false,false),(true,false),(false,true),(true,true))
             M,ids=_gc_fixture(rows,coeffs,4;field=F,reverse=reversed,scramble=true,rng)
-            g=GC.graphcode(M);_gc_reconstruction(M,g)
-            @test GC.field(g)==F==GC.graphcode_summary(g).field
-            @test GC.graphcode_module(g).field==F
-            @test GC.field(copy(g))==F && GC.check_graphcode(copy(g)).valid
-            @test GC.field(GC.graphcode(TamerOp.Results.EncodingResult(M.Q,M,nothing)))==F
-            restricted=GC.graphcode(M;vertices=ids[[1,3,4],[1,3]],x=[9//2,1//3,-4//1],y=[-2,7])
+            g=GRC.graphcode(M);_gc_reconstruction(M,g)
+            @test GRC.field(g)==F==GRC.graphcode_summary(g).field
+            @test GRC.graphcode_module(g).field==F
+            @test GRC.field(copy(g))==F && GRC.check_graphcode(copy(g)).valid
+            @test GRC.field(GRC.graphcode(TamerOp.Results.EncodingResult(M.Q,M,nothing)))==F
+            restricted=GRC.graphcode(M;vertices=ids[[1,3,4],[1,3]],x=[9//2,1//3,-4//1],y=[-2,7])
             _gc_reconstruction(M,restricted)
         end
         # Cancellation is field arithmetic, not reachability of the drawn graph.
-        cancel=GC.graphcode([[(1,2)],[(1,2),(1,2)],[(1,2)]],
+        cancel=GRC.graphcode([[(1,2)],[(1,2),(1,2)],[(1,2)]],
             [reshape([1,1],2,1),reshape([1,-1],1,2)];x=[-2,5],y=[1,3,9],field=F)
-        @test iszero(MD.map_leq(GC.graphcode_module(cancel),1,5))
-        @test length(GC.graphcode_components(cancel))==1
+        @test iszero(MD.map_leq(GRC.graphcode_module(cancel),1,5))
+        @test length(GRC.graphcode_components(cancel))==1
         for trial in 1:12
             m=rand(rng,1:4);n=rand(rng,1:5)
             rs=[sort!([(a=rand(rng,1:m);(a,rand(rng,a:m))) for _ in 1:rand(rng,0:4)]) for j in 1:n]
             cs=[K[(rs[j+1][t][1]<=rs[j][s][1]<=rs[j+1][t][2]<=rs[j][s][2]) ? rand(rng,-3:3) : 0
                 for t in eachindex(rs[j+1]),s in eachindex(rs[j])] for j in 1:n-1]
-            supplied=GC.graphcode(rs,cs;x=collect(1:m),y=collect(1:n),field=F)
-            c=GC.compress_graphcode(supplied);e=GC.expand_graphcode(c)
+            supplied=GRC.graphcode(rs,cs;x=collect(1:m),y=collect(1:n),field=F)
+            c=GRC.compress_graphcode(supplied);e=GRC.expand_graphcode(c)
             @test c.field==e.field==F
             @test e.rows==supplied.rows && e.maps==supplied.maps
-            @test GC.check_graphcode(c).valid
+            @test GRC.check_graphcode(c).valid
             M,ids=_gc_fixture(rs,cs,m;field=F,scramble=true,rng)
-            g=GC.graphcode(M);_gc_reconstruction(M,g)
-            N=GC.graphcode_module(g);total=[zeros(K,d,d) for d in N.dims]
-            for part in eachindex(GC.graphcode_components(g))
-                S=GC.graphcode_summand(g;component=part)
+            g=GRC.graphcode(M);_gc_reconstruction(M,g)
+            N=GRC.graphcode_module(g);total=[zeros(K,d,d) for d in N.dims]
+            for part in eachindex(GRC.graphcode_components(g))
+                S=GRC.graphcode_summand(g;component=part)
                 @test S.module_object.field==F
                 @test MD.check_morphism(S.inclusion).valid && MD.check_morphism(S.projection).valid
                 for q in eachindex(total)
@@ -273,36 +273,36 @@ end
         end
         # Remove three internal vertices with nonidentity continuation scalars.
         values=F isa CM.QQField ? K[-2//3,7//2,-5,11//13] : K[-1,1,-1,1]
-        g=GC.graphcode(fill([(1,2)],5),[reshape([a],1,1) for a in values];x=[0,1],y=[0,2,3,7,9],field=F)
-        c=GC.compress_graphcode(g)
+        g=GRC.graphcode(fill([(1,2)],5),[reshape([a],1,1) for a in values];x=[0,1],y=[0,2,3,7,9],field=F)
+        c=GRC.compress_graphcode(g)
         @test length(c.members)==2
-        @test only(GC.graphcode_edges(c)).coefficient==last(values)
-        spans=GC.graphcode_continuations(c)
+        @test only(GRC.graphcode_edges(c)).coefficient==last(values)
+        spans=GRC.graphcode_continuations(c)
         @test spans[1].coefficients==values[1:3]
-        @test GC.expand_graphcode(c).maps==g.maps
-        @test only(MD.map_leq(GC.graphcode_module(c),1,9))==prod(values)
+        @test GRC.expand_graphcode(c).maps==g.maps
+        @test only(MD.map_leq(GRC.graphcode_module(c),1,9))==prod(values)
         spans[1].coefficients[1]=zero(K)
-        @test GC.check_graphcode(c).valid
+        @test GRC.check_graphcode(c).valid
         broken=deepcopy(c);broken.continuations[1][1]=zero(K)
-        @test !GC.check_graphcode(broken).valid
-        @test_throws ArgumentError GC.expand_graphcode(broken)
+        @test !GRC.check_graphcode(broken).valid
+        @test_throws ArgumentError GRC.expand_graphcode(broken)
         broken=deepcopy(c);pop!(broken.coefficients)
-        @test !GC.check_graphcode(broken).valid
-        @test TOA.graphcode_continuations===GC.graphcode_continuations
+        @test !GRC.check_graphcode(broken).valid
+        @test TOA.graphcode_continuations===GRC.graphcode_continuations
     end
     rows=[[(1,2)],[(1,2)]]
-    @test_throws ArgumentError GC.graphcode(rows,[ones(Int,1,1)];x=[0,1],y=[0,1],field=CM.RealField(Float64))
-    @test_throws ArgumentError GC.graphcode(rows,[ones(CM.coeff_type(CM.F3()),1,1)];x=[0,1],y=[0,1],field=CM.Fp(5))
-    @test_throws ArgumentError GC.graphcode(rows,[ones(CM.coeff_type(CM.F3()),1,1)];x=[0,1],y=[0,1],field=CM.QQField())
-    @test_throws ArgumentError GC.graphcode(rows,[ones(Float64,1,1)];x=[0,1],y=[0,1],field=CM.QQField())
-    @test_throws ArgumentError GC.graphcode([[(1,2)],[(2,2)]],[reshape([-2//3],1,1)];x=[0,1],y=[0,1],field=CM.QQField())
+    @test_throws ArgumentError GRC.graphcode(rows,[ones(Int,1,1)];x=[0,1],y=[0,1],field=CM.RealField(Float64))
+    @test_throws ArgumentError GRC.graphcode(rows,[ones(CM.coeff_type(CM.F3()),1,1)];x=[0,1],y=[0,1],field=CM.Fp(5))
+    @test_throws ArgumentError GRC.graphcode(rows,[ones(CM.coeff_type(CM.F3()),1,1)];x=[0,1],y=[0,1],field=CM.QQField())
+    @test_throws ArgumentError GRC.graphcode(rows,[ones(Float64,1,1)];x=[0,1],y=[0,1],field=CM.QQField())
+    @test_throws ArgumentError GRC.graphcode([[(1,2)],[(2,2)]],[reshape([-2//3],1,1)];x=[0,1],y=[0,1],field=CM.QQField())
 end
 
 @testset "A126 exact field labels and saved coefficients" begin
     V=TamerOp.Visualization
     for F in (CM.QQField(),CM.F3(),CM.Fp(5))
         K=CM.coeff_type(F);a=F isa CM.QQField ? K(-2//3) : K(2)
-        g=GC.graphcode(fill([(1,3)],4),[reshape([x],1,1) for x in K[a,-1,1]];
+        g=GRC.graphcode(fill([(1,3)],4),[reshape([x],1,1) for x in K[a,-1,1]];
             x=[0//1,1//3,8//1],y=[9,4,1,-2],field=F)
         s=V.graphcode_explorer(g;row=1,source_interval=1,target_interval=1)
         snapshot=V.inspection_snapshot(s)
@@ -327,7 +327,7 @@ end
         V.select_inspection!(s;compressed=true)
         @test V.inspection_snapshot(s).metadata.coefficient==a
         @test V.check_inspection_session(s).valid
-        spec=V.visual_spec(GC.compress_graphcode(g))
+        spec=V.visual_spec(GRC.compress_graphcode(g))
         @test V.check_visual_spec(spec).valid
         @test spec.panels[1].metadata.compressed_edges[1].coefficient==one(K)
         compressed=V.visual_state(s)

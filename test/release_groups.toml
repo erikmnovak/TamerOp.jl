@@ -1,0 +1,114 @@
+# Every maintained owner belongs to exactly one release group.
+# The ordinary runner contract checks this partition before release CI.
+
+core = [
+    "test_contracts.jl",
+    "test_test_runner.jl",
+    "test_field_linalg.jl",
+    "test_finite_fringe.jl",
+    "test_poset_interface.jl",
+    "test_cache_lifecycle.jl",
+]
+
+encoding = [
+    "test_encoding.jl",
+    "test_zn_backend.jl",
+    "test_pl_backend.jl",
+    "test_synthetic_data.jl",
+]
+
+geometry = [
+    "test_geometry.jl",
+    "test_data_pipeline.jl",
+    "test_ordinary_persistence.jl",
+    "test_spatial_alpha.jl",
+    "test_sparse_multicovers.jl",
+    "test_cohomological_coordinates.jl",
+    "test_extended_persistence.jl",
+    "test_cohomology_products.jl",
+    "test_incremental_persistence.jl",
+    "test_zigzag_persistence.jl",
+    "test_temporal_persistence.jl",
+    "test_reduction_trace.jl",
+]
+
+resolutions = [
+    "test_indicator_resolutions.jl",
+    "test_h0_presentations.jl",
+    "test_model_independent_ext_layer.jl",
+    "test_random_stress.jl",
+]
+
+derived = [
+    "test_derived_functors.jl",
+    "test_chain_complexes_homology.jl",
+    "test_functoriality_ext_tor_maps.jl",
+]
+
+invariants = [
+    "test_invariants.jl",
+    "test_morphism_matchings.jl",
+    "test_graphcodes.jl",
+    "test_end_curves.jl",
+    "test_rank_exact.jl",
+    "test_jordan_invariants.jl",
+    "test_stability.jl",
+    "test_persistence_contours.jl",
+    "test_interleavings.jl",
+    "test_pruning.jl",
+    "test_signed_transport.jl",
+    "test_interval_decompositions.jl",
+    "test_interval_approximations.jl",
+    "test_indecomposable_decompositions.jl",
+]
+
+interfaces = [
+    "test_featurizers.jl",
+    "test_extensions.jl",
+    "test_examples.jl",
+    "test_propagation.jl",
+    "test_source_representatives.jl",
+    "test_visualization_a51.jl",
+    "test_visualization_a101.jl",
+    "test_visualization.jl",
+    "test_visualization_a38.jl",
+    "test_visualization_a39.jl",
+    "test_visualization_a42b.jl",
+    "test_visualization_a84.jl",
+    "test_visualization_a85.jl",
+    "test_visualization_a86.jl",
+    "test_visualization_a88.jl",
+    "test_visualization_a42b_comparisons.jl",
+    "test_visualization_a42c.jl",
+    "test_visualization_a42d.jl",
+    "test_visualization_a92.jl",
+    "test_visualization_a93.jl",
+    "test_visual_session_codec.jl",
+    "test_visual_session_composition.jl",
+    "test_visual_session_boundaries.jl",
+    "test_visual_session_exports.jl",
+    "test_visualization_a100.jl",
+    "test_visualization_a99.jl",
+    "test_visualization_a54.jl",
+    "test_visualization_a87.jl",
+    "test_visualization_a44.jl",
+    "test_visualization_a89.jl",
+    "test_visualization_a90.jl",
+    "test_visualization_a91.jl",
+    "test_visualization_a102.jl",
+    "test_visualization_a94.jl",
+    "test_visualization_a98.jl",
+    "test_visualization_a95.jl",
+    "test_visualization_a125.jl",
+    "test_visualization_a128.jl",
+    "test_visualization_a96.jl",
+    "test_visualization_a124.jl",
+    "test_visualization_a129.jl",
+    "test_visualization_a40_classes.jl",
+    "test_visualization_a55.jl",
+    "test_visualization_a97.jl",
+    "test_visualization_a41_slices.jl",
+    "test_visualization_a41_intervals.jl",
+    "test_visualization_a41_sessions.jl",
+    "test_visualization_a41_live.jl",
+]

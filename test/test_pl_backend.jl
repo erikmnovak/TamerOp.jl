@@ -1950,27 +1950,16 @@ end
         dest_uncached = zeros(Int, npts)
         dest_cached = zeros(Int, npts)
 
-        # Warm both compiled paths, then alternate their measurement order.
-        # Collect before each pair so preceding owner tests do not charge an
-        # unrelated collection to just one route. Keep every raw sample.
-        PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
-        PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
-        bare_times, cached_times = Float64[], Float64[]
-        for sample in 1:5
-            GC.gc()
-            for cached in (isodd(sample), !isodd(sample))
-                target = cached ? cache : pi
-                dest = cached ? dest_cached : dest_uncached
-                elapsed = @elapsed PLP.locate_many!(dest, target, X; threaded=false, mode=:fast)
-                push!(cached ? cached_times : bare_times, elapsed)
-            end
-        end
+        samples = _paired_query_samples(
+            () -> PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast),
+            () -> PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast))
+        println("PL batch cache timing guard: ", samples)
         @test dest_cached == dest_uncached
-        many_uncached_ns = _ns_per_item(sort(bare_times)[3], npts)
-        many_cached_ns = _ns_per_item(sort(cached_times)[3], npts)
-        println("PL batch cache paired timing guard: ns_uncached=", many_uncached_ns,
-            " ns_cached=", many_cached_ns, " raw_uncached_ns=", _ns_per_item.(bare_times, npts),
-            " raw_cached_ns=", _ns_per_item.(cached_times, npts))
+        @test all(s -> s.compile_seconds == 0 && s.recompile_seconds == 0, samples.left)
+        @test all(s -> s.compile_seconds == 0 && s.recompile_seconds == 0, samples.right)
+        middle = cld(length(samples.left), 2)
+        many_uncached_ns = _ns_per_item(sort([s.seconds for s in samples.left])[middle], npts * samples.evals)
+        many_cached_ns = _ns_per_item(sort([s.seconds for s in samples.right])[middle], npts * samples.evals)
         # Platform-normalized envelope: caching must not penalize a tiny batch.
         if strict_ci
             @test many_cached_ns <= 1.10 * many_uncached_ns + 20.0

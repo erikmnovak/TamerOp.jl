@@ -45,11 +45,11 @@
         empty!(tickstate.figure)
         # A changing annotation suffix must leave the heatmap connected to its
         # colorbar, including in an explicitly positioned spanning panel.
-        heatpanel(extra,upper)=V.VisualizationSpec(:retained_heatmap;
+        heatpanel(extra,upper;label="value",colormap=:viridis)=V.VisualizationSpec(:retained_heatmap;
             layers=V.AbstractVisualizationLayer[V.HeatmapLayer([0.,2.,5.],[1.,4.,9.],
-                [0. upper;1. 2.],:viridis,1.,"value");extra],metadata=(;colorrange=(0.,upper)))
-        heatfigure(extra,upper)=V.VisualizationSpec(:retained_layout;
-            panels=[heatpanel(extra,upper)],metadata=(;panel_positions=[(1:1,1:2)],panel_row_weights=[1.]))
+                [0. upper;1. 2.],colormap,1.,label);extra],metadata=(;colorrange=(0.,upper)))
+        heatfigure(extra,upper;kwargs...)=V.VisualizationSpec(:retained_layout;
+            panels=[heatpanel(extra,upper;kwargs...)],metadata=(;panel_positions=[(1:1,1:2)],panel_row_weights=[1.]))
         heatstate=E._visual_retained_figure(M,V,H,heatfigure(V.AbstractVisualizationLayer[],4.))
         heat=only(heatstate.panels).plots[1]
         bar=only(b for b in heatstate.figure.content if b isa M.Colorbar)
@@ -58,6 +58,22 @@
         @test only(heatstate.panels).plots[1]===heat
         @test Tuple(bar.limits[])==(0.,7.)
         @test E._visual_update_retained!(M,V,H,heatstate,heatfigure(V.AbstractVisualizationLayer[],3.);replace_plots=true)
+        @test Tuple(bar.limits[])==(0.,3.)
+        for (label,colormap,upper) in (("difference",:balance,5.),("value",:viridis,3.))
+            next=heatfigure(V.AbstractVisualizationLayer[],upper;label,colormap)
+            @test E._visual_update_retained!(M,V,H,heatstate,next;replace_plots=true)
+            @test only(heatstate.panels).plots[1]===heat
+            @test only(b for b in heatstate.figure.content if b isa M.Colorbar)===bar
+            @test bar.label[]==label
+            @test Tuple(bar.limits[])==(0.,upper)
+            @test bar.colormap[]==M.to_colormap(heat.colormap[])==M.to_colormap(colormap)
+            @test heat[3][]==[0. 1.;upper 2.]
+        end
+        # Removing a colorbar changes layout and must reject before mutation.
+        oldspec=heatstate.spec
+        no_bar=heatfigure(V.AbstractVisualizationLayer[],6.;label="")
+        @test !E._visual_update_retained!(M,V,H,heatstate,no_bar;replace_plots=true)
+        @test heatstate.spec===oldspec && bar.label[]=="value"
         @test Tuple(bar.limits[])==(0.,3.)
         empty!(heatstate.figure)
         # Selection decorations appear/disappear without replacing any plot.

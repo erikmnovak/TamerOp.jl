@@ -244,7 +244,7 @@ if field isa CM.QQField
         @test fast_ns <= 1.3 * verified_ns + 20.0
     end
 
-    # PLPolyhedra locate_many!: cached should improve per-query cost.
+    # A retained cache should not penalize this small direct-scan workload.
     A1 = QQ[1 0; 0 1; -1 0; 0 -1]
     b1 = QQ[1, 1, 0, 0]
     A2 = QQ[1 0; 0 1; -1 0; 0 -1]
@@ -268,19 +268,16 @@ if field isa CM.QQField
     dest_uncached = zeros(Int, npts)
     dest_cached = zeros(Int, npts)
 
-    PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)       # warmup
-    PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)      # warmup
-
-    t_uncached = _median_elapsed() do
-        PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast)
-    end
-    t_cached = _median_elapsed() do
-        PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast)
-    end
-
+    samples = _paired_query_samples(
+        () -> PLP.locate_many!(dest_uncached, pi, X; threaded=false, mode=:fast),
+        () -> PLP.locate_many!(dest_cached, cache, X; threaded=false, mode=:fast))
+    println("PL geometry cache timing guard: ", samples)
     @test dest_uncached == dest_cached
-    uncached_ns = _ns_per_item(t_uncached, npts)
-    cached_ns = _ns_per_item(t_cached, npts)
+    @test all(s -> s.compile_seconds == 0 && s.recompile_seconds == 0, samples.left)
+    @test all(s -> s.compile_seconds == 0 && s.recompile_seconds == 0, samples.right)
+    middle = cld(length(samples.left), 2)
+    uncached_ns = _ns_per_item(sort([s.seconds for s in samples.left])[middle], npts * samples.evals)
+    cached_ns = _ns_per_item(sort([s.seconds for s in samples.right])[middle], npts * samples.evals)
     if strict_ci
         @test cached_ns <= 1.45 * uncached_ns + 25.0
     else

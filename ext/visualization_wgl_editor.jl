@@ -69,8 +69,11 @@ function _render_module_editor(spec;display=:inline,figure=nothing,size=nothing,
         closed[]=true;disabled[]=true;export_disabled[]=true
         session_token[]==0 || VIZ._off_inspection!(session,session_token[])
         session_token[]=0;foreach(M.off,observers);empty!(observers)
-        fig[]===nothing || empty!(fig[])
+        # Detach the diagram's Bonito subsession before deleting its plots.
+        # A still-loading WGL scene otherwise waits for initialization during
+        # deletion, while the same browser callback is trying to close it.
         content[]=B.DOM.p("Editor closed. The final static snapshot remains available.")
+        fig[]===nothing || empty!(fig[])
         lock(browser_lock) do;browser_client[]=nothing;end
         app=app_ref[].value;app===nothing || delete!(_INSPECTION_UI_HANDLES,app)
         close_session && VIZ.close_inspection!(session)
@@ -124,8 +127,7 @@ function _render_module_editor(spec;display=:inline,figure=nothing,size=nothing,
         d=VIZ.editor_draft(session)
         if d.kind===:module
             edge=(integer(source),integer(target))
-            VIZ.edit_module!(session;map=(edge,A))
-            VIZ.select_inspection!(session;edge)
+            VIZ._edit_module!(session,true;map=(edge,A))
         else
             VIZ.edit_module!(session;matrix=A)
         end

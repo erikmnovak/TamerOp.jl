@@ -67,13 +67,12 @@ function _visual_retained_figure(M,V,H,spec;size=nothing,style=V.VisualStyle())
                 getproperty(M,Symbol(c.kind,:!))(ax,c.args...;c.kwargs...)
             push!(plots,plot)
         end
-        for (j,cb) in enumerate(plan.colorbars)
-            H.colorbar(grid[plotrow,1+j],plots[cb.plot],cb.label,style)
-        end
+        colorbars=Any[H.colorbar(grid[plotrow,1+j],plots[cb.plot],cb.label,style)
+            for (j,cb) in enumerate(plan.colorbars)]
         position=get(p.metadata,:legend_position,:bottom)
         position===:none || H.legend(fig,position===:right ? grid[plotrow,2+length(plan.colorbars)] : grid[plotrow+1,1],p,style)
         H.style_grid(grid,style)
-        push!(handles,(;axis=ax,plots,plan,labels))
+        push!(handles,(;axis=ax,plots,plan,labels,colorbars))
     end
     weights=get(spec.metadata,:panel_row_weights,nothing)
     if weights!==nothing
@@ -100,7 +99,8 @@ function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle(),replace
     plans=_visual_retained_plan(H,V,spec,style);plans===nothing && return false
     for (handle,plan) in zip(state.panels,plans)
         replace_plots || map(_visual_command_shape,handle.plan.commands)==map(_visual_command_shape,plan.commands) || return false
-        handle.plan.colorbars==plan.colorbars || return false
+        # Text can change without replacing the colorbar or its observed plot.
+        map(cb->cb.plot,handle.plan.colorbars)==map(cb->cb.plot,plan.colorbars) || return false
         # A colorbar observes its original plot. Keep that plot in the stable
         # prefix, or fall back before changing any displayed panel.
         for cb in plan.colorbars
@@ -150,6 +150,9 @@ function _visual_update_retained!(M,V,H,state,spec;style=V.VisualStyle(),replace
         end
         for (label,text) in zip(h.labels,filter(!isempty,[p.title,p.subtitle]))
             label.text[]==text || (label.text[]=text)
+        end
+        for (bar,cb) in zip(h.colorbars,plan.colorbars)
+            bar.label[]==cb.label || (bar.label[]=cb.label)
         end
         p.axes==o.axes || begin
             h.axis.xlabel=p.axes.xlabel;h.axis.ylabel=p.axes.ylabel

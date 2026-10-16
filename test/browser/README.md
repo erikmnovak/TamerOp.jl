@@ -16,6 +16,18 @@ family coverage and the distinction between supported and verified paths. The br
 also includes fixtures and visual checks beyond this harness. Installing the
 tools alone does not establish that any browser check has passed.
 
+CI runs the native checks and two groups of live browser scenarios in separate
+jobs. Each browser group has its own Julia server and runs one worker; together
+they cover the complete live suite. The offline job downloads the native job's
+exports from the same workflow run and opens them without starting Julia. The
+final `acceptance` job requires every group to succeed, including the offline
+checks. This keeps compilation and native rendering from consuming the live
+browser jobs' time budget.
+
+To reproduce one live group, use `npm test -- --shard=1/2` or
+`npm test -- --shard=2/2`. Use `npm test` for both groups together. A passing
+group alone does not establish that the complete browser suite passed.
+
 ## Set up the dependencies
 
 Use Julia 1.12 and Node.js 22 or another version supported by the pinned

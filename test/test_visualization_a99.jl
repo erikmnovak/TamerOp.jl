@@ -151,6 +151,39 @@ end
     @test V.inspection_selection(orderedit).edge==(1,2)
 end
 
+@testset "A99 matrix edits publish one coherent selection to linked viewers" begin
+    V,C=TamerOp.Visualization,TamerOp.CoreModules
+    for field in (C.QQField(),C.F2(),C.F3(),C.Fp(5),C.RealField(Float64))
+        editor=_a99_diamond(;field)
+        before=V.inspection_selection(editor)
+        observed=NamedTuple[]
+        token=V._on_inspection(editor,s -> begin
+            push!(observed,(;selection=V.inspection_selection(s),draft=V.editor_draft(s)))
+        end)
+        V._edit_module!(editor,true;map=((3,4),fill(2,1,1)))
+        @test length(observed)==1
+        @test only(observed).selection.edge==(3,4)
+        @test only(observed).selection.revision==before.revision+1
+        @test only(observed).draft.maps[(3,4)]==fill(2,1,1)
+        @test !V.check_module_editor(editor).valid
+        @test_throws ArgumentError V._edit_module!(editor,true;map=((0,4),fill(2,1,1)))
+        @test length(observed)==1
+        @test V.inspection_selection(editor)==only(observed).selection
+        V.undo_module_edit!(editor)
+        @test V.inspection_selection(editor).edge==before.edge
+        @test V.editor_draft(editor).maps[(3,4)]==ones(Int,1,1)
+        V.redo_module_edit!(editor)
+        @test V.inspection_selection(editor).edge==(3,4)
+        @test V.editor_draft(editor).maps[(3,4)]==fill(2,1,1)
+        # Programmatic edits retain the caller's selection as before.
+        V.edit_module!(editor;map=((1,2),fill(2,1,1)))
+        @test V.inspection_selection(editor).edge==(3,4)
+        @test V.check_module_editor(editor).valid
+        V._off_inspection!(editor,token)
+        V.close_inspection!(editor)
+    end
+end
+
 @testset "A99 presentations, exact text, field reinterpretation and empty shapes" begin
     V,C,FF=TamerOp.Visualization,TamerOp.CoreModules,TamerOp.FiniteFringe
     order=Bool[1 1 1;0 1 1;0 0 1]

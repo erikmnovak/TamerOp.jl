@@ -110,6 +110,27 @@ end
             @test ui.figure[]===original && ui.update_count[]>0
             linked.dispose();ui.dispose()
             @test isempty(ui.observers) && isempty(ui.pointer_observers)
+            # A different quantity changes the scale and its label, not the
+            # canvas, coordinate frame or colorbar's connection to its heatmap.
+            ls=V.stability_explorer(landscape)
+            lui=ext._inspection_ui(V.visualize(ls;backend))
+            original=lui.figure[];ax=only(lui.chart_axes[])
+            heat=only(p for p in ax.scene.plots if p isa M.Heatmap)
+            bar=only(b for b in original.content if b isa M.Colorbar)
+            for view in (:difference,:landscape)
+                V.select_inspection!(ls;view,threshold=1//2,layer=2,vertex=4)
+                expected=V.inspection_snapshot(ls).panels[1]
+                @test lui.figure[]===original && only(lui.chart_axes[])===ax
+                @test only(p for p in ax.scene.plots if p isa M.Heatmap)===heat
+                @test only(b for b in original.content if b isa M.Colorbar)===bar
+                @test bar.label[]==expected.layers[1].colorbar_label
+                @test Tuple(bar.limits[])==expected.metadata.colorrange
+                @test isequal(Matrix(heat[3][]),permutedims(expected.layers[1].values))
+            end
+            V.reset_inspection!(ls)
+            @test lui.figure[]===original && lui.rebuild_count[]==1
+            V.close_inspection!(ls)
+            @test isempty(lui.observers) && isempty(lui.pointer_observers)
         end
     end
     if Base.get_extension(TamerOp,:TamerOpCairoMakieExt)!==nothing

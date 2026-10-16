@@ -439,9 +439,10 @@ julia --project=. --threads=4 test/runtests.jl --file=test_encoding.jl --prefix=
 `Release.yml` runs every maintained owner suite against one Git commit on Linux
 with Julia 1.12.0 and the current 1.12 patch, Linux with four worker threads and
 one interactive thread, and current Julia 1.12 on macOS and Windows. Seven groups
-partition the complete owner list; the runner rejects missing or duplicated
-owners. Each owner runs in a fresh Julia process to bound compiler memory and
-avoid state leaking from one owner into another. All shared QQ/F2/F3/F5/Real64
+partition the complete owner list in `release_groups.toml`; both ordinary CI
+and the release runner reject missing or duplicated owners. Each owner runs in
+a fresh Julia process to bound compiler memory and avoid state leaking from
+one owner into another. All shared QQ/F2/F3/F5/Real64
 loops and the long randomized tests execute. Individual mathematical fixtures
 retain their explicit field, backend and random-seed choices.
 
@@ -463,8 +464,13 @@ a final unchanged candidate; a configured workflow alone is not evidence.
 
 Some owner suites include timing guards. The integer-grid box-cache and
 polyhedral batch-cache comparisons warm both variants, alternate their order,
-collect unused objects before each paired sample, and record the raw samples. Collections within a batch remain
-measured. Interpret these bounds within the recorded machine, Julia version
+collect unused objects before each paired sample, and record the raw samples.
+Both polyhedral cache guards share a measurement helper: nine pairs of sixteen
+calls, with the complete timing wrapper warmed first. They retain elapsed time,
+allocation, collection and compilation counters, and require samples without
+compilation. Collections within a batch remain measured. These checks compare
+repeated queries with preparation retained; cache construction is outside the
+timer. Interpret these bounds within the recorded machine, Julia version
 and thread configuration; retain and investigate timing failures alongside
 mathematical assertions.
 

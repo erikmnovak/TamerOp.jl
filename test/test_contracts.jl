@@ -1,3 +1,9 @@
+@testset "Test namespace preserves Julia garbage collection" begin
+    @test GC === Base.GC
+    @test GRC === TamerOp.Graphcodes
+    @test GC.gc(false) === nothing
+end
+
 # ---------------- ASCII-only source tree test -------------------------------
 
 @testset "ASCII-only source tree" begin

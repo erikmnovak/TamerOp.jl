@@ -109,6 +109,12 @@ end
     @test isempty(defaults.extensions)
     @test !defaults.list && !defaults.help
     @test length(unique(R._TEST_FILES)) == length(R._TEST_FILES)
+    # Catch new owners missing from the release matrix in ordinary CI.
+    release_groups = R.TOML.parsefile(joinpath(@__DIR__, "release_groups.toml"))
+    release_owners = reduce(vcat, values(release_groups))
+    @test length(release_owners) == length(unique(release_owners))
+    @test Set(release_owners) == Set(R._TEST_FILES)
+    @test all(files -> !isempty(files), values(release_groups))
     @test all(name -> isfile(joinpath(@__DIR__, name)), R._TEST_FILES)
     @test Set(R._TEST_FILES) == Set(filter(name -> startswith(name, "test_") && endswith(name, ".jl"),
                                          readdir(@__DIR__)))

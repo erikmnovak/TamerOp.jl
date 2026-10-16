@@ -298,6 +298,12 @@ remain visible and block object/code export; syntax/type/budget errors preserve
 the previous draft. Changing a stalk does not resize any adjacent matrix.
 """
 function edit_module!(s::ModuleEditorSession;kwargs...)
+    _edit_module!(s,false;kwargs...)
+end
+
+# A browser matrix edit also selects that matrix. Commit both before notifying
+# linked viewers, rather than publishing a scene that is immediately replaced.
+function _edit_module!(s::ModuleEditorSession,select_map::Bool;kwargs...)
     _editor_transition!(s,:edit) do
         d=s.draft
         allowed=d.kind===:module ? (:order,:dimensions,:maps,:map,:field) : (:order,:upsets,:downsets,:matrix,:field)
@@ -314,7 +320,8 @@ function edit_module!(s::ModuleEditorSession;kwargs...)
             A===nothing ? delete!(maps,edge) : (maps[edge]=A)
             next=merge(next,(;maps))
         end
-        next,s.state
+        state=select_map ? merge(s.state,(;edge=kwargs[:map][1])) : s.state
+        next,state
     end
 end
 """Undo one draft edit. Selection-only navigation is not added to the edit history."""

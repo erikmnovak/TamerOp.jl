@@ -1682,9 +1682,11 @@ function _materialize_common_refinement_hom!(H::CommonRefinementHomSpace{K}) whe
     T2 = data.cod
     # The materialized basis path densifies the refinement modules so the vectorization
     # order must match the dense product order used by `Hom(...)`.
-    offs = getfield(H, :offsets)
     B = _ensure_common_refinement_basis_matrix!(H)
-    hs = HomSpace{K}(T1, T2, nothing, B, offs)
+    offs = getfield(H, :offsets)
+    nvars = offs[end]
+    hs = HomSpace{K}(T1, T2, nothing, B, offs,
+                     nvars == 0 ? :zero : :naturality, nvars)
     setfield!(H, :hom, hs)
     return hs
 end
@@ -1815,7 +1817,10 @@ function check_common_refinement_hom(H::CommonRefinementHomSpace; throw::Bool=fa
     hs = getfield(H, :hom)
     translated = getfield(H, :translated)
 
-    (R === nothing) == (offs === nothing) || push!(issues, "rref and offsets caches should be populated together.")
+    # With no coordinates, the constructor keeps offsets but needs no reduction.
+    zero_coordinates = offs !== nothing && !isempty(offs) && iszero(offs[end])
+    ((R === nothing) == (offs === nothing) || (R === nothing && zero_coordinates)) ||
+        push!(issues, "rref and offsets caches should be populated together.")
     if B !== nothing
         offs === nothing && push!(issues, "basis_matrix is populated but offsets are missing.")
         offs !== nothing && size(B, 1) == offs[end] ||

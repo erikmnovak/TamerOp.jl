@@ -4,20 +4,7 @@ using Dates, Pkg, SHA, TOML
 
 include("runner.jl")
 
-const GROUPS = Dict(
-    "core" => ["test_contracts.jl", "test_test_runner.jl", "test_field_linalg.jl",
-               "test_finite_fringe.jl", "test_poset_interface.jl"],
-    "encoding" => ["test_encoding.jl", "test_zn_backend.jl", "test_pl_backend.jl",
-                   "test_synthetic_data.jl"],
-    "geometry" => ["test_geometry.jl", "test_data_pipeline.jl", "test_ordinary_persistence.jl"],
-    "resolutions" => ["test_indicator_resolutions.jl", "test_model_independent_ext_layer.jl",
-                      "test_random_stress.jl"],
-    "derived" => ["test_derived_functors.jl", "test_chain_complexes_homology.jl",
-                 "test_functoriality_ext_tor_maps.jl"],
-    "invariants" => ["test_invariants.jl"],
-    "interfaces" => ["test_visualization.jl", "test_featurizers.jl", "test_extensions.jl",
-                     "test_examples.jl"],
-)
+const GROUPS = TOML.parsefile(joinpath(@__DIR__, "release_groups.toml"))
 owners = reduce(vcat, values(GROUPS))
 length(owners) == length(unique(owners)) &&
     Set(owners) == Set(TamerOpTestRunner._TEST_FILES) || error("Release groups must cover every owner exactly once")

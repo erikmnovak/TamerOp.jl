@@ -94,7 +94,7 @@ const PLB = TamerOp.PLBackend
 const CC  = TamerOp.ChainComplexes
 const OP  = TamerOp.OrdinaryPersistence
 const ZZ  = TamerOp.ZigzagPersistence
-const GC  = TamerOp.Graphcodes
+const GRC = TamerOp.Graphcodes
 const MM  = TamerOp.MorphismMatchings
 const RX  = TamerOp.RankExact
 const JI  = TamerOp.JordanInvariants
@@ -268,5 +268,6 @@ with_fields(f::Function, fields) = foreach(f, fields)
 
 
 include("helpers/visualization.jl")
+include("helpers/timing.jl")
 
 const ENDC = TamerOp.EndCurves

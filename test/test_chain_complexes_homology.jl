@@ -2593,6 +2593,9 @@ end
     @test TamerOp.Advanced.exactness_summary === TO.exactness_summary
 
     @test TO.submodule_object(S) === A
+    @test TO.ambient_module === TO.AbelianCategories.ambient_module
+    @test TO.ambient_module === TO.JordanInvariants.ambient_module
+    @test TO.Advanced.ambient_module === TO.ambient_module
     @test TO.ambient_module(S) === B
     @test TO.inclusion_map(S) === i
     @test TO.inclusion_map(ses) === i

@@ -261,7 +261,7 @@ end
     @info "A53: ambient encoding adapters"
     P,H,pi=PLB.encode_fringe_boxes([PLB.BoxUpset([0,0])],[PLB.BoxDownset([2,2])])
     M=IR.pmodule_from_fringe(H)
-    A=IL.ambient_module(M,pi)
+    A=TO.ambient_module(M,pi)
     for x in (-1,0,1,2,3),y in (-1,0,1,2,3)
         @test IL.ambient_dimension(A,[x,y])==Int(0<=x<=2 && 0<=y<=2)
     end

@@ -335,6 +335,22 @@ and source revision alongside the result.
 
 ## Public onboarding checks and local tutorials
 
+The packaged [agent guide](../agent/README.md) has three runnable examples.
+In an environment containing this TamerOp checkout and CairoMakie, run:
+
+```sh
+julia --startup-file=no --project=. agent/check_examples.jl
+julia --startup-file=no agent/check_skill.jl
+```
+
+The examples check small mathematical answers and write their outputs in a
+temporary directory. The skill checks exercise both supported project locations
+and preservation of existing files. The `Agent guide` workflow installs the
+selected Git revision into a separate environment before running these checks,
+so they also verify that the guide and scripts ship with the package. The
+website renders these same Markdown sources and checks its generated links and
+downloads in its own build.
+
 The image comparison tests use fixed colour ranges for empty and filled masks,
 complete pixel borders, labels and actual CairoMakie values. After preparing
 the [graphics environment](browser/README.md#set-up-the-dependencies), run:

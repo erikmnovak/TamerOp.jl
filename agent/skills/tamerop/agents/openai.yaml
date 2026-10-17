@@ -1,0 +1,4 @@
+interface:
+  display_name: "TamerOp"
+  short_description: "Compute and visualize multiparameter persistence"
+  default_prompt: "Use $tamerop to choose and run the computation that answers my persistence question."

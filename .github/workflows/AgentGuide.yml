@@ -1,0 +1,60 @@
+name: Agent guide
+
+on:
+  push:
+    paths:
+      - 'agent/**'
+      - 'src/**'
+      - 'ext/**'
+      - 'Project.toml'
+      - '.github/workflows/AgentGuide.yml'
+  pull_request:
+    paths:
+      - 'agent/**'
+      - 'src/**'
+      - 'ext/**'
+      - 'Project.toml'
+      - '.github/workflows/AgentGuide.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installed-guide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      JULIA_NUM_THREADS: '1'
+      JULIA_NUM_PRECOMPILE_TASKS: '1'
+      OPENBLAS_NUM_THREADS: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.12'
+      - uses: julia-actions/cache@v2
+      - name: Run the guide from an installed copy of this revision
+        shell: bash
+        run: |
+          julia --startup-file=no -e '
+            using Pkg
+            checkout = pwd()
+            revision = readchomp(`git rev-parse HEAD`)
+            Pkg.activate(mktempdir())
+            Pkg.add(PackageSpec(url=checkout, rev=revision))
+            Pkg.add(PackageSpec(name="CairoMakie", version="0.15"))
+            import TamerOp
+            root = pkgdir(TamerOp)
+            @assert realpath(root) != realpath(checkout)
+            @assert !isdir(joinpath(root, "audit"))
+            @assert !isfile(joinpath(root, "AGENTS.md"))
+            guide = joinpath(root, "agent")
+            @assert isfile(joinpath(guide, "README.md"))
+            println("Checking installed TamerOp ", Base.pkgversion(TamerOp), " at ", revision)
+            include(joinpath(guide, "check_skill.jl"))
+            include(joinpath(guide, "check_examples.jl"))'

@@ -12,8 +12,7 @@ function run_visualization_example(; output_dir::AbstractString)
     @assert intervals == [(0, 5)]
 
     specification = OA.visual_spec(diagram;
-        kind=:barcode, dim=1, interval=1, window=(-1, 6),
-        title="A hole appears at 0 and fills at 5")
+        kind=:barcode, dim=1, interval=1, window=(-1, 6))
     @assert OA.check_visual_spec(specification; throw=true).valid
     figure_path = joinpath(output_dir, "ring.svg")
     OP.save_visual(figure_path, specification; backend=:cairomakie)

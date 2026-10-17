@@ -42,8 +42,11 @@ test('A96 certified path pointer, exact crossings, playback, linked views and cl
   await expect.poll(async()=>(await state(linked)).selection.frame).toBe(n);
   await keyboardActivate(control(page,'reverse'));
   await expect.poll(async()=>(await state(page)).selection.frame).toBeLessThan(n);
-  await keyboardActivate(control(page,'pause'));await settled(page);
-  expect((await state(page)).ui.timer_active).toBe(false);
+  await keyboardActivate(control(page,'pause'));
+  // Playback state reaches the browser on the fixture's periodic snapshot.
+  // An idle computation queue does not acknowledge the pause event.
+  await expect.poll(async()=>{const s=await state(page);return [s.ui.playing,s.ui.timer_active];}).toEqual([false,false]);
+  await settled(page);
   await linked.close();await expect.poll(async()=>(await state(page)).viewer_count,{timeout:45000}).toBe(1);
   await set(page,'frame',n-1);await action(page,'apply');await keyboardActivate(control(page,'play'));
   await expect.poll(async()=>(await state(page)).selection.frame).toBe(n);

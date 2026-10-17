@@ -5,6 +5,7 @@ Toolkit for Algebraic Module Encodings over $\mathbb{R}^n$ and Other Posets.
 [Documentation](https://tamerop.com/) ·
 [Installation](https://tamerop.com/start/install.html) ·
 [Using TamerOp](https://tamerop.com/collections/using.html) ·
+[Coding agents](agent/README.md) ·
 [Benchmark results](https://tamerop.com/benchmarks/index.html)
 
 TamerOp is a Julia library for studying persistence modules: vector spaces
@@ -76,6 +77,11 @@ their barcode as the parameter changes. Continue with
 [finite encodings](https://tamerop.com/finite_encodings.html) to see how we retain
 spaces and maps when several parameters vary, or use the
 [API reference](https://tamerop.com/collections/api.html) to look up an operation.
+
+If you work with a coding agent, the [agent guide](agent/README.md) gives it
+task examples, local API lookup and an optional skill for Codex or Claude Code.
+The guide and its runnable examples accompany the package, so an agent can
+read the instructions for the version used by your analysis.
 
 ## The three repositories
 

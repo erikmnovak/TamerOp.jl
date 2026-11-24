@@ -122,12 +122,12 @@ end
     # Miller Example 4.16 exhibits non-transitivity of the raw "exists a<=b" relation
     # between uptight regions; Definition 4.17 then defines the uptight poset as its
     # transitive closure. We build a finite truncation of the N^2 example to test that
-    # Encoding._uptight_poset really closes transitively.
+    # both representations and the default workflow close transitively.
 
     # Q = {0..3} x {0..2} with product order.
     function grid_poset(ax::Int, by::Int)
         coords = Tuple{Int,Int}[]
-        for a in 0:ax, b in 0:by
+        for b in 0:by, a in 0:ax
             push!(coords, (a, b))
         end
         nQ = length(coords)
@@ -157,13 +157,17 @@ end
     U3 = FF.upset_closure(Q, BitVector([(a >= 1) && (b >= 1) for (a, b) in coords]))
     U4 = FF.upset_closure(Q, BitVector([(a >= 2) && (b >= 1) for (a, b) in coords]))
 
-    # No deaths: we only need the upsets to form Y for uptight signatures.
-    phi0 = spzeros(K, 0, 4)
-    M = FF.FringeModule{K}(Q, [U1, U2, U3, U4], FF.Downset[], phi0; field=field)
+    # With one whole-source death and nonzero coefficients, this presents k[U1].
+    # The other three upsets are contained in U1, so every nonzero stalk is k
+    # and every map between nonzero stalks is the identity.
+    D = FF.Downset(Q, trues(Q.n))
+    H = FF.FringeModule{K}(Q, [U1, U2, U3, U4], [D], fill(c(1), 1, 4); field=field)
 
-    enc = EN.build_uptight_encoding_from_fringe(M; poset_kind = :dense)
+    enc = EN.build_uptight_encoding_from_fringe(H)
+    dense = EN.build_uptight_encoding_from_fringe(H; poset_kind=:dense)
     pi = enc.pi
     P = pi.P
+    @test P isa FF.RegionsPoset
 
     # Identify the regions by representative lattice points (degrees):
     #   A: x^2  = (2,0) has signature {U1}
@@ -197,6 +201,65 @@ end
         end
     end
     @test !has_witness
+
+    # Independent oracle: form every witnessed region relation, then close it
+    # with scalar Floyd--Warshall, independently of source cover extraction.
+    expected = falses(FF.nvertices(P), FF.nvertices(P))
+    for a in 1:Q.n, b in 1:Q.n
+        FF.leq(Q, a, b) && (expected[pi.pi_of_q[a], pi.pi_of_q[b]] = true)
+    end
+    for k in axes(expected, 1), i in axes(expected, 1), j in axes(expected, 1)
+        expected[i, j] |= expected[i, k] && expected[k, j]
+    end
+    @test FF.leq_matrix(P) == expected
+    @test FF.check_poset(P; throw=true).valid
+    @test EN.check_uptight_encoding(enc; throw=true).valid
+    for a in 1:Q.n, b in 1:Q.n
+        @test FF.leq(P, pi.pi_of_q[a], pi.pi_of_q[b]) ==
+              FF.leq(dense.pi.P, dense.pi.pi_of_q[a], dense.pi.pi_of_q[b])
+    end
+
+    Hpush = EN.pushforward_fringe_along_encoding(H, pi)
+    Hpull = EN.pullback_fringe_along_encoding(Hpush, pi)
+    @test [U.mask for U in Hpull.U] == [U.mask for U in H.U]
+    @test [D.mask for D in Hpull.D] == [D.mask for D in H.D]
+    @test Hpull.phi == H.phi
+
+    ambient = EC.GridEncodingMap(Q, (collect(0:3), collect(0:2)))
+    original = IR.pmodule_from_fringe(H)
+    result = TO.coarsen(RES.EncodingResult(Q, original, ambient; H=H, backend=:data))
+    labels = [EC.locate(result.pi, q) for q in coords]
+    @test FF.leq(result.P, labels[q_x2], labels[q_xy])
+    @test MD.map_leq(result.M, labels[q_x2], labels[q_xy]) == fill(c(1), 1, 1)
+    for q in 1:Q.n
+        @test result.M.dims[labels[q]] == original.dims[q] == Int(U1.mask[q])
+    end
+    for a in 1:Q.n, b in 1:Q.n
+        FF.leq(Q, a, b) || continue
+        expected_map = fill(c(1), Int(U1.mask[b]), Int(U1.mask[a]))
+        @test MD.map_leq(original, a, b) == expected_map
+        @test MD.map_leq(result.M, labels[a], labels[b]) == expected_map
+    end
+end
+
+@testset "Uptight validation rejects invalid orders and labels" begin
+    Q = chain_poset(3)
+    Y = [FF.principal_upset(Q, i) for i in 1:3]
+    nontransitive = FF.FinitePoset(Bool[1 1 0; 0 1 1; 0 0 1]; check=false)
+    bad_order = EN.UptightEncoding(EN.EncodingMap(Q, nontransitive, [1, 2, 3]), Y)
+    @test !EN.check_uptight_encoding(bad_order).valid
+    @test_throws ArgumentError EN.check_uptight_encoding(bad_order; throw=true)
+
+    nonmonotone = EN.UptightEncoding(EN.EncodingMap(Q, Q, [3, 2, 1]), Y)
+    @test !EN.check_uptight_encoding(nonmonotone).valid
+    @test_throws ArgumentError EN.check_uptight_encoding(nonmonotone; throw=true)
+    for labels in ([1, 2], [1, 2, 4])
+        edited = EN.UptightEncoding(EN.EncodingMap(Q, Q, [1, 2, 3]), Y)
+        empty!(edited.pi.pi_of_q)
+        append!(edited.pi.pi_of_q, labels)
+        @test !EN.check_uptight_encoding(edited).valid
+        @test_throws ArgumentError EN.check_uptight_encoding(edited; throw=true)
+    end
 end
 
 @testset "Encoding push/pull and dense builder parity against scan baseline" begin

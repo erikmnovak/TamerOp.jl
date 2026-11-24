@@ -607,7 +607,8 @@ Validate an uptight encoding bundle.
 The returned report checks:
 
 - the underlying finite encoding map is valid,
-- all constant upsets belong to the source poset of the encoding,
+- source and target satisfy their poset contracts and the map is monotone,
+- all constant upsets are closed subsets of the source poset,
 - the constant-upset family and the stored region map are structurally
   compatible,
 - every target label is hit and is represented by exactly one signature class.
@@ -635,33 +636,46 @@ function check_uptight_encoding(enc::UptightEncoding; throw::Bool=false)
     Q = pi.Q
     P = pi.P
     Y = enc.Y
-    @inbounds for (i, U) in enumerate(Y)
+    for (label, poset) in (("source", Q), ("target", P))
+        poset_report = FiniteFringe.check_poset(poset)
+        poset_report.valid || append!(issues, label * " poset: " .* poset_report.issues)
+    end
+    for (i, U) in enumerate(Y)
         U.P === Q || push!(issues, "constant upset $i does not belong to the source poset")
+        length(U.mask) == nvertices(Q) || push!(issues, "constant upset $i has the wrong mask length")
     end
-    sig_by_label = Dict{Int,BitVector}()
-    label_by_sig = Dict{BitVector,Int}()
-    @inbounds for q in 1:nvertices(Q)
-        sig = falses(length(Y))
-        for i in eachindex(Y)
-            sig[i] = Y[i].mask[q]
+    if isempty(issues)
+        for (i, U) in enumerate(Y)
+            _is_upset_mask(Q, U.mask) || push!(issues, "constant upset $i is not upward closed")
         end
-        p = pi.pi_of_q[q]
-        prevsig = get(sig_by_label, p, nothing)
-        if prevsig === nothing
-            sig_by_label[p] = copy(sig)
-        elseif prevsig != sig
-            push!(issues, "target label $p is assigned to multiple signature classes")
-            break
+        for (a, b) in FiniteFringe.cover_edges(Q)
+            if !leq(P, pi.pi_of_q[a], pi.pi_of_q[b])
+                push!(issues, "encoding map is not monotone on source cover ($a, $b)")
+                break
+            end
         end
-        prevp = get(label_by_sig, sig, 0)
-        if prevp == 0
-            label_by_sig[copy(sig)] = p
-        elseif prevp != p
-            push!(issues, "equal signatures map to different target labels $prevp and $p")
-            break
+        sig_by_label = Dict{Int,BitVector}()
+        label_by_sig = Dict{BitVector,Int}()
+        for q in 1:nvertices(Q)
+            sig = BitVector(U.mask[q] for U in Y)
+            p = pi.pi_of_q[q]
+            prevsig = get(sig_by_label, p, nothing)
+            if prevsig === nothing
+                sig_by_label[p] = copy(sig)
+            elseif prevsig != sig
+                push!(issues, "target label $p is assigned to multiple signature classes")
+                break
+            end
+            prevp = get(label_by_sig, sig, 0)
+            if prevp == 0
+                label_by_sig[copy(sig)] = p
+            elseif prevp != p
+                push!(issues, "equal signatures map to different target labels $prevp and $p")
+                break
+            end
         end
+        length(sig_by_label) == nvertices(P) || push!(issues, "image size $(length(sig_by_label)) must equal nvertices(P)=$(nvertices(P))")
     end
-    length(sig_by_label) == nvertices(P) || push!(issues, "image size $(length(sig_by_label)) must equal nvertices(P)=$(nvertices(P))")
     report = (kind=:uptight_encoding,
               valid=isempty(issues),
               source_poset_kind=Symbol(nameof(typeof(Q))),

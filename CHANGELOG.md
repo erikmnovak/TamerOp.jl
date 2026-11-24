@@ -405,6 +405,9 @@ repository contains the procedures and measurements needed to repeat them.
 
 ### Corrections and details for existing users
 
+- Uptight compression now includes relations obtained by passing through several
+  regions. The default structured encoding and `coarsen` use the same transitive
+  order as the dense construction, with validation of region partitions and cycles.
 - Superlevel image cells now receive the minimum of their incident vertex
   values, correcting the previous use of the sublevel maximum rule.
 - Fast axis-aligned encodings retain closed faces and isolated points at shared

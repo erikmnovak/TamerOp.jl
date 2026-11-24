@@ -972,10 +972,10 @@ function _region_order_graph(Q::AbstractPoset, regions::Vector{Vector{Int}})
     all(!iszero, region_of_q) ||
         throw(ArgumentError("RegionsPoset: regions must cover every source vertex."))
 
-    # Every source comparison factors into covers. Their images therefore
-    # generate the same region order without scanning all pairs of regions.
+    # Built-in orders use source covers; other finite posets need only the
+    # scalar order interface. Both generate the same region reachability.
     successors = [Int[] for _ in 1:n]
-    for (a, b) in cover_edges(Q)
+    for (a, b) in _region_source_edges(Q)
         i, j = region_of_q[a], region_of_q[b]
         i == j || push!(successors[i], j)
     end
@@ -1002,6 +1002,11 @@ function _region_order_graph(Q::AbstractPoset, regions::Vector{Vector{Int}})
         throw(ArgumentError("RegionsPoset: identifying the regions creates an order cycle."))
     return successors, rank
 end
+
+_region_source_edges(Q::AbstractPoset) =
+    ((a, b) for a in 1:nvertices(Q) for b in upset_indices(Q, a) if a != b)
+_region_source_edges(Q::Union{FinitePoset,ProductOfChainsPoset,GridPoset,ProductPoset}) =
+    cover_edges(Q)
 
 function RegionsPoset(Q::AbstractPoset, regions::Vector{Vector{Int}})
     owned_regions = [copy(region) for region in regions]
@@ -1147,6 +1152,9 @@ type:
 - [`RegionsPoset`](@ref): validity of the base poset, the region partition,
   acyclicity of the induced graph, and consistency of the stored order data.
 
+Other `AbstractPoset` implementations are checked through scalar `leq` queries
+for reflexivity, antisymmetry, and transitivity, without requiring `leq_matrix`.
+
 Set `throw=true` to raise an `ArgumentError` instead of returning an invalid
 report. Pair the returned report with `finite_fringe_validation_summary(...)`
 or `fringe_summary(P)` when working interactively.
@@ -1168,6 +1176,39 @@ function check_poset(P::FinitePoset; throw::Bool=false)
               issues=issues)
     if throw && !report.valid
         Base.throw(ArgumentError("check_poset: invalid FinitePoset: " * join(report.issues, "; ")))
+    end
+    return report
+end
+
+function check_poset(P::AbstractPoset; throw::Bool=false)
+    n = nvertices(P)
+    issues = String[]
+    n >= 0 || push!(issues, "vertex count must be nonnegative")
+    if isempty(issues)
+        try
+            up = [BitSet(j for j in 1:n if leq(P, i, j)) for i in 1:n]
+            for i in 1:n
+                i in up[i] || push!(issues, "order is not reflexive at vertex $i")
+                for j in up[i]
+                    if i != j && i in up[j]
+                        push!(issues, "order is not antisymmetric at vertices $i and $j")
+                        break
+                    end
+                    if !issubset(up[j], up[i])
+                        push!(issues, "order is not transitive through vertices $i and $j")
+                        break
+                    end
+                end
+                isempty(issues) || break
+            end
+        catch err
+            err isa InterruptException && rethrow()
+            push!(issues, sprint(showerror, err))
+        end
+    end
+    report = (kind=:finite_poset, valid=isempty(issues), nvertices=n, issues=issues)
+    if throw && !report.valid
+        Base.throw(ArgumentError("check_poset: invalid finite order: " * join(issues, "; ")))
     end
     return report
 end

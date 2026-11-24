@@ -462,6 +462,18 @@ end
     push!(cyclic._successors[3], 1)
     @test !FF.check_poset(cyclic).valid
     @test_throws ArgumentError FF.check_poset(cyclic; throw=true)
+
+    # Extension-owned posets may supply only scalar comparisons, and explicitly
+    # reject dense order materialization.
+    scalar = A79ScalarOrderPoset(4)
+    @test FF.check_poset(scalar; throw=true).valid
+    scalar_regions = FF.RegionsPoset(scalar, [[1], [2, 3], [4]])
+    @test FF.leq_matrix(scalar_regions) == expected
+    @test FF.check_poset(scalar_regions; throw=true).valid
+    scalar_H = FF.one_by_one_fringe(scalar, FF.principal_upset(scalar, 2),
+        FF.principal_downset(scalar, 3), c(1); field=field)
+    scalar_uptight = TO.Encoding.build_uptight_encoding_from_fringe(scalar_H)
+    @test TO.Encoding.check_uptight_encoding(scalar_uptight; throw=true).valid
 end
 
 @testset "Structured poset caches reuse by identity" begin

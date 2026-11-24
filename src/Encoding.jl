@@ -648,9 +648,9 @@ function check_uptight_encoding(enc::UptightEncoding; throw::Bool=false)
         for (i, U) in enumerate(Y)
             _is_upset_mask(Q, U.mask) || push!(issues, "constant upset $i is not upward closed")
         end
-        for (a, b) in FiniteFringe.cover_edges(Q)
+        for a in 1:nvertices(Q), b in upset_indices(Q, a)
             if !leq(P, pi.pi_of_q[a], pi.pi_of_q[b])
-                push!(issues, "encoding map is not monotone on source cover ($a, $b)")
+                push!(issues, "encoding map is not monotone on source comparison ($a, $b)")
                 break
             end
         end

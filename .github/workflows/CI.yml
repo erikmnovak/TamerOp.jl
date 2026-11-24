@@ -64,6 +64,14 @@ jobs:
       - name: Kan cache ownership across fields
         if: matrix.suite == 'core'
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_encoding.jl --prefix='A16 Kan maps respect module-owned caches on equal posets' --fields=QQ,F2,F3,F5,Real64
+      - name: Uptight compression and region order
+        if: matrix.suite == 'core'
+        run: >-
+          julia --startup-file=no --project=. test/runtests.jl
+          --file=test_encoding.jl --file=test_poset_interface.jl
+          --prefix='Uptight' --prefix='Workflow coarsen' --prefix='RegionsPoset'
+          --prefix='uptight encoding supports' --prefix='Encoding UX surface'
+          --fields=QQ,F2,F3,F5,Real64
       - name: Invariants owner
         if: matrix.suite == 'invariants'
         run: julia --startup-file=no --project=. test/runtests.jl --file=test_invariants.jl --fields=QQ,F2,F3,F5,Real64

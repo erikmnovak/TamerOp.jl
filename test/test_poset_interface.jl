@@ -405,6 +405,77 @@ end
     @test FF.leq_matrix(P) == FF.leq_matrix(upt_dense.pi.P)
 end
 
+@testset "RegionsPoset reachability and validation" begin
+    # Two disjoint source chains become a three-region chain. The middle
+    # region contains a different witness for each adjacent comparison.
+    Q = FF.FinitePoset(Bool[1 1 0 0; 0 1 0 0; 0 0 1 1; 0 0 0 1])
+    regions = [[1], [2, 3], [4]]
+    P = FF.RegionsPoset(Q, regions)
+    expected = Bool[1 1 1; 0 1 1; 0 0 1]
+    regions[1][1] = 4
+    @test P.regions == [[1], [2, 3], [4]]
+    previous_mode = FF.UPDOWN_CACHE_MODE[]
+    try
+        for mode in (:never, :always)
+            FF.UPDOWN_CACHE_MODE[] = mode
+            FF._clear_cover_cache!(P)
+            @test FF.leq_matrix(P) == expected
+            @test collect(FF.upset_indices(P, 1)) == [1, 2, 3]
+            @test collect(FF.downset_indices(P, 3)) == [1, 2, 3]
+            @test Set(FF.cover_edges(P)) == Set([(1, 2), (2, 3)])
+            @test FF.check_poset(P; throw=true).valid
+            if mode == :always
+                cached = P.cache.upsets
+                @test cached !== nothing
+                @test FF.leq(P, 1, 3)
+                @test P.cache.upsets === cached
+            else
+                @test P.cache.upsets === nothing
+            end
+        end
+        FF._clear_cover_cache!(P)
+        @test P.cache.upsets === nothing
+        @test P.cache.downsets === nothing
+        observed = Matrix{Bool}(undef, 3, 3)
+        Threads.@threads for i in 1:3
+            for j in 1:3
+                observed[i, j] = FF.leq(P, i, j)
+            end
+        end
+        @test observed == expected
+    finally
+        FF.UPDOWN_CACHE_MODE[] = previous_mode
+    end
+
+    @test_throws BoundsError FF.leq(P, 0, 1)
+    @test_throws BoundsError FF.leq(P, 1, 4)
+    for bad in ([[1], [2, 3]], [[1], [2, 3, 3], [4]],
+                [[1], Int[], [2, 3, 4]], [[1], [2, 3], [5]])
+        @test_throws ArgumentError FF.RegionsPoset(Q, bad)
+    end
+    @test_throws ArgumentError FF.RegionsPoset(chain_poset(3), [[1, 3], [2]])
+    edited = FF.RegionsPoset(Q, [[1], [2, 3], [4]])
+    edited.regions[1][1] = 4
+    @test !FF.check_poset(edited).valid
+    @test_throws ArgumentError FF.check_poset(edited; throw=true)
+    cyclic = FF.RegionsPoset(Q, [[1], [2, 3], [4]])
+    push!(cyclic._successors[3], 1)
+    @test !FF.check_poset(cyclic).valid
+    @test_throws ArgumentError FF.check_poset(cyclic; throw=true)
+
+    # Extension-owned posets may supply only scalar comparisons, and explicitly
+    # reject dense order materialization.
+    scalar = A79ScalarOrderPoset(4)
+    @test FF.check_poset(scalar; throw=true).valid
+    scalar_regions = FF.RegionsPoset(scalar, [[1], [2, 3], [4]])
+    @test FF.leq_matrix(scalar_regions) == expected
+    @test FF.check_poset(scalar_regions; throw=true).valid
+    scalar_H = FF.one_by_one_fringe(scalar, FF.principal_upset(scalar, 2),
+        FF.principal_downset(scalar, 3), c(1); field=field)
+    scalar_uptight = TO.Encoding.build_uptight_encoding_from_fringe(scalar_H)
+    @test TO.Encoding.check_uptight_encoding(scalar_uptight; throw=true).valid
+end
+
 @testset "Structured poset caches reuse by identity" begin
     P = FF.GridPoset((collect(1:3), collect(1:3)))
     C1 = FF.cover_edges(P)

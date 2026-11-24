@@ -116,6 +116,19 @@ const CHAIN_PARENT_DENSE_MAX_TOTAL_ENTRIES = Ref(8_000_000)
     return n * n <= _updown_cache_threshold(P)
 end
 
+function _build_updown_indices(P::AbstractPoset)
+    n = nvertices(P)
+    up = [Int[] for _ in 1:n]
+    down = [Int[] for _ in 1:n]
+    @inbounds for i in 1:n, j in 1:n
+        if leq(P, i, j)
+            push!(up[i], j)
+            push!(down[j], i)
+        end
+    end
+    return up, down
+end
+
 function _ensure_updown_cache!(P::AbstractPoset)
     hasproperty(P, :cache) || return nothing
     pc = getproperty(P, :cache)
@@ -136,22 +149,7 @@ function _ensure_updown_cache!(P::AbstractPoset)
         upsets = getproperty(pc, :upsets)
         downsets = getproperty(pc, :downsets)
         if upsets === nothing || downsets === nothing
-            up = Vector{Vector{Int}}(undef, n)
-            down = Vector{Vector{Int}}(undef, n)
-            @inbounds for i in 1:n
-                up[i] = Int[]
-                down[i] = Int[]
-            end
-            @inbounds for i in 1:n
-                for j in 1:n
-                    if leq(P, i, j)
-                        push!(up[i], j)
-                    end
-                    if leq(P, j, i)
-                        push!(down[i], j)
-                    end
-                end
-            end
+            up, down = _build_updown_indices(P)
             setproperty!(pc, :upsets, up)
             setproperty!(pc, :downsets, down)
             upsets = up
@@ -927,13 +925,22 @@ end
 """
     RegionsPoset(Q, regions)
 
-Structured poset on regions of a finite poset `Q`, with order defined by:
-`A <= B` iff there exist `a in A`, `b in B` with `a <= b` in `Q` (Prop. 4.15).
+Structured poset on a partition of a finite poset `Q`. Its order is the
+transitive closure of the relation `A -> B` whenever some `a in A` and `b in B`
+satisfy `a <= b` in `Q` (Definition 4.17).
+
+Regions must be nonempty, disjoint, cover `Q`, and induce an acyclic relation
+between distinct regions. Invalid partitions and cycles raise `ArgumentError`.
+The constructor copies the regions and stores a graph of inherited relations;
+it does not materialize a dense order matrix. Reachability queries use the
+ordinary poset up/down cache policy.
 """
 struct RegionsPoset{P<:AbstractPoset} <: AbstractPoset
     Q::P
     regions::Vector{Vector{Int}}
     n::Int
+    _successors::Vector{Vector{Int}}
+    _topological_rank::Vector{Int}
     cache::PosetCache
 end
 
@@ -949,21 +956,106 @@ end
     return "(min=$(minimum(sizes)), max=$(maximum(sizes)), avg=$(round(sum(sizes) / length(sizes); digits=2)))"
 end
 
+function _region_order_graph(Q::AbstractPoset, regions::Vector{Vector{Int}})
+    n = length(regions)
+    region_of_q = zeros(Int, nvertices(Q))
+    for (i, region) in enumerate(regions)
+        isempty(region) && throw(ArgumentError("RegionsPoset: region $i is empty."))
+        for q in region
+            1 <= q <= length(region_of_q) ||
+                throw(ArgumentError("RegionsPoset: region $i contains out-of-bounds vertex $q."))
+            region_of_q[q] == 0 ||
+                throw(ArgumentError("RegionsPoset: source vertex $q occurs more than once."))
+            region_of_q[q] = i
+        end
+    end
+    all(!iszero, region_of_q) ||
+        throw(ArgumentError("RegionsPoset: regions must cover every source vertex."))
+
+    # Built-in orders use source covers; other finite posets need only the
+    # scalar order interface. Both generate the same region reachability.
+    successors = [Int[] for _ in 1:n]
+    for (a, b) in _region_source_edges(Q)
+        i, j = region_of_q[a], region_of_q[b]
+        i == j || push!(successors[i], j)
+    end
+    indegree = zeros(Int, n)
+    for next in successors
+        sort!(unique!(next))
+        for j in next
+            indegree[j] += 1
+        end
+    end
+    queue = findall(iszero, indegree)
+    rank = zeros(Int, n)
+    cursor = 1
+    while cursor <= length(queue)
+        i = queue[cursor]
+        rank[i] = cursor
+        for j in successors[i]
+            indegree[j] -= 1
+            indegree[j] == 0 && push!(queue, j)
+        end
+        cursor += 1
+    end
+    length(queue) == n ||
+        throw(ArgumentError("RegionsPoset: identifying the regions creates an order cycle."))
+    return successors, rank
+end
+
+_region_source_edges(Q::AbstractPoset) =
+    ((a, b) for a in 1:nvertices(Q) for b in upset_indices(Q, a) if a != b)
+_region_source_edges(Q::Union{FinitePoset,ProductOfChainsPoset,GridPoset,ProductPoset}) =
+    cover_edges(Q)
+
 function RegionsPoset(Q::AbstractPoset, regions::Vector{Vector{Int}})
-    return RegionsPoset{typeof(Q)}(Q, regions, length(regions), PosetCache())
+    owned_regions = [copy(region) for region in regions]
+    successors, rank = _region_order_graph(Q, owned_regions)
+    return RegionsPoset{typeof(Q)}(Q, owned_regions, length(owned_regions),
+                                  successors, rank, PosetCache())
 end
 
 nvertices(P::RegionsPoset) = P.n
 
-function leq(P::RegionsPoset, i::Int, j::Int)
-    @inbounds for a in P.regions[i]
-        for b in P.regions[j]
-            if leq(P.Q, a, b)
-                return true
+function _region_reachable(P::RegionsPoset, i::Int; target::Int=0)
+    seen = falses(P.n)
+    seen[i] = true
+    stack = Int[i]
+    while !isempty(stack)
+        u = pop!(stack)
+        for v in P._successors[u]
+            seen[v] && continue
+            if target != 0 && P._topological_rank[v] > P._topological_rank[target]
+                continue
             end
+            seen[v] = true
+            v == target && return seen
+            push!(stack, v)
         end
     end
-    return false
+    return seen
+end
+
+function _build_updown_indices(P::RegionsPoset)
+    up = [findall(_region_reachable(P, i)) for i in 1:P.n]
+    down = [Int[] for _ in 1:P.n]
+    for i in 1:P.n, j in up[i]
+        push!(down[j], i)
+    end
+    return up, down
+end
+
+function leq(P::RegionsPoset, i::Int, j::Int)
+    @boundscheck checkbounds(P.regions, i)
+    @boundscheck checkbounds(P.regions, j)
+    i == j && return true
+    P._topological_rank[i] > P._topological_rank[j] && return false
+    cached = _cached_upset_indices(P, i)
+    if cached !== nothing
+        k = searchsortedfirst(cached, j)
+        return k <= length(cached) && cached[k] == j
+    end
+    return _region_reachable(P, i; target=j)[j]
 end
 
 
@@ -1057,8 +1149,11 @@ type:
 - [`GridPoset`](@ref): positive axis sizes, stride consistency, and strictly
   increasing coordinate axes;
 - [`ProductPoset`](@ref): validity of both factors;
-- [`RegionsPoset`](@ref): validity of the base poset and in-bounds region
-  entries.
+- [`RegionsPoset`](@ref): validity of the base poset, the region partition,
+  acyclicity of the induced graph, and consistency of the stored order data.
+
+Other `AbstractPoset` implementations are checked through scalar `leq` queries
+for reflexivity, antisymmetry, and transitivity, without requiring `leq_matrix`.
 
 Set `throw=true` to raise an `ArgumentError` instead of returning an invalid
 report. Pair the returned report with `finite_fringe_validation_summary(...)`
@@ -1081,6 +1176,39 @@ function check_poset(P::FinitePoset; throw::Bool=false)
               issues=issues)
     if throw && !report.valid
         Base.throw(ArgumentError("check_poset: invalid FinitePoset: " * join(report.issues, "; ")))
+    end
+    return report
+end
+
+function check_poset(P::AbstractPoset; throw::Bool=false)
+    n = nvertices(P)
+    issues = String[]
+    n >= 0 || push!(issues, "vertex count must be nonnegative")
+    if isempty(issues)
+        try
+            up = [BitSet(j for j in 1:n if leq(P, i, j)) for i in 1:n]
+            for i in 1:n
+                i in up[i] || push!(issues, "order is not reflexive at vertex $i")
+                for j in up[i]
+                    if i != j && i in up[j]
+                        push!(issues, "order is not antisymmetric at vertices $i and $j")
+                        break
+                    end
+                    if !issubset(up[j], up[i])
+                        push!(issues, "order is not transitive through vertices $i and $j")
+                        break
+                    end
+                end
+                isempty(issues) || break
+            end
+        catch err
+            err isa InterruptException && rethrow()
+            push!(issues, sprint(showerror, err))
+        end
+    end
+    report = (kind=:finite_poset, valid=isempty(issues), nvertices=n, issues=issues)
+    if throw && !report.valid
+        Base.throw(ArgumentError("check_poset: invalid finite order: " * join(issues, "; ")))
     end
     return report
 end
@@ -1149,12 +1277,14 @@ function check_poset(P::RegionsPoset; throw::Bool=false)
     base.valid || append!(issues, "base poset: " .* base.issues)
     length(P.regions) == P.n || push!(issues, "stored n=$(P.n) must equal number of regions $(length(P.regions))")
     nQ = nvertices(P.Q)
-    @inbounds for (k, reg) in enumerate(P.regions)
-        for v in reg
-            1 <= v <= nQ || begin
-                push!(issues, "region $k contains out-of-bounds vertex $v for base poset with $nQ vertices")
-                break
-            end
+    if isempty(issues)
+        try
+            successors, rank = _region_order_graph(P.Q, P.regions)
+            successors == P._successors || push!(issues, "stored region relations disagree with the source partition")
+            rank == P._topological_rank || push!(issues, "stored region topological ranks disagree with the source partition")
+        catch err
+            err isa ArgumentError || rethrow()
+            push!(issues, sprint(showerror, err))
         end
     end
     report = (kind=:regions_poset,
